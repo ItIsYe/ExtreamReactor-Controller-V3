@@ -30,7 +30,7 @@ function M.run(ctx)
     scale = resolved_scale,
     min_width = min_monitor_width,
     min_height = min_monitor_height,
-    path = "/xreactor/config/registry_master_monitors.json"
+    path = "/xreactor_config/registry_master_monitors.json"
   })
   ctx.refs.view_manager = ctx.multiview_ui.new({
     layout_path = ctx.layout_config_path,

@@ -19,7 +19,7 @@ local function safe_wrapped_call(obj, method, ...)
 end
 
 local function resolve_node_id(config)
-  local path = "/xreactor/config/node_id.txt"
+  local path = "/xreactor_config/node_id.txt"
   if fs.exists(path) then
     local file = fs.open(path, "r")
     if file then

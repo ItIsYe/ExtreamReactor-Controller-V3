@@ -4,7 +4,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5
 }
@@ -79,7 +79,7 @@ local DEFAULT_CONFIG = {
 -- jedem Auto-Update ueberschrieben wird -- kanonische Nutzer-Config an
 -- einem vom Manifest unberuehrten Pfad, mit einmaliger Migration eines
 -- eventuell bereits vorhandenen Standes aus der alten Quelldatei.
-local USER_CONFIG_PATH = "/xreactor/config/fuel.lua"
+local USER_CONFIG_PATH = "/xreactor_config/fuel.lua"
 if not fs.exists(USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -101,7 +101,7 @@ local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- /xreactor/config/fuel_routes.lua (vom Router-Editor atomar geschrieben)
+-- /xreactor_config/fuel_routes.lua (vom Router-Editor atomar geschrieben)
 -- wird VOR der ersten Router-Erzeugung geladen und mit derselben
 -- validate_tree()-Funktion geprueft wie der Router selbst -- nur bei
 -- Erfolg wird das Ergebnis nach config.logistics.redstone_tree
@@ -109,7 +109,7 @@ config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 -- unveraendert und routing_load_status haelt den Fehler fest.
 local routing_load_status = { ok = true, source = "config" }
 do
-  local routes_path = "/xreactor/config/fuel_routes.lua"
+  local routes_path = "/xreactor_config/fuel_routes.lua"
   if fs.exists(routes_path) then
     local ok_load, content = pcall(dofile, routes_path)
     if not ok_load or type(content) ~= "table" then
@@ -188,7 +188,7 @@ local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
       redstone_router = get_rs_router(),
-      config_path = "/xreactor/config/fuel_routes.lua",
+      config_path = "/xreactor_config/fuel_routes.lua",
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       routing_load_status = routing_load_status,
       get_reactors = function()

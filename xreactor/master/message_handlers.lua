@@ -399,7 +399,7 @@ function M.new(opts)
     if existing and existing.sender_id and sender_id ~= "UNKNOWN"
         and existing.sender_id ~= sender_id
         and existing.last_seen and (os.epoch("utc") - existing.last_seen) < 30000 then
-      log(("WARN: Duplicate node_id detected id=%s role=%s existing_sender=%s new_sender=%s -- assign unique node_id in /xreactor/config/node_id.txt"):format(
+      log(("WARN: Duplicate node_id detected id=%s role=%s existing_sender=%s new_sender=%s -- assign unique node_id in /xreactor_config/node_id.txt"):format(
         tostring(id), tostring(role_hint or normalize_role(message.role)),
         tostring(existing.sender_id), tostring(sender_id)
       ))

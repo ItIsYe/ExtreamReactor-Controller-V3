@@ -11,7 +11,7 @@ local CONFIG = {
   LOG_NAME              = "energy",
   LOG_PREFIX            = "ENERGY",
   BOOTSTRAP_LOG_ENABLED = false,
-  NODE_ID_PATH          = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH          = "/xreactor_config/node_id.txt",
   CONFIG_PATH           = "/xreactor/nodes/energy/config.lua",
   RECEIVE_TIMEOUT       = 0.5,
 }
@@ -87,7 +87,7 @@ local config_warnings = {}
 -- Auto-Update ueberschrieben -- Config muss in eine geschuetzte
 -- Nutzerdatei migriert werden.
 local ENERGY_SOURCE_CONFIG_PATH = CONFIG.CONFIG_PATH
-local ENERGY_USER_CONFIG_PATH = "/xreactor/config/energy.lua"
+local ENERGY_USER_CONFIG_PATH = "/xreactor_config/energy.lua"
 if not fs.exists(ENERGY_USER_CONFIG_PATH) and fs.exists(ENERGY_SOURCE_CONFIG_PATH) then
   local ok_read, handle = pcall(fs.open, ENERGY_SOURCE_CONFIG_PATH, "r")
   if ok_read and handle then

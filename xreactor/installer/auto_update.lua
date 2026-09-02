@@ -3,7 +3,7 @@
 
 local M = {}
 
-local ARMING_PATH = "/xreactor/config/remote_update.lua"
+local ARMING_PATH = "/xreactor_config/remote_update.lua"
 local RELEASE_PATH = "/xreactor/release.lua"
 local TEMP_INSTALLER = "/xreactor_auto_update_installer.lua"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
@@ -32,7 +32,7 @@ local QUIESCE_TIMEOUT_S = 60
 -- context needed to diagnose a failure right before a reboot -- a
 -- reboot's own first log line ("Loop gestartet") would silently erase
 -- whatever explained it.
-local STATUS_PATH = "/xreactor/config/auto_update_status.txt"
+local STATUS_PATH = "/xreactor_config/auto_update_status.txt"
 local STATUS_MAX_LINES = 20
 
 local function write_status(message)

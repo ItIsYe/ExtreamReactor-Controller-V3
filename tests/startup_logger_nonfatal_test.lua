@@ -11,11 +11,11 @@ local function run_start(role_should_fail)
   env._G = env
   env.fs = {
     exists = function(path)
-      return path == "/xreactor/config/role.lua" or path == "/xreactor/release.lua"
+      return path == "/xreactor_config/role.lua" or path == "/xreactor/release.lua"
     end,
     open = function(path, mode)
       if mode ~= "r" then return nil end
-      local src = path == "/xreactor/config/role.lua" and role_src
+      local src = path == "/xreactor_config/role.lua" and role_src
         or (path == "/xreactor/release.lua" and release_src or nil)
       if not src then return nil end
       return { readAll = function() return src end, close = function() end }

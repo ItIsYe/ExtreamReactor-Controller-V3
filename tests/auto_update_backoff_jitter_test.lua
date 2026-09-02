@@ -87,7 +87,7 @@ end
 -- configured interval_s. No jitter here, to isolate the backoff math.
 do
   reset_env(nil)
-  local ARMING = "/xreactor/config/remote_update.lua"
+  local ARMING = "/xreactor_config/remote_update.lua"
   local failing = true
   _G.fs = {
     exists = function(path) return path == ARMING end,

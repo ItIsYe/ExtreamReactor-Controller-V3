@@ -147,8 +147,8 @@ end
 -- absent from the repository. start.lua references them by path but they only
 -- exist after a successful installation.
 local RUNTIME_GENERATED = {
-  ["/xreactor/config/role.lua"] = true,
-  ["/xreactor/config/node_id.txt"] = true,
+  ["/xreactor_config/role.lua"] = true,
+  ["/xreactor_config/node_id.txt"] = true,
 }
 
 local start_body = read_all("xreactor/start.lua") or ""

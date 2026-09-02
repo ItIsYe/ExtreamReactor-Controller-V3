@@ -2,16 +2,16 @@ local M = {}
 local utils = require("core.utils")
 
 -- PEAK-/IDLE-Schwellwert und der lokale AUTO-UPDATE-Schalter werden gezielt
--- in die Nutzerdatei /xreactor/config/master.lua geschrieben (kein
+-- in die Nutzerdatei /xreactor_config/master.lua geschrieben (kein
 -- Manifest-Eintrag, uebersteht Auto-Updates), ohne den Rest des Live-State-
 -- Objekts anzufassen -- liest die evtl. vorhandene Datei zuerst ein und
 -- aktualisiert nur die betroffenen Schluessel.
-local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
+local MASTER_USER_CONFIG_PATH = "/xreactor_config/master.lua"
 -- Der AUTO-UPDATE-Schalter schreibt zusaetzlich in remote_update.lua (die
 -- Datei, die installer/auto_update.lua tatsaechlich liest) -- sonst haette
 -- er keine Wirkung auf MASTERs eigenes Update-Verhalten. Propagation an
 -- ANDERE Rollen ist bewusst nicht Teil hiervon (eigenstaendiges Feature).
-local REMOTE_UPDATE_ARMING_PATH = "/xreactor/config/remote_update.lua"
+local REMOTE_UPDATE_ARMING_PATH = "/xreactor_config/remote_update.lua"
 local function set_local_auto_update_enabled(enabled)
   local existing = {}
   local ok, loaded = pcall(utils.load_config, REMOTE_UPDATE_ARMING_PATH, { enabled = true, auto_update = true, check_interval_s = 120 })
