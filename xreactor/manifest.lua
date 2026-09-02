@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 610,
-  manifest_id = "manifest-v610",
+  manifest_version = 612,
+  manifest_id = "manifest-v612",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "ef1a6e64", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "f621d72b", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -49,7 +49,7 @@ return {
   -- diese Datei tatsaechlich (siehe auch core/alert_rules.lua, ihre
   -- Abhaengigkeit, ebenso auf MASTER beschraenkt).
   { path = "services/alert_service.lua", size_bytes = 14539, hash = "60d734ad", required_for={"MASTER"} },
-  { path = "services/comms_service.lua", size_bytes = 11996, hash = "4c3ec3ff" },
+  { path = "services/comms_service.lua", size_bytes = 13135, hash = "39ddfb22" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4", required_for={"MASTER"} },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "services/service_manager.lua", size_bytes = 6565, hash = "fa13ae27" },
@@ -125,7 +125,7 @@ return {
     { path = "core/fluid.lua", size_bytes = 5017, hash = "9a5c0bea", required_for={"RT"} },
     { path = "core/turbine_regulator.lua", size_bytes = 13632, hash = "7001b6cc", required_for={"RT"} },
     { path = "nodes/rt/binding.lua", size_bytes = 3507, hash = "0fbf17ee", required_for={"RT"} },
-    { path = "nodes/rt/command_handler.lua", size_bytes = 11492, hash = "7fae3b17", required_for={"RT"} },
+    { path = "nodes/rt/command_handler.lua", size_bytes = 12381, hash = "1918197f", required_for={"RT"} },
     { path = "nodes/rt/reactor_control.lua", size_bytes = 38515, hash = "a643e318", required_for={"RT"} },
     { path = "nodes/rt/turbine_control.lua", size_bytes = 41911, hash = "d0d4ebac", required_for={"RT"} },
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3907, hash = "4f56566d", required_for={"RT"} },
@@ -175,7 +175,7 @@ return {
     fuel = {
     { path = "nodes/fuel/config.lua", size_bytes = 7188, hash = "1a2722a9", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 6065, hash = "8eaa6398", required_for={"FUEL"} },
-    { path = "nodes/fuel/main.lua", size_bytes = 20068, hash = "c4492de0", required_for={"FUEL"} },
+    { path = "nodes/fuel/main.lua", size_bytes = 20969, hash = "c70fb6a8", required_for={"FUEL"} },
     { path = "nodes/fuel/status_snapshot.lua", size_bytes = 4662, hash = "cc71fd01", required_for={"FUEL"} },
     { path = "nodes/fuel/operational_summary.lua", size_bytes = 7915, hash = "0e2fd9d7", required_for={"FUEL"} },
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2032, hash = "dac721b1", required_for={"FUEL"} },
