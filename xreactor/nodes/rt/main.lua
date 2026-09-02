@@ -14,9 +14,9 @@
 local CONFIG = {
   LOG_NAME           = "rt",
   LOG_PREFIX         = "RT",
-  NODE_ID_PATH       = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH       = "/xreactor_config/node_id.txt",
   CONFIG_PATH        = nil,          -- wird von role_descriptor befüllt
-  CAPACITY_CACHE_PATH = "/xreactor/config/capacity_cache.lua",
+  CAPACITY_CACHE_PATH = "/xreactor_config/capacity_cache.lua",
   -- 0.1s so the scheduler cycle (which drives the reactor/turbine control
   -- tick) meets the required 10Hz cadence; other periodic services gate on
   -- their own interval and are unaffected.
@@ -91,10 +91,10 @@ local rt_default_config = require("nodes.rt.config")
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 
-CONFIG.CONFIG_PATH = "/xreactor/config/rt.lua"
+CONFIG.CONFIG_PATH = "/xreactor_config/rt.lua"
 local DEFAULT_CONFIG = utils.deep_copy(rt_default_config)
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
-local reactor_names = utils.load_config("/xreactor/config/reactor_names.lua", {
+local reactor_names = utils.load_config("/xreactor_config/reactor_names.lua", {
   version = 2, completed = false, aliases = {}, reactors = {},
 })
 if type(reactor_names) ~= "table" or reactor_names.completed ~= true

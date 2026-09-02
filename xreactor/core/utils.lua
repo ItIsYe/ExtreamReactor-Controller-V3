@@ -1,8 +1,8 @@
 -- CONFIG
 local CONFIG = {
   LOGGER_DEFAULT_PREFIX = "LOG",
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
-  ROLE_CONFIG_PATH = "/xreactor/config/role.lua",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
+  ROLE_CONFIG_PATH = "/xreactor_config/role.lua",
   LOG_NAME_SEPARATOR = "_",
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
   REMOTE_LOG_CHANNEL = 6503,  -- muss mit shared/constants.lua channels.LOG uebereinstimmen

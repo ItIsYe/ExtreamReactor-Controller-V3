@@ -1,6 +1,24 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-09-01 | beta-v598**
+**Stand: 2026-09-02 | beta-v606**
+
+**Architekturänderung:** Die Config (`role.lua`, `node_id.txt`, `reactor_names.lua`,
+`*_routes.lua`, Registry-Dateien, etc.) liegt jetzt unter `/xreactor_config/`
+statt `/xreactor/config/` — also außerhalb des Baums, den der Installer bei
+jeder (Re-)Installation komplett löscht und neu aufbaut. Grund: Config-Verlust
+bei einer Reinstallation (Reaktornamen mussten neu vergeben werden), weil der
+alte Backup/Restore-Mechanismus in `installer/init.lua` fehleranfällig war.
+Mit dem neuen Pfad ist der ganze Backup/Restore-Tanz überflüssig — Config wird
+nie gelöscht, weil sie nie im gelöschten Baum lag.
+
+Migration für bereits ausgerollte Nodes: `installer/init.lua` verschiebt beim
+nächsten Lauf automatisch `/xreactor/config` -> `/xreactor_config`, falls der
+alte Pfad noch existiert und der neue noch nicht (einmalig, danach No-Op).
+`start.lua` selbst hatte beim vollständigen Sweep ebenfalls noch den alten
+Pfad fest verdrahtet (Rollen-Boot + Recovery-Resume) — das hätte den Boot
+schon vor jeder Migrationslogik im Installer zum Absturz gebracht. Beide
+Stellen sowie `tools/offline_validate.lua` sind jetzt auf `/xreactor_config`
+korrigiert.
 
 ---
 

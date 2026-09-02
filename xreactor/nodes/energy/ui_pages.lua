@@ -314,7 +314,7 @@ function M.new(opts)
     -- authored on a 0-100 scale, so convert once before comparing.
     local pct = ratio * 100
     local emergency_below, warning_below, limited_above = 15, 30, 95
-    local cfg_path = "/xreactor/config/ampel_thresholds.lua"
+    local cfg_path = "/xreactor_config/ampel_thresholds.lua"
     if fs and fs.exists and fs.exists(cfg_path) then
       local ok_read, cfg = pcall(function()
         local f = fs.open(cfg_path, "r"); if not f then return nil end

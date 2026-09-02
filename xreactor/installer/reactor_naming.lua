@@ -7,7 +7,7 @@
 
 local M = {}
 
-M.CONFIG_PATH = "/xreactor/config/reactor_names.lua"
+M.CONFIG_PATH = "/xreactor_config/reactor_names.lua"
 M.MAX_LABEL_LENGTH = 32
 M.MAX_INPUT_ATTEMPTS = 20
 M.MAX_RESTORE_ATTEMPTS = 10

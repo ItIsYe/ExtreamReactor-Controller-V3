@@ -16,6 +16,15 @@ local plan_validator_mod = deps.plan_validator_mod
 local reactor_naming_mod = deps.reactor_naming_mod
 
 local INSTALL_ROOT    = "/xreactor"
+-- Config lives OUTSIDE /xreactor entirely (sibling directory, like
+-- /xreactor_logs and /xreactor_recovery) -- it is never touched by the
+-- "delete + recreate INSTALL_ROOT" step below, so it survives every
+-- install/reinstall/update automatically. No backup/restore step is
+-- needed for it at all (there used to be one here, backing up the full
+-- /xreactor_config folder to /xreactor_recovery before deletion and
+-- restoring it afterwards -- removed entirely now that there is nothing
+-- to back up FROM under the tree that gets deleted).
+local CONFIG_DIR      = "/xreactor_config"
 local STARTUP_PATH    = "/startup.lua"
 -- fs.move() can't overwrite an existing target in one step, leaving a brief
 -- window between "old file -> backup" and "new file -> target" during a
@@ -43,82 +52,6 @@ local GITHUB_RAW      = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor
 
 local function p(msg) pcall(print, tostring(msg)) end
 
--- The full /xreactor/config folder is backed up recursively (not an
--- allowlist -- role configs, routing files and the remote-update arming
--- config all live only here, in no manifest) to a compact file OUTSIDE
--- /xreactor, read back and byte-verified, BEFORE /xreactor may be deleted.
-local CONFIG_DIR               = INSTALL_ROOT .. "/config"
-local RECOVERY_DIR             = "/xreactor_recovery"
-local RECOVERY_CONFIG_BACKUP   = RECOVERY_DIR .. "/config_backup.lua"
--- Denylist, not allowlist: only known-regenerable installer temp files are
--- excluded, so future config files are preserved automatically too.
-local CONFIG_RESTORE_DENY_SUFFIX = { ".xr_tmp", ".xr_prev" }
-
-local function config_restore_denied(rel)
-  for _, suffix in ipairs(CONFIG_RESTORE_DENY_SUFFIX) do
-    if rel:sub(-#suffix) == suffix then return true end
-  end
-  return false
-end
-
-local function list_files_recursive(dir, prefix, out)
-  prefix = prefix or ""
-  out = out or {}
-  if not fs.exists(dir) then return out end
-  local ok_is_dir, is_dir = pcall(fs.isDir, dir)
-  if not ok_is_dir or not is_dir then
-    error("Config-Verzeichnis kann nicht sicher gelesen werden: " .. tostring(dir), 0)
-  end
-  local ok, entries = pcall(fs.list, dir)
-  if not ok or type(entries) ~= "table" then
-    error("Config-Verzeichnis kann nicht aufgelistet werden: " .. tostring(dir), 0)
-  end
-  for _, name in ipairs(entries) do
-    local full = dir .. "/" .. name
-    local rel = (prefix == "" and name or (prefix .. "/" .. name))
-    local ok_child, child_is_dir = pcall(fs.isDir, full)
-    if not ok_child then
-      error("Config-Eintrag kann nicht geprueft werden: " .. tostring(full), 0)
-    end
-    if child_is_dir then
-      list_files_recursive(full, rel, out)
-    else
-      out[#out + 1] = rel
-    end
-  end
-  return out
-end
-
-local function serialize_config_backup(files_map)
-  local parts = { "return {\n" }
-  for rel, content in pairs(files_map) do
-    parts[#parts + 1] = "  [" .. string.format("%q", rel) .. "] = " .. string.format("%q", content) .. ",\n"
-  end
-  parts[#parts + 1] = "}\n"
-  return table.concat(parts)
-end
-
-local function backup_config_dir()
-  local files_map = {}
-  if not fs.exists(CONFIG_DIR) then return files_map end
-  for _, rel in ipairs(list_files_recursive(CONFIG_DIR)) do
-    if not config_restore_denied(rel) then
-      local f = fs.open(CONFIG_DIR .. "/" .. rel, "r")
-      if not f then error("Config-Datei kann nicht gesichert werden: " .. rel, 0) end
-      local ok_read, content = pcall(f.readAll)
-      local ok_close, close_err = pcall(f.close)
-      if not ok_read or type(content) ~= "string" then
-        error("Config-Datei kann nicht gelesen werden: " .. rel, 0)
-      end
-      if not ok_close then
-        error("Config-Datei kann nicht geschlossen werden: " .. rel .. " (" .. tostring(close_err) .. ")", 0)
-      end
-      files_map[rel] = content
-    end
-  end
-  return files_map
-end
-
 -- Der Bootstrap waehlt genau einen Ref und reicht ihn fuer Manifest und
 -- saemtliche Dateien weiter. Es gibt hier weder eine zweite Aufloesung noch
 -- einen dateiweisen Fallback auf einen anderen Ref. Bewegt sich "beta"
@@ -135,9 +68,26 @@ local manifest, merr = manifest_mod.load_remote(manifest_url, http_mod)
 if not manifest then error("Manifest: " .. tostring(merr), 0) end
 p("Manifest: " .. tostring(manifest.manifest_id or manifest.manifest_version))
 
+-- One-time migration for nodes still on the OLD config location
+-- (/xreactor/config, inside the tree that gets deleted+recreated below --
+-- exactly the bug that motivated moving it to CONFIG_DIR in the first
+-- place). Without this, an already-deployed node's very next auto-update
+-- would find no role/config at all under the new CONFIG_DIR and hard-fail
+-- with "role.lua fehlt". Runs at most once per node: after the move, the
+-- old path no longer exists, so every later run skips straight past this.
+local OLD_CONFIG_DIR = "/xreactor/config"
+if not fs.exists(CONFIG_DIR) and fs.exists(OLD_CONFIG_DIR) then
+  p("Migriere Config: " .. OLD_CONFIG_DIR .. " -> " .. CONFIG_DIR)
+  local ok_mv, mv_err = pcall(fs.move, OLD_CONFIG_DIR, CONFIG_DIR)
+  if not ok_mv or not fs.exists(CONFIG_DIR) then
+    error("Config-Migration fehlgeschlagen (" .. OLD_CONFIG_DIR .. " -> " .. CONFIG_DIR .. "): "
+      .. tostring(mv_err), 0)
+  end
+end
+
 -- Rolle bestimmen
 local role = nil
-local role_path = INSTALL_ROOT .. "/config/role.lua"
+local role_path = CONFIG_DIR .. "/role.lua"
 if fs.exists(role_path) then
   local f = fs.open(role_path, "r"); if f then
     local src = f.readAll(); f.close()
@@ -170,8 +120,9 @@ end
 ui_mod.header("Installiere " .. role.label)
 
 -- A manual RT installation names every currently visible reactor exactly
--- once. The resulting config is included in the full config backup below,
--- so reinstalling does not ask again. Unattended updates never prompt.
+-- once. The result is written to CONFIG_DIR, which lives outside /xreactor
+-- and is therefore never touched by a reinstall, so this is never asked
+-- again. Unattended updates never prompt.
 if role.label == "RT" then
   if type(reactor_naming_mod) ~= "table" or type(reactor_naming_mod.run) ~= "function" then
     error("RT-Reaktornamensmodul fehlt oder ist ungueltig", 0)
@@ -199,61 +150,13 @@ if role.label == "RT" then
   end
 end
 
--- Gesamten config-Ordner sichern (siehe Fix-Kommentar oben). Backup wird
--- sofort zurueckgelesen und byte-genau verifiziert, BEVOR /xreactor
--- geloescht werden darf -- ein defektes Backup darf niemals als
--- Sicherheitsnetz fuer das bevorstehende Loeschen gelten.
-local config_backup = backup_config_dir()
-do
-  local backup_count = 0
-  for _ in pairs(config_backup) do backup_count = backup_count + 1 end
-  if backup_count > 0 then
-    -- Computed before makeDir() (pure string work, no fs I/O) so a space
-    -- failure right here can still report an accurate "needed" byte count,
-    -- not just "out of space" with nothing to act on.
-    local serialized = serialize_config_backup(config_backup)
-    -- Proactively reclaim space (incl. /xreactor_logs as a last resort,
-    -- see stage.lua's reclaim()) BEFORE attempting the directory create,
-    -- not just after it fails -- a plain fs.makeDir() error message alone
-    -- gives no chance to recover first.
-    if type(stage_mod.reclaim) == "function" then
-      pcall(stage_mod.reclaim, #serialized + 4096)
-    end
-    local ok_dir, dir_err = pcall(fs.makeDir, RECOVERY_DIR)
-    if not ok_dir or not fs.exists(RECOVERY_DIR) then
-      local free = stage_mod.free_space and stage_mod.free_space()
-      local diag = free and stage_mod.space_diagnostic(free, #serialized) or tostring(dir_err)
-      error("Recovery-Verzeichnis konnte nicht angelegt werden: " .. tostring(dir_err) .. " (" .. diag .. ")", 0)
-    end
-    local ok_bak, bak_err = stage_mod.write(RECOVERY_CONFIG_BACKUP, serialized)
-    if not ok_bak then
-      error("Config-Backup fehlgeschlagen, breche vor Loeschen ab: " .. tostring(bak_err), 0)
-    end
-    local reread = stage_mod.read(RECOVERY_CONFIG_BACKUP)
-    local restored_map
-    if reread then
-      local loader = load(reread, "=config_backup", "t", {})
-      if loader then
-        local ok_call, result = pcall(loader)
-        if ok_call and type(result) == "table" then restored_map = result end
-      end
-    end
-    if not restored_map then
-      error("Config-Backup-Verifikation fehlgeschlagen (nicht lesbar) -- breche vor Loeschen ab.", 0)
-    end
-    for rel, content in pairs(config_backup) do
-      if restored_map[rel] ~= content then
-        error("Config-Backup-Verifikation fehlgeschlagen (Mismatch bei " .. rel .. ") -- breche vor Loeschen ab.", 0)
-      end
-    end
-    p("Config gesichert: " .. backup_count .. " Datei(en) -> " .. RECOVERY_CONFIG_BACKUP)
-  end
-end
-
 -- Existing optional-feature selection (e.g. on a reinstall); empty on a
--- fresh install, prompted for interactively below.
+-- fresh install, prompted for interactively below. Reads straight off
+-- disk -- CONFIG_DIR lives outside /xreactor and is never touched by the
+-- delete-and-recreate step below, so this file (like every other config
+-- file) simply survives a reinstall untouched, no backup/restore needed.
 local function load_selected_features()
-  local raw = config_backup["optional_features.lua"]
+  local raw = stage_mod.read(CONFIG_DIR .. "/optional_features.lua")
   if not raw then return {} end
   local ok, loaded = pcall(function()
     local chunk = load(raw, "=optional_features", "t", {})
@@ -368,20 +271,6 @@ if not fs.exists(INSTALL_ROOT) then
   error("Installationsverzeichnis konnte nicht angelegt werden: " .. INSTALL_ROOT, 0)
 end
 
--- Minimal-Restore sofort nach Neuanlage des Roots: bricht die
--- Installation danach ab (Downloadfehler, Stromausfall), bleiben Rolle
--- und Remote-Update-Arming trotzdem erhalten -- kein Node ohne Rolle,
--- kein unbeabsichtigtes Re-Arm mit unsicheren Defaults.
-for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
-  local content = config_backup[rel]
-  if content then
-    local ok_mr, err_mr = stage_mod.write(CONFIG_DIR .. "/" .. rel, content)
-    if not ok_mr then
-      error("Minimal-Restore fehlgeschlagen: " .. rel .. " — " .. tostring(err_mr), 0)
-    end
-  end
-end
-
 local ok_j2, err_j2 = journal_mod.write({
   state = journal_mod.STATE.INSTALLING,
   ref = ref,
@@ -436,32 +325,6 @@ for _, item in ipairs(file_list) do
   end
 end
 
--- Restore the full config folder (idempotent over the minimal restore
--- above), verifying each file byte-for-byte after writing. The recovery
--- backup is kept on any failure, so manual recovery stays possible.
-do
-  local restored, failed = 0, {}
-  for rel, content in pairs(config_backup) do
-    local dst = CONFIG_DIR .. "/" .. rel
-    local ok_w, err_w = stage_mod.write(dst, content)
-    if not ok_w then
-      failed[#failed + 1] = rel .. " (" .. tostring(err_w) .. ")"
-    elseif stage_mod.read(dst) ~= content then
-      failed[#failed + 1] = rel .. " (verify mismatch)"
-    else
-      restored = restored + 1
-    end
-  end
-  if restored > 0 then p("Config wiederhergestellt: " .. restored .. " Datei(en)") end
-  if #failed > 0 then
-    p("WARN: Config-Wiederherstellung unvollstaendig: " .. table.concat(failed, ", "))
-    p("WARN: Recovery-Backup bleibt erhalten: " .. RECOVERY_CONFIG_BACKUP)
-    error("Config-Wiederherstellung unvollstaendig -- Installation bleibt fail-closed", 0)
-  else
-    pcall(fs.delete, RECOVERY_CONFIG_BACKUP)
-  end
-end
-
 -- Persist the current (possibly just-changed) optional-feature selection
 -- so it survives the next auto-update reinstall.
 do
@@ -472,7 +335,7 @@ do
     end
   end
   parts[#parts + 1] = "}\n"
-  local ok_of, err_of = stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
+  local ok_of, err_of = stage_mod.write(CONFIG_DIR .. "/optional_features.lua", table.concat(parts))
   if not ok_of then
     error("optional_features.lua konnte nicht geschrieben werden: " .. tostring(err_of), 0)
   end
@@ -480,7 +343,7 @@ end
 
 -- Rolle konfigurieren
 do
-  local ok_role, err_role = stage_mod.write(INSTALL_ROOT .. "/config/role.lua",
+  local ok_role, err_role = stage_mod.write(CONFIG_DIR .. "/role.lua",
     string.format("return { role = %q }\n", role.label))
   if not ok_role then
     error("role.lua konnte nicht geschrieben werden: " .. tostring(err_role), 0)
@@ -506,7 +369,7 @@ else
 end
 
 -- Auto-Update Config
-local auto_cfg = INSTALL_ROOT .. "/config/remote_update.lua"
+local auto_cfg = CONFIG_DIR .. "/remote_update.lua"
 if not fs.exists(auto_cfg) then
   local ok_au, err_au = stage_mod.write(auto_cfg,
     "return {\n  enabled = true,\n  auto_update = true,\n  check_interval_s = 120,\n}\n")

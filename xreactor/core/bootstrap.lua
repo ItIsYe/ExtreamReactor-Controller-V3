@@ -284,8 +284,8 @@ function bootstrap.require(module_name)
   return result
 end
 
-local FIRST_START_ROLE_CONFIG = "/xreactor/config/role.lua"
-local FIRST_START_NODE_ID_PATH = "/xreactor/config/node_id.txt"
+local FIRST_START_ROLE_CONFIG = "/xreactor_config/role.lua"
+local FIRST_START_NODE_ID_PATH = "/xreactor_config/node_id.txt"
 
 local ROLE_OPTIONS = {
   { label = "MASTER", role = "MASTER" },

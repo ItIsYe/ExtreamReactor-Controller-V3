@@ -35,7 +35,7 @@ local DISK_REFRESH_S   = 30
 local DRAW_INTERVAL_S  = 5
 local ACTIVE_DRAW_MIN_INTERVAL_S = 1
 local SELF_ROLE        = "LOG_COLLECTOR"
-local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
+local MONITOR_CFG_FILE = "/xreactor_config/log_monitor.txt"
 -- DISKS_PER_ROLE gruppiert die sortierten Mounts in Bloecken zu je 4 (statt
 -- 1:1 pro Rolle). Feste physische Steckreihenfolge: die ersten 4 Disks = RT,
 -- die naechsten 4 = MASTER usw. (siehe disk_for_role() fuer die Rotation

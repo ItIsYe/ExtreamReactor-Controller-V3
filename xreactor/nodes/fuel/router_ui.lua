@@ -4,7 +4,7 @@ local colorset = require("shared.colors")
 local constants = require("shared.constants")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 
-local DEFAULT_ROUTE_CONFIG_PATH = "/xreactor/config/fuel_routes.lua"
+local DEFAULT_ROUTE_CONFIG_PATH = "/xreactor_config/fuel_routes.lua"
 local BUILTIN_SIDES = { "top", "bottom", "left", "right", "front", "back" }
 local RECENT_HIGHLIGHT_MS = 5000
 

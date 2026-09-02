@@ -4,7 +4,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5
 }
@@ -60,7 +60,7 @@ local DEFAULT_CONFIG = {
 -- Die Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
 -- ueberschrieben -- Config muss in eine geschuetzte Nutzerdatei migriert
 -- werden.
-local WATER_USER_CONFIG_PATH = "/xreactor/config/water.lua"
+local WATER_USER_CONFIG_PATH = "/xreactor_config/water.lua"
 if not fs.exists(WATER_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then

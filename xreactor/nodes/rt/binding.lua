@@ -1,6 +1,6 @@
 local binding = {}
 
-local RT_CONFIG_PATH = "/xreactor/config/rt.lua"
+local RT_CONFIG_PATH = "/xreactor_config/rt.lua"
 
 local function normalize_names(list)
   local normalized = {}
