@@ -102,6 +102,20 @@ nicht Teil dieses Handoffs.
 - Ein paar kosmetische/vernachlässigbare Performance-Findings (LOW priority)
   wurden bewusst nicht angefasst.
 
+## Backlog — mögliches zukünftiges Feature (nicht priorisiert)
+
+- **Unabhängiger "Wächter"-Mechanismus für RT-Node-Ausfall:** Stürzt
+  ausgerechnet der RT-Computer selbst ab (Server läuft normal weiter), läuft
+  der Reaktor bis zum automatischen Reboot unbeaufsichtigt auf dem letzten
+  Stand weiter — keine aktive Nachregelung in der Zwischenzeit. Bewusst
+  zurückgestellt: Risiko eingeschätzt als unkritisch — der Reaktor läuft
+  einfach weiter bis der Brennstoff aufgebraucht ist, Turbinen könnten
+  höchstens in Overspeed geraten, was ebenfalls kein Problem darstellt.
+  Falls gewünscht: ein zweiter, unabhängiger Node könnte bei
+  Kommunikationsausfall eines RT-Nodes proaktiv eingreifen (analog zu
+  VALVE's `tick_failsafe`, das bei ausbleibenden Kommandos selbstständig in
+  den sicheren Zustand geht).
+
 ## Node-Übersicht
 
 Es liegt aktuell keine Live-Telemetrie aus einem laufenden Minecraft-Server
