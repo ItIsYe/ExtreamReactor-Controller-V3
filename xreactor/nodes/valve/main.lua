@@ -76,6 +76,14 @@ local node_id = support_runtime.init_logging({
   config_meta = config_meta, config_warnings = config_warnings
 })
 
+-- Clear display name assigned once by the installer (installer/valve_
+-- naming.lua) -- read-only here, never written back. Broadcast on every
+-- outgoing message as comms_service's "label" so FUEL's routing UI can
+-- show it instead of the raw node_id (see core/comms.lua's peer.label).
+local valve_name_cfg = utils.load_config("/xreactor_config/valve_name.lua", { name = nil })
+local valve_label = type(valve_name_cfg.name) == "string" and valve_name_cfg.name ~= ""
+  and valve_name_cfg.name or nil
+
 local valve_health = health.new({})
 local desired_high = config.default_blocked ~= false
 local controller = valve_controller.new({
@@ -147,7 +155,7 @@ local function check_teach_input()
   teach_input_state = any_high
 end
 
-local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX })
+local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label })
 local services = service_manager.new()
 services:add(comms)
 services:add({ name = "valve_channel", wants_events = true, tick = function(_self, dt, event)

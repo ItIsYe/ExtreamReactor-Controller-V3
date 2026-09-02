@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 606,
-  manifest_id = "manifest-v606",
+  manifest_version = 607,
+  manifest_id = "manifest-v607",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -11,11 +11,11 @@ return {
   { path = "installer/stage.lua", size_bytes = 8884, hash = "83555051", always = true },
   { path = "installer/ui.lua", size_bytes = 1971, hash = "02e204ae", always = true },
   { path = "installer/auto_update.lua", size_bytes = 19624, hash = "9f4590ce", always = true },
-  { path = "installer/init.lua", size_bytes = 17825, hash = "ed2a324e", always = true },
+  { path = "installer/init.lua", size_bytes = 18637, hash = "cf0e15a4", always = true },
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "4d3fc0c3", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "564ec9ee", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -23,7 +23,7 @@ return {
   { path = "adapters/monitor.lua", size_bytes = 7953, hash = "a3b79bd4", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "52ca674c", always = true },
   { path = "core/update_handshake.lua", size_bytes = 4701, hash = "94353b43", always = true },
-  { path = "core/comms.lua", size_bytes = 26640, hash = "a94a2e12" },
+  { path = "core/comms.lua", size_bytes = 26782, hash = "37e0e8f1" },
   { path = "core/health.lua", size_bytes = 2169, hash = "552a7e16" },
   { path = "core/logger.lua", size_bytes = 31349, hash = "7c76bc52" },
   { path = "core/monitor_manager.lua", size_bytes = 9919, hash = "3f982d0b", required_for={"MASTER"} },
@@ -31,7 +31,7 @@ return {
   { path = "core/discovery_stability.lua", size_bytes = 4103, hash = "99d1d192", required_for={"WATER","FUEL","REPROCESSING"} },
   { path = "core/non_rt_config.lua", size_bytes = 4183, hash = "6f5bf45f", required_for={"WATER","FUEL","REPROCESSING"} },
   { path = "core/non_rt_payload.lua", size_bytes = 558, hash = "b9c0175d", required_for={"VALVE","WATER","FUEL","REPROCESSING"} },
-  { path = "core/protocol.lua", size_bytes = 7370, hash = "4564c676" },
+  { path = "core/protocol.lua", size_bytes = 7397, hash = "8b591bc4" },
   { path = "core/reactor_identity.lua", size_bytes = 1610, hash = "059a6785", required_for={"MASTER","RT","FUEL"} },
   { path = "core/registry.lua", size_bytes = 12798, hash = "25c1dc1e", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/safety.lua", size_bytes = 7851, hash = "3d0160cc", required_for={"MASTER","RT","FUEL"} },
@@ -49,7 +49,7 @@ return {
   -- diese Datei tatsaechlich (siehe auch core/alert_rules.lua, ihre
   -- Abhaengigkeit, ebenso auf MASTER beschraenkt).
   { path = "services/alert_service.lua", size_bytes = 14539, hash = "60d734ad", required_for={"MASTER"} },
-  { path = "services/comms_service.lua", size_bytes = 11948, hash = "e822a614" },
+  { path = "services/comms_service.lua", size_bytes = 11996, hash = "4c3ec3ff" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4", required_for={"MASTER"} },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "services/service_manager.lua", size_bytes = 6565, hash = "fa13ae27" },
@@ -187,8 +187,8 @@ return {
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 6466, hash = "1898ddc4", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 28865, hash = "4288c067", required_for={"FUEL"} },
-    { path = "nodes/fuel/redstone_router.lua", size_bytes = 48683, hash = "12bdbf84", required_for={"FUEL","REPROCESSING"} },
-    { path = "nodes/fuel/router_ui.lua", size_bytes = 36446, hash = "9642ab47", required_for={"FUEL","REPROCESSING"} },
+    { path = "nodes/fuel/redstone_router.lua", size_bytes = 48738, hash = "7d08111e", required_for={"FUEL","REPROCESSING"} },
+    { path = "nodes/fuel/router_ui.lua", size_bytes = 37071, hash = "93f04a09", required_for={"FUEL","REPROCESSING"} },
     },
     reprocessing = {
     { path = "nodes/reprocessor/config.lua", size_bytes = 3626, hash = "5b906b83", required_for={"REPROCESSING"} },
@@ -200,7 +200,8 @@ return {
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 1597, hash = "27de8d69", required_for={"VALVE"} },
     { path = "nodes/valve/controller.lua", size_bytes = 12021, hash = "992adf05", required_for={"VALVE"} },
-    { path = "nodes/valve/main.lua", size_bytes = 9036, hash = "224b8510", required_for={"VALVE"} },
+    { path = "nodes/valve/main.lua", size_bytes = 9560, hash = "d59386e6", required_for={"VALVE"} },
+    { path = "installer/valve_naming.lua", size_bytes = 2805, hash = "a809108a", required_for={"VALVE"} },
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 53338, hash = "7c061c9a", required_for={"LOG"} },

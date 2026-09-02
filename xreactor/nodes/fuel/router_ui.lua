@@ -159,6 +159,17 @@ end
 -- Schritt beim Anfuegen eines Ventils. Ohne comms-Anbindung oder ohne
 -- bekannte VALVE-Nodes bleibt die Liste leer, ein Ventil wird dann direkt
 -- als lokale Seite angefuegt (kein zusaetzlicher Auswahlschritt noetig).
+-- Truncated to keep the picker row readable next to the raw id -- see
+-- installer/valve_naming.lua for where this label comes from.
+local VALVE_LABEL_MAX = 18
+
+local function short_valve_label(id, label)
+  label = (type(label) == "string" and label ~= "") and label or id
+  return mux.fit(tostring(label), VALVE_LABEL_MAX)
+end
+
+-- Returns { { id=, label= }, ... }, sorted by id -- id is the stable key
+-- stored in fuel_routes.lua (step.integrator); label is only for display.
 local function known_valve_ids(router)
   local out = {}
   if not router or not router.comms then return out end
@@ -166,10 +177,10 @@ local function known_valve_ids(router)
   if not ok or type(peers) ~= "table" then return out end
   for id, data in pairs(peers) do
     if type(data) == "table" and data.down ~= true and data.role == constants.roles.VALVE_NODE then
-      out[#out + 1] = id
+      out[#out + 1] = { id = id, label = short_valve_label(id, data.label) }
     end
   end
-  table.sort(out)
+  table.sort(out, function(a, b) return a.id < b.id end)
   return out
 end
 
@@ -396,9 +407,10 @@ function M:_render_tree(target, ui, w, h)
       if ry > body_top + body_h - 2 then break end
       local shared_suffix = #(vs.affected_routes or {}) > 1 and (" (geteilt: " .. table.concat(vs.affected_routes, ", ") .. ")") or ""
       local status = vs.online == false and "WARNING" or (vs.stale and "LIMITED" or "OK")
+      local row_label = short_valve_label(vs.id, vs.label)
       mux.data_row(target, right_x + 2, ry, right_w - 4, {
-        label = tostring(vs.id),
-        value = mux.fit((vs.online == false and "OFFLINE" or "ONLINE") .. shared_suffix, right_w - 4 - #tostring(vs.id) - 2),
+        label = row_label,
+        value = mux.fit((vs.online == false and "OFFLINE" or "ONLINE") .. shared_suffix, right_w - 4 - #row_label - 2),
         status = status, icon = "output",
       })
       ry = ry + 1
@@ -532,8 +544,8 @@ function M:_render_path(target, ui, w, h)
   if u.pending_side then
     mux.banner(target, 2, picker_top, w - 3, "SEITE " .. tostring(u.pending_side):upper() .. " -- ZIEL", "LIMITED", "network")
     items[#items + 1] = { label = "LOKAL", value = "FUEL-NODE", integrator = nil }
-    for _, id in ipairs(known_valve_ids(self.redstone_router)) do
-      items[#items + 1] = { label = tostring(id), value = "VALVE-NODE", integrator = id }
+    for _, valve in ipairs(known_valve_ids(self.redstone_router)) do
+      items[#items + 1] = { label = valve.label, value = "VALVE-NODE", integrator = valve.id }
     end
   else
     mux.card(target, 2, picker_top, w - 3, picker_h, { title = "VENTIL ANFUEGEN", status = "LIMITED", icon = "output" })
