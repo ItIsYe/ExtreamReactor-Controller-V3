@@ -22,6 +22,7 @@ Dann Computer neu starten — der Installer erkennt die Rolle automatisch und in
 | FUEL | Brennstoff-Verwaltung und Logistics |
 | VALVE | Ventil-Steuerung (Redstone) |
 | WATER | Wasserkühlung |
+| REPROCESSING | Wiederaufbereitung |
 | LOG | Zentraler Log-Collector |
 
 ## Branches
@@ -35,5 +36,5 @@ Dann Computer neu starten — der Installer erkennt die Rolle automatisch und in
 
 ## Wichtige Regeln
 - Dateien **ausschließlich über den Installer** installieren — nie manuell per curl/Server-Konsole
-- Manifest und release.lua werden automatisch bei jedem Commit aktualisiert
+- Manifest und release.lua vor jedem Commit manuell resynchronisieren (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`), aktualisiert aber nichts automatisch
 - Vor dem Mergen von Agent-generierten PRs: einzeln auf einem Test-Computer verifizieren
