@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-09-02 | beta-v606**
+**Stand: 2026-09-02 | beta-v609**
 
 **Architekturänderung:** Die Config (`role.lua`, `node_id.txt`, `reactor_names.lua`,
 `*_routes.lua`, Registry-Dateien, etc.) liegt jetzt unter `/xreactor_config/`
@@ -19,6 +19,30 @@ Pfad fest verdrahtet (Rollen-Boot + Recovery-Resume) — das hätte den Boot
 schon vor jeder Migrationslogik im Installer zum Absturz gebracht. Beide
 Stellen sowie `tools/offline_validate.lua` sind jetzt auf `/xreactor_config`
 korrigiert.
+
+Seit v606 zusätzlich gemergt (PRs #529, #530, beide gegen `beta`, jeweils
+einzeln verifiziert wie unten beschrieben):
+
+- **VALVE-Klarnamen** (#529): `installer/valve_naming.lua` vergibt beim
+  ersten Install automatisch (kein Operator-Eingriff nötig, da ein VALVE =
+  ein Computer) den Namen `VALVE-<Computer-ID>`, persistiert ihn in
+  `/xreactor_config/valve_name.lua` und setzt ihn als CraftOS-Computer-Label.
+  Der Name wird per neuem, optionalem `label`-Feld im Netzwerkprotokoll
+  (`core/comms.lua`) an FUEL übertragen und dort (gekürzt) im Routing-Editor
+  und in der Ventil-Statusliste angezeigt statt der rohen Node-ID. Sauber
+  gescoped: nur bei `role == VALVE` aufgerufen, im Manifest mit
+  `required_for={"VALVE"}` (nicht `always=true`) — landet nie auf den
+  anderen Rollen.
+- **Logging-Fallback** (#530): lokales Schreiben auf Disk ist jetzt
+  ausschließlich ein Fallback für einen nachweislich nicht erreichbaren
+  LOG_COLLECTOR, für jede Rolle einheitlich — unabhängig von
+  `debug_logging`. Vorher schrieb RT (debug_logging=true) immer lokal
+  (egal ob Collector online), während FUEL/VALVE/WATER/REPROCESSING
+  (debug_logging=false) Logs bei Collector-Ausfall komplett verloren, ganz
+  ohne Fallback. Der Collector sendet jetzt alle 20s einen leichten
+  `LOG_PING`-Broadcast auf dem bestehenden Log-Kanal (6503, bewusst nicht
+  auf dem ohnehin überlasteten Control-Kanal); "nachweislich offline" = 45s
+  ohne PING/ACK gehört.
 
 ---
 
