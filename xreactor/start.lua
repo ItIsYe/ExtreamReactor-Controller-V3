@@ -20,21 +20,6 @@ local ROLE_ENTRY = {
 
 local function p(msg) pcall(print, tostring(msg)) end
 
--- Entfernt nur echte, installer-eigene, jederzeit regenerierbare
--- Zwischenverzeichnisse -- NICHT /xreactor_logs (core/logger.lua's
--- DEFAULT_LOG_DIR), da ein knapper Speicherstand keine Erlaubnis ist,
--- vorhandene Logs zu vernichten.
-local function cleanup_space()
-  if not fs.getFreeSpace then return end
-  local ok, free = pcall(fs.getFreeSpace, "/")
-  if ok and type(free) == "number" and free < 4096 then
-    pcall(fs.delete, "/xreactor_stage")
-    pcall(fs.delete, "/xreactor_backup_prev")
-    p("STARTUP: Speicher bereinigt")
-  end
-end
-cleanup_space()
-
 -- installer/journal.lua schreibt bei jedem Installationslauf ein Journal
 -- ausserhalb von /xreactor, das erst als letzter Schritt (zusammen mit
 -- release.lua) auf COMMITTED gesetzt wird. Wird bei jedem Boot geprueft,
