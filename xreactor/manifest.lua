@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 618,
-  manifest_id = "manifest-v618",
+  manifest_version = 619,
+  manifest_id = "manifest-v619",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,12 +15,12 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "e3740bb7", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "02515430", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
   { path = "core/mockup_ui.lua", size_bytes = 11064, hash = "3a43c96d", always = true },
-  { path = "adapters/monitor.lua", size_bytes = 7953, hash = "a3b79bd4", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
+  { path = "adapters/monitor.lua", size_bytes = 9049, hash = "28eda995", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "52ca674c", always = true },
   { path = "core/update_handshake.lua", size_bytes = 4701, hash = "94353b43", always = true },
   { path = "core/comms.lua", size_bytes = 26782, hash = "37e0e8f1" },
