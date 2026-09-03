@@ -241,9 +241,17 @@ function M.attach(instance, opts)
     end
 
     if #reactors > 1 and h >= 6 then
-      mux.data_row(mon, 2, 6, math.max(1, w - 3), { label = state.details_index > 1 and "[<] PREV" or "", value = state.details_index < #reactors and "NEXT [>]" or "", status = "LIMITED", icon = "reactor" })
-      state.details_prev = state.details_index > 1 and { x1 = 2, x2 = math.min(w - 1, 11), y = 6 } or nil
-      state.details_next = state.details_index < #reactors and { x1 = math.max(2, w - 11), x2 = w - 1, y = 6 } or nil
+      local prev_label = w >= 42 and "[ << REAKTOR ]" or "[ << ]"
+      local next_label = w >= 42 and "[ REAKTOR >> ]" or "[ >> ]"
+      mux.data_row(mon, 2, 6, math.max(1, w - 3), {
+        label = state.details_index > 1 and prev_label or "",
+        value = state.details_index < #reactors and next_label or "",
+        status = "LIMITED", icon = "reactor"
+      })
+      state.details_prev = state.details_index > 1
+        and { x1 = 2, x2 = math.min(w - 1, 3 + #prev_label), y = 6 } or nil
+      state.details_next = state.details_index < #reactors
+        and { x1 = math.max(2, w - #next_label - 2), x2 = w - 1, y = 6 } or nil
     else
       state.details_prev, state.details_next = nil, nil
     end
