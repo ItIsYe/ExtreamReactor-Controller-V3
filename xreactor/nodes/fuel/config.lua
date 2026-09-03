@@ -80,42 +80,34 @@ local CONFIG = {
     waste              = {},
     --
     -- redstone_tree: one route per reactor, each with an ORDERED list of
-    -- valves ("path") that must be blocked/opened together for that
+    -- VALVE-Node IDs ("path") that must be blocked/opened together for that
     -- reactor's export. Pipe must be configured: "High Redstone =
     -- Interrupt" in Mekanism. CC blocks ALL known valves, then opens ONLY
     -- the target reactor's own path.
     --
-    -- Flat list: repeat the SAME {side=,integrator=} step in more than one
-    -- reactor's path to express a shared valve -- no nesting needed. The
-    -- in-game Router page (4/4, EDIT tab) builds exactly this format: pick a
-    -- reactor, then tap valves one at a time to build its chain. Old NESTED
-    -- tree configs (side/children) are still understood automatically (see
-    -- nodes/fuel/redstone_router.lua's normalize_tree()).
+    -- Flat list: repeat the SAME id in more than one reactor's path to
+    -- express a shared valve -- no nesting needed. The in-game Router page
+    -- (4/4, EDIT tab) builds exactly this format: pick a reactor, then tap
+    -- valves one at a time to build its chain. Old tree configs (with
+    -- {side=,integrator=} steps, or nested side/children trees) are still
+    -- understood automatically (see nodes/fuel/redstone_router.lua's
+    -- normalize_tree()) -- any 'side' they carried is ignored.
     --
-    -- path[i].side: built-in CC side (top/bottom/left/right/front/back) --
-    --   this is the side on the FUEL computer itself (direct redstone) OR,
-    --   if 'integrator' is set, the side on THAT integrator/VALVE node.
-    -- path[i].integrator (optional): identifies a separate valve
-    --   controller.
-    --   the "integrator" is itself a small standalone CC:Tweaked computer
-    --   sitting at the valve (role VALVE, see nodes/valve/main.lua) -- it
-    --   has no Wired Modem to FUEL, only Wireless, addressed by its node_id
-    --   (auto-discovered once online, see redstone_router.lua refresh()).
-    --   Set integrator = "<valve node_id>" here, e.g. "VALVE-1" (check the
-    --   VALVE node's own boot log for its assigned node_id). A local
-    --   Mekanism Redstone Integrator peripheral (wired directly to FUEL)
-    --   also still works as a fallback if the name doesn't match a known
-    --   VALVE node_id.
+    -- path[i]: the node_id of a VALVE-Node (a small standalone CC:Tweaked
+    --   computer sitting at the valve, role VALVE, see nodes/valve/main.lua)
+    --   -- it has no Wired Modem to FUEL, only Wireless, addressed by its
+    --   node_id (auto-discovered once online, see redstone_router.lua
+    --   refresh()). Use the VALVE node's own boot log for its assigned
+    --   node_id, e.g. "VALVE-1".
     -- valve_open_ms: how long to keep valve open after export (default 2000ms)
     --
-    -- { reactor = "RT-1", label = "Reaktor A", path = { { side = "right" } } },
-    -- { reactor = "RT-2", label = "Reaktor B", path = { { side = "left" } } },
-    -- { reactor = "RT-3", label = "Reaktor C",
-    --   path = { { side = "back" }, { side = "front", integrator = "VALVE-1" } } },
-    --   -- ^ two valves in series: a shared trunk valve ("back", local to
-    --   -- FUEL) plus Reaktor C's own branch valve on VALVE-1. Repeating
-    --   -- { side = "back" } as the first step of another reactor's path
-    --   -- means that reactor shares the same trunk valve.
+    -- { reactor = "RT-1", label = "Reaktor A", path = { "VALVE-1" } },
+    -- { reactor = "RT-2", label = "Reaktor B", path = { "VALVE-2" } },
+    -- { reactor = "RT-3", label = "Reaktor C", path = { "VALVE-1", "VALVE-3" } },
+    --   -- ^ two valves in series: a shared trunk valve (VALVE-1) plus
+    --   -- Reaktor C's own branch valve (VALVE-3). Repeating "VALVE-1" as
+    --   -- the first step of another reactor's path means that reactor
+    --   -- shares the same trunk valve.
     redstone_tree      = {},
     valve_open_ms      = 2000,
   },

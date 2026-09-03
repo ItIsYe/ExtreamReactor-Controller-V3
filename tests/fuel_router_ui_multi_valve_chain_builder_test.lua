@@ -1,17 +1,18 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Regression test fuer den neuen mehrstufigen Ventilketten-Editor auf der
--- FUEL-Router-Seite (Fix 2026-07-19, siehe nodes/fuel/router_ui.lua).
--- Vorher konnte der Editor pro Reaktor immer nur GENAU EIN Ventil zuweisen
--- (Seite antippen -> Reaktor antippen) und schaltete sich bei einem
--- bereits verschachtelten Baum sogar komplett schreibgeschuetzt. Jetzt:
--- Reaktor waehlen -> Ventil fuer Ventil antippen (mit optionaler VALVE-
--- Node-Auswahl pro Schritt) -> FERTIG. Dieser Test treibt handle_touch()
--- direkt (dieselbe Technik wie tests/ui_router_page_nav_debounce_test.lua:
--- Touch-Zonen werden manuell so gesetzt, wie render() sie gesetzt haette,
--- ohne den vollen Monitor-/mux-Renderpfad zu mocken) und beweist den
--- kompletten Ablauf End-to-End inklusive Speichern + Uebernahme durch den
--- echten redstone_router.
+-- Regression test fuer den mehrstufigen Ventilketten-Editor auf der
+-- FUEL-Router-Seite (siehe nodes/fuel/router_ui.lua). Reaktor waehlen ->
+-- Ventil fuer Ventil antippen (aus den bekannten VALVE-Nodes) -> FERTIG.
+-- Dieser Test treibt handle_touch() direkt (dieselbe Technik wie
+-- tests/ui_router_page_nav_debounce_test.lua: Touch-Zonen werden manuell so
+-- gesetzt, wie render() sie gesetzt haette, ohne den vollen Monitor-/mux-
+-- Renderpfad zu mocken) und beweist den kompletten Ablauf End-to-End
+-- inklusive Speichern + Uebernahme durch den echten redstone_router.
+--
+-- Feature (2026-09-03): der fruehere zweistufige Picker (erst Seite, dann
+-- optional ein VALVE-Node dafuer) ist einem einstufigen Picker gewichen --
+-- ein Pfad-Eintrag ist jetzt direkt die VALVE-Node-ID (String), kein
+-- {side=,integrator=}-Paar mehr.
 
 local files = {}
 
@@ -63,7 +64,10 @@ local function assert_true(value, message)
 end
 
 local comms = {
-  get_peers = function() return { ['VALVE-1'] = { down = false, role = 'VALVE-NODE' } } end,
+  get_peers = function() return {
+    ['VALVE-1'] = { down = false, role = 'VALVE-NODE' },
+    ['VALVE-2'] = { down = false, role = 'VALVE-NODE' },
+  } end,
 }
 
 local rs = redstone_router.new({
@@ -97,40 +101,27 @@ assert_true(ui._ui.editing ~= nil)
 assert_eq(ui._ui.editing.reactor, 'R2')
 assert_eq(#ui._ui.editing.path, 0)
 
--- ── Seite BACK antippen -- ein bekannter VALVE-Node existiert, also muss ───
---    erst der Zielauswahl-Schritt erscheinen, NICHT sofort anfuegen. ────────
-ui._ui.side_btns = { { x1 = 4, x2 = 40, y = 9, side = 'back' } }
-assert_true(ui:handle_touch(10, 9))
-assert_eq(ui._ui.pending_side, 'back')
-assert_eq(#ui._ui.editing.path, 0, 'must not append yet -- integrator choice pending')
-
--- LOKAL waehlen fuer diesen Schritt.
-ui._ui.integrator_btns = { { x1 = 4, x2 = 40, y = 11, integrator = nil } }
+-- ── Ersten VALVE-Node antippen -- ein Pfad-Eintrag ist jetzt direkt die ────
+--    VALVE-Node-ID, kein Zwischenschritt mehr noetig. ──────────────────────
+ui._ui.integrator_btns = { { x1 = 4, x2 = 40, y = 11, integrator = 'VALVE-2' } }
 assert_true(ui:handle_touch(10, 11))
-assert_eq(ui._ui.pending_side, nil)
 assert_eq(#ui._ui.editing.path, 1)
-assert_eq(ui._ui.editing.path[1].side, 'back')
-assert_eq(ui._ui.editing.path[1].integrator, nil)
+assert_eq(ui._ui.editing.path[1], 'VALVE-2')
 
--- ── Zweiter Schritt: Seite LEFT ueber den bekannten VALVE-1-Node. ───────────
-ui._ui.side_btns = { { x1 = 4, x2 = 40, y = 9, side = 'left' } }
-assert_true(ui:handle_touch(10, 9))
-assert_eq(ui._ui.pending_side, 'left')
+-- ── Zweiter Schritt: ein weiterer bekannter VALVE-Node. ─────────────────────
 ui._ui.integrator_btns = {
-  { x1 = 4, x2 = 40, y = 11, integrator = nil },
+  { x1 = 4, x2 = 40, y = 11, integrator = 'VALVE-2' },
   { x1 = 4, x2 = 40, y = 12, integrator = 'VALVE-1' },
 }
 assert_true(ui:handle_touch(10, 12))
 assert_eq(#ui._ui.editing.path, 2)
-assert_eq(ui._ui.editing.path[2].side, 'left')
-assert_eq(ui._ui.editing.path[2].integrator, 'VALVE-1')
+assert_eq(ui._ui.editing.path[2], 'VALVE-1')
 
 -- ── ersten Schritt wieder entfernen (in der Kettenliste antippen) ──────────
 ui._ui.step_btns = { { x1 = 4, x2 = 40, y = 7, index = 1 } }
 assert_true(ui:handle_touch(10, 7))
 assert_eq(#ui._ui.editing.path, 1, 'removing step 1 must leave only the former second step')
-assert_eq(ui._ui.editing.path[1].side, 'left')
-assert_eq(ui._ui.editing.path[1].integrator, 'VALVE-1')
+assert_eq(ui._ui.editing.path[1], 'VALVE-1')
 
 -- ── FERTIG: committet die Arbeitskopie in u.routes ──────────────────────────
 ui._ui.done_btn = { x1 = 2, x2 = 12, y = 20 }
@@ -153,9 +144,7 @@ assert_eq(#ui._ui.routes, 2)
 -- ── ABBRECHEN darf eine bestehende Route NICHT veraendern ───────────────────
 ui._ui.reactor_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R2', label = 'Reactor2' } }
 assert_true(ui:handle_touch(10, 8))
-ui._ui.side_btns = { { x1 = 4, x2 = 40, y = 9, side = 'front' } }
-assert_true(ui:handle_touch(10, 9)) -- pending_side='front'
-ui._ui.integrator_btns = { { x1 = 4, x2 = 40, y = 11, integrator = nil } }
+ui._ui.integrator_btns = { { x1 = 4, x2 = 40, y = 11, integrator = 'VALVE-2' } }
 assert_true(ui:handle_touch(10, 11)) -- editing.path now has 2 steps
 assert_eq(#ui._ui.editing.path, 2)
 ui._ui.cancel_btn = { x1 = 30, x2 = 40, y = 20 }
@@ -173,7 +162,7 @@ assert_true(not ui._ui.dirty)
 -- Der ECHTE redstone_router kennt jetzt beide Routen.
 local path_to_r2 = rs:get_path_to('R2')
 assert_eq(#path_to_r2, 1)
-assert_eq(path_to_r2[1], 'left')
+assert_eq(path_to_r2[1], 'VALVE-1')
 local rtable = rs:get_routing_table()
 assert_eq(#rtable, 2, 'both reactors must be present in the live routing table')
 

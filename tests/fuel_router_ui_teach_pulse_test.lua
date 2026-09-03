@@ -70,13 +70,13 @@ assert_true(ui._ui.teaching, 'the teach toggle must flip u.teaching on')
 
 assert_true(ui:handle_teach_pulse('VALVE-1'), 'a teach pulse while active must be accepted')
 assert_eq(#ui._ui.editing.path, 1)
-assert_eq(ui._ui.editing.path[1].integrator, 'VALVE-1')
+assert_eq(ui._ui.editing.path[1], 'VALVE-1')
 
 -- 4. Zweiter Puls von einer ANDEREN Node haengt sich in der gemeldeten
 --    Reihenfolge an.
 assert_true(ui:handle_teach_pulse('VALVE-2'))
 assert_eq(#ui._ui.editing.path, 2)
-assert_eq(ui._ui.editing.path[2].integrator, 'VALVE-2')
+assert_eq(ui._ui.editing.path[2], 'VALVE-2')
 
 -- 5. Ein sofort wiederholter Puls DERSELBEN Node (Doppel-Puls/Prellen)
 --    haengt sich NICHT ein zweites Mal in Folge an.
@@ -88,7 +88,7 @@ assert_eq(#ui._ui.editing.path, 2, 'a debounced repeat must not grow the chain')
 assert_true(ui:handle_teach_pulse('VALVE-3'))
 assert_true(ui:handle_teach_pulse('VALVE-1'))
 assert_eq(#ui._ui.editing.path, 4)
-assert_eq(ui._ui.editing.path[4].integrator, 'VALVE-1')
+assert_eq(ui._ui.editing.path[4], 'VALVE-1')
 
 -- 7. Teach-Modus erneut antippen schaltet ihn wieder aus.
 assert_true(ui:handle_touch(5, 4))

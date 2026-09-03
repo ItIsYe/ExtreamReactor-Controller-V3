@@ -20,7 +20,7 @@ local reactors, routes = {}, {}
 for i = 1, 20 do
   local id = string.format('R%02d', i)
   reactors[#reactors + 1] = { id = id, label = 'Reactor ' .. tostring(i) }
-  routes[#routes + 1] = { reactor = id, label = 'Reactor ' .. tostring(i), path = { { side = 'back' } } }
+  routes[#routes + 1] = { reactor = id, label = 'Reactor ' .. tostring(i), path = { 'VALVE-01' } }
 end
 
 local rs = redstone_router.new({
@@ -57,7 +57,6 @@ local function assert_touch_bounds()
   local lists = {
     reactor_btns = u.reactor_btns,
     step_btns = u.step_btns,
-    side_btns = u.side_btns,
     integrator_btns = u.integrator_btns,
   }
   for name, list in pairs(lists) do
@@ -111,12 +110,10 @@ end
 assert(any_button(page._ui.reactor_btns, 'id', 'R20'), 'last configured reactor must be reachable')
 
 -- A 12-step valve chain must not overflow the card and the last step must be reachable.
-local sides = { 'top', 'bottom', 'left', 'right', 'front', 'back' }
 local long_path = {}
-for i = 1, 12 do long_path[i] = { side = sides[((i - 1) % #sides) + 1] } end
+for i = 1, 12 do long_path[i] = string.format('VALVE-%02d', ((i - 1) % 20) + 1) end
 page._ui.edit_view = 'path'
 page._ui.editing = { reactor = 'R01', label = 'Reactor 1', path = long_path }
-page._ui.pending_side = nil
 page._ui.path_scroll = 0
 page._ui.picker_scroll = 0
 render('long path initial')
@@ -128,19 +125,7 @@ for _ = 1, 30 do
 end
 assert(any_button(page._ui.step_btns, 'index', 12), 'last valve step must be reachable')
 
--- All six local sides must be reachable even when the picker is short.
-page._ui.pending_side = nil
-page._ui.picker_scroll = 0
-render('side picker initial')
-for _ = 1, 20 do
-  if any_button(page._ui.side_btns, 'side', 'back') then break end
-  tap(page._ui.picker_scroll_down)
-  render('side picker page')
-end
-assert(any_button(page._ui.side_btns, 'side', 'back'), 'last built-in side must be reachable')
-
--- 20 VALVE nodes must also be pageable in the integrator picker.
-page._ui.pending_side = 'front'
+-- 20 VALVE nodes must be pageable in the picker.
 page._ui.picker_scroll = 0
 render('integrator picker initial')
 for _ = 1, 40 do
@@ -160,10 +145,7 @@ for _, size in ipairs(sizes) do
   render(string.format('list %dx%d', width, height))
   page._ui.edit_view = 'path'
   page._ui.editing = { reactor = 'R01', label = 'Reactor 1', path = long_path }
-  page._ui.pending_side = nil
   render(string.format('path %dx%d', width, height))
-  page._ui.pending_side = 'front'
-  render(string.format('picker %dx%d', width, height))
 end
 
 print('fuel_router_ui_pagination_test.lua: ok')

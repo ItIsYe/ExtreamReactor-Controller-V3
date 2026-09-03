@@ -46,12 +46,13 @@ local CONFIG = {
     --
     -- redstone_tree: gleiches Format wie bei der Fuel-Node (siehe
     -- nodes/fuel/config.lua) -- eine flache Route pro Ziel mit geordnetem
-    -- 'path'. Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
+    -- 'path' aus VALVE-Node-IDs. Mekanism Pipes müssen auf "High Redstone =
+    -- Interrupt" stehen.
     -- { reactor = "Reprocessor A", label = "Reprocessor A",
-    --   path = { { side = "right" }, { side = "top" } } },
+    --   path = { "VALVE-1", "VALVE-2" } },
     -- { reactor = "Reprocessor B", label = "Reprocessor B",
-    --   path = { { side = "right" }, { side = "bottom" } } },
-    --   -- ^ "right" ist hier ein gemeinsames Trunk-Ventil ("Arm A") vor
+    --   path = { "VALVE-1", "VALVE-3" } },
+    --   -- ^ VALVE-1 ist hier ein gemeinsames Trunk-Ventil ("Arm A") vor
     --   -- beiden Reprocessor-Zweigen -- einfach in beiden Pfaden
     --   -- wiederholt, keine Verschachtelung noetig.
     -- Hinweis: "reactor"-Feld referenziert hier den target.label.
