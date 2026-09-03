@@ -489,12 +489,17 @@ function M:_render_list(target, ui, w, h)
     u.list_scroll_up, u.list_scroll_down = nil, nil
   end
 
-  local save_lbl = u.dirty and "[ SPEICHERN * ]" or "[ SPEICHERN ]"
-  local reset_lbl = "[ RESET ]"
-  if w < 34 then save_lbl, reset_lbl = u.dirty and "[SAVE*]" or "[SAVE]", "[RST]" end
-  mux.data_row(target, 2, button_y, w - 3, { label = save_lbl, value = reset_lbl, status = u.dirty and "LIMITED" or "OK", icon = "config" })
-  u.save_btn = { x1 = 2, x2 = math.min(w - 1, 2 + #save_lbl + 2), y = button_y }
-  u.reset_btn = { x1 = math.max(2, w - #reset_lbl - 2), x2 = w - 1, y = button_y }
+  local save_lbl = u.dirty and "SPEICHERN *" or "SPEICHERN"
+  local reset_lbl = "RESET"
+  if w < 34 then save_lbl, reset_lbl = u.dirty and "SAVE*" or "SAVE", "RST" end
+  -- Grosse, deutlich als Button erkennbare, gefuellte Flaechen (2 Zeilen
+  -- hoch) statt reiner farbiger Schrift -- nutzt die ohnehin leere
+  -- Pufferzeile ueber dem Footer, keine Layout-Verschiebung noetig.
+  local total_w = w - 3
+  local reset_w = math.min(math.max(#reset_lbl + 2, 8), math.floor(total_w * 0.35))
+  local save_w = math.max(1, total_w - reset_w - 1)
+  u.save_btn = mux.button(target, 2, button_y - 1, save_w, save_lbl, u.dirty and "LIMITED" or "OK", 2)
+  u.reset_btn = mux.button(target, 2 + save_w + 1, button_y - 1, reset_w, reset_lbl, "OFFLINE", 2)
 end
 
 -- Editor fuer GENAU EINEN Reaktor (u.editing): zeigt die bisher
@@ -509,14 +514,17 @@ function M:_render_path(target, ui, w, h)
 
   mux.banner(target, 2, 3, w - 3, "VENTILKETTE: " .. tostring(editing.label or editing.reactor), "LIMITED", "reactor")
 
-  local teach_lbl = u.teaching and "[ EINLERNEN: AN ]" or "[ EINLERNEN: AUS ]"
-  local teach_hint = u.teaching and "Hebel am Ventil umlegen, um es anzuhaengen" or "Antippen zum Aktivieren"
-  if w < 40 then
-    teach_lbl = u.teaching and "[TEACH ON]" or "[TEACH]"
-    teach_hint = u.teaching and "HEBEL" or "ANTIPPEN"
+  local teach_lbl = u.teaching and "EINLERNEN: AN -- Hebel am Ventil umlegen" or "EINLERNEN: AUS -- antippen zum Aktivieren"
+  if w < 60 then
+    teach_lbl = u.teaching and "EINLERNEN: AN (Hebel umlegen)" or "EINLERNEN: AUS (antippen)"
   end
-  mux.data_row(target, 2, 4, w - 3, { label = teach_lbl, value = teach_hint, status = u.teaching and "OK" or "muted", icon = "network" })
-  u.teach_btn = { x1 = 2, x2 = math.min(w - 1, 2 + #teach_lbl + 1), y = 4 }
+  if w < 40 then
+    teach_lbl = u.teaching and "TEACH: AN" or "TEACH: AUS"
+  end
+  -- Gefuellte Flaeche statt reiner farbiger Schrift -- zeilenhoehen-neutral
+  -- (Zeile 4 hat keine Reserve nach oben/unten, die Banner-/Inhaltszeilen
+  -- wuerden sonst verschoben), aber als Button klar erkennbar.
+  u.teach_btn = mux.button(target, 2, 4, w - 3, teach_lbl, u.teaching and "OK" or "LIMITED", 1)
 
   local button_y = math.max(7, h - 2)
   local content_top = 5
@@ -566,12 +574,18 @@ function M:_render_path(target, ui, w, h)
   end
   u.integrator_btns = integrator_btns
 
-  local done_lbl, clear_lbl, cancel_lbl = "[ FERTIG ]", "[ LEEREN ]", "[ ABBRECHEN ]"
-  if w < 40 then done_lbl, clear_lbl, cancel_lbl = "[OK]", "[CLR]", "[X]" end
-  mux.data_row(target, 2, button_y, w - 3, { label = done_lbl, value = clear_lbl .. " " .. cancel_lbl, status = "OK", icon = "config" })
-  u.done_btn = { x1 = 2, x2 = math.min(w - 1, 2 + #done_lbl + 1), y = button_y }
-  u.cancel_btn = { x1 = math.max(2, w - #cancel_lbl - 1), x2 = w - 1, y = button_y }
-  u.clear_btn = { x1 = math.max(2, u.cancel_btn.x1 - #clear_lbl - 2), x2 = math.max(2, u.cancel_btn.x1 - 2), y = button_y }
+  local done_lbl, clear_lbl, cancel_lbl = "FERTIG", "LEEREN", "ABBRECHEN"
+  if w < 40 then done_lbl, clear_lbl, cancel_lbl = "OK", "CLR", "X" end
+  -- Grosse, deutlich als Buttons erkennbare, gefuellte Flaechen (2 Zeilen
+  -- hoch) statt reiner farbiger Schrift -- nutzt die ohnehin leere
+  -- Pufferzeile ueber dem Footer, keine Layout-Verschiebung noetig.
+  local total_w = w - 3
+  local done_w = math.max(#done_lbl + 2, math.floor(total_w * 0.36))
+  local cancel_w = math.max(#cancel_lbl + 2, math.floor(total_w * 0.30))
+  local clear_w = math.max(1, total_w - done_w - cancel_w - 2)
+  u.done_btn = mux.button(target, 2, button_y - 1, done_w, done_lbl, "OK", 2)
+  u.clear_btn = mux.button(target, 2 + done_w + 1, button_y - 1, clear_w, clear_lbl, "LIMITED", 2)
+  u.cancel_btn = mux.button(target, 2 + done_w + clear_w + 2, button_y - 1, cancel_w, cancel_lbl, "WARNING", 2)
 end
 
 -- Nur der zentrale Render-Pfad (core/ui_router.lua) uebergibt den echten
@@ -612,7 +626,10 @@ end
 
 function M:handle_touch(x, y)
   local u = self._ui
-  local function hit(b) return b and y == b.y and x >= b.x1 and x <= b.x2 end
+  -- b.y2 (set by mux.button() for multi-row buttons) extends the hit test
+  -- across the button's whole height; single-row zones (b.y2 absent) keep
+  -- the original exact-row behaviour.
+  local function hit(b) return b and y >= b.y and y <= (b.y2 or b.y) and x >= b.x1 and x <= b.x2 end
 
   if hit(u.list_scroll_up) then u.list_scroll = math.max(0, u.list_scroll - 1); return true end
   if hit(u.list_scroll_down) then u.list_scroll = u.list_scroll + 1; return true end

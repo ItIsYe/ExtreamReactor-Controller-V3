@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 614,
-  manifest_id = "manifest-v614",
+  manifest_version = 615,
+  manifest_id = "manifest-v615",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,11 +15,11 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "dd6d1cfa", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "3c48437d", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
-  { path = "core/mockup_ui.lua", size_bytes = 10004, hash = "94f3bfb5", always = true },
+  { path = "core/mockup_ui.lua", size_bytes = 11064, hash = "3a43c96d", always = true },
   { path = "adapters/monitor.lua", size_bytes = 7953, hash = "a3b79bd4", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "52ca674c", always = true },
   { path = "core/update_handshake.lua", size_bytes = 4701, hash = "94353b43", always = true },
@@ -188,7 +188,7 @@ return {
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 28865, hash = "4288c067", required_for={"FUEL"} },
     { path = "nodes/fuel/redstone_router.lua", size_bytes = 45563, hash = "4d5b851a", required_for={"FUEL","REPROCESSING"} },
-    { path = "nodes/fuel/router_ui.lua", size_bytes = 35805, hash = "06912862", required_for={"FUEL","REPROCESSING"} },
+    { path = "nodes/fuel/router_ui.lua", size_bytes = 36651, hash = "3fe51ee8", required_for={"FUEL","REPROCESSING"} },
     },
     reprocessing = {
     { path = "nodes/reprocessor/config.lua", size_bytes = 3617, hash = "4fdfc09b", required_for={"REPROCESSING"} },
