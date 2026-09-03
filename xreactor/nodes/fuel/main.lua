@@ -30,6 +30,7 @@ local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
+local me_bridge_compat = require("core.me_bridge_compat")
 local support_runtime = require("nodes.support.runtime")
 local role_logic = require("nodes.support.role_logic")
 local support_ui_pages = require("nodes.support.ui_pages")
@@ -222,16 +223,14 @@ local DEFAULT_STORAGE_BUS = "meBridge_0"
 
 -- Die reale ME Bridge (Advanced Peripherals) hat weder tanks() noch
 -- getFluidAmount() (das waere ein dedizierter Fluid-Tank-Block) --
--- sie ist eine Item-Schnittstelle (getItem/exportItemToPeripheral/
--- importItemFromPeripheral, siehe logistics_router.lua's
--- find_me_bridge_by_methods()). Reale Logs (2026-09-03) zeigten
+-- sie ist eine Item-Schnittstelle (core/me_bridge_compat.lua deckt beide
+-- API-Generationen ab, siehe dort). Reale Logs (2026-09-03) zeigten
 -- FUEL-Nodes mit korrekt benanntem storage_bus, die trotzdem nie als
 -- Storage erkannt wurden, weil die Methodenpruefung auf eine Fluid-
 -- Peripherie zielte statt auf die tatsaechliche ME-Bridge-API. Reserve
 -- wird item-basiert ueber config.reserve_items gezaehlt (storage.lua).
 local function is_storage_candidate(method_set)
-  return method_set.tanks or method_set.getFluidAmount
-    or (method_set.getItem and method_set.exportItemToPeripheral and method_set.importItemFromPeripheral)
+  return method_set.tanks or method_set.getFluidAmount or me_bridge_compat.is_bridge(method_set)
 end
 
 local function discover()
