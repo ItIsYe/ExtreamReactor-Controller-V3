@@ -7,6 +7,8 @@
 -- Item-Logistik (logistics_router.lua/ME Bridge) sein, ist aber eine
 -- eigene Config/eigener State -- main.lua ruft nur die Funktionen auf.
 
+local me_bridge_compat = require("core.me_bridge_compat")
+
 local M = {}
 
 local storage = nil
@@ -47,9 +49,8 @@ local function read_items(config, warn_once, support_runtime)
       local ok, info = support_runtime.safe_wrapped_call(storage, "getItem", { name = item_id })
       if ok then
         any_ok = true
-        local amount = type(info) == "table" and tonumber(info.amount) or 0
         local multiplier = tonumber(entry.unit_multiplier) or 1
-        total = total + (amount or 0) * multiplier
+        total = total + me_bridge_compat.item_amount(info) * multiplier
       else
         warn_once("storage_read_item:" .. item_id, "Storage getItem failed for " .. item_id .. ": " .. tostring(info))
       end

@@ -55,6 +55,7 @@
 
 local M = {}
 local redstone_router_lib = require("nodes.fuel.redstone_router")
+local me_bridge_compat = require("core.me_bridge_compat")
 
 local WASTE_PATTERNS = { "cyanite", "magentite", "rossinite", "waste" }
 
@@ -186,17 +187,18 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
--- Sucht per Methodensignatur (getItem + exportItemToPeripheral +
--- importItemFromPeripheral), sobald der konfigurierte/Default-Name nicht
--- direkt gefunden wird -- Advanced Peripherals vergibt generierte Namen
--- wie "meBridge_0", nicht den Konventions-Default "me_bridge".
+-- Sucht per Methodensignatur (core/me_bridge_compat.lua, deckt beide
+-- Advanced-Peripherals-API-Generationen ab), sobald der konfigurierte/
+-- Default-Name nicht direkt gefunden wird -- Advanced Peripherals vergibt
+-- generierte Namen wie "meBridge_0"/"me_bridge_3", nicht den Konventions-
+-- Default "me_bridge".
 local function find_me_bridge_by_methods()
   for _, name in ipairs(peripheral.getNames() or {}) do
     local ok, methods = pcall(peripheral.getMethods, name)
     if ok and type(methods) == "table" then
       local set = {}
       for _, m in ipairs(methods) do set[m] = true end
-      if set.getItem and set.exportItemToPeripheral and set.importItemFromPeripheral then
+      if me_bridge_compat.is_bridge(set) then
         return name
       end
     end
@@ -424,7 +426,7 @@ function M:_run_supply(cycle_log)
 
     -- Check ME availability
     local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = r.item })
-    local in_me = type(me_info) == "table" and (me_info.amount or 0) or 0
+    local in_me = me_bridge_compat.item_amount(me_info)
     if in_me < r.min_in_me then
       self.log("DEBUG", string.format(
         "Logistics: %s: ME has %d %s (need >%d) — skip",
@@ -445,7 +447,7 @@ function M:_run_supply(cycle_log)
         local function do_export()
           request.phase = "EXPORTING"
           request.state = "delivering"
-          local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
+          local ok, result = me_bridge_compat.export_to(bridge.wrapped,
             { name = r.item, count = push }, r.inlet.name)
           if not ok then
             local err = tostring(result)
@@ -515,7 +517,7 @@ function M:_run_supply(cycle_log)
       -- stable transaction identity/terminal semantics.
       request.state = "delivering"
       request.phase = "EXPORTING"
-      local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
+      local ok, result = me_bridge_compat.export_to(bridge.wrapped,
         { name = r.item, count = push }, r.inlet.name)
       if not ok then
         local err = tostring(result)
@@ -550,15 +552,14 @@ function M:_run_collect(cycle_log)
   local imported, errors = 0, 0
 
   for _, outlet in ipairs(self._state.waste_outlets) do
-    local ok, result = pcall(bridge.wrapped.importItemFromPeripheral,
-      {}, outlet.name)
+    local ok, result = me_bridge_compat.import_from(bridge.wrapped, {}, outlet.name)
     if not ok then
       -- Fallback: import item by item
       local items, _ = safe_call(outlet.wrapped, "list")
       if items then
         for _, stack in pairs(items) do
           if type(stack) == "table" and stack.name then
-            local ok2, res2 = pcall(bridge.wrapped.importItemFromPeripheral,
+            local ok2, res2 = me_bridge_compat.import_from(bridge.wrapped,
               { name = stack.name, count = stack.count or 64 }, outlet.name)
             if ok2 then
               local n = type(res2) == "number" and res2 or 0
