@@ -5,14 +5,17 @@ local constants = require("shared.constants")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 
 local DEFAULT_ROUTE_CONFIG_PATH = "/xreactor_config/fuel_routes.lua"
-local BUILTIN_SIDES = { "top", "bottom", "left", "right", "front", "back" }
 local RECENT_HIGHLIGHT_MS = 5000
 
 -- Editor baut direkt eine ganze Ventilkette: Reaktor waehlen -> Ventil fuer
--- Ventil antippen (optional mit einem bekannten VALVE-Node als Ziel) ->
+-- Ventil antippen (aus den bekannten, per Funk erreichbaren VALVE-Nodes) ->
 -- FERTIG. Nutzt die flache Routenliste mit geordnetem 'path' pro Reaktor
--- (siehe redstone_router.lua) -- normalize_tree() liest alte verschachtelte
--- Baeume automatisch in dieses Format um.
+-- (siehe redstone_router.lua) -- ein Pfad-Eintrag ist schlicht die
+-- VALVE-Node-ID selbst (kein "side"-Feld mehr, siehe dortiger Kommentar
+-- vom 2026-09-03: ein VALVE-Node = ein Ventil, "side" war fuer den per Funk
+-- adressierten Fall nie mehr als ein bedeutungsloser Pflicht-Schluessel).
+-- normalize_tree() liest alte verschachtelte Baeume (auch mit alten
+-- {side=,integrator=}-Schritten) automatisch in dieses Format um.
 --
 -- u.mode: "tree" | "edit" (Tab-Ebene, wie bisher).
 -- u.edit_view (nur relevant wenn u.mode=="edit"): "list" | "path".
@@ -30,8 +33,8 @@ local function load_routes(path)
   return {}
 end
 
--- Serialisiert die flache Routenliste (siehe redstone_router.lua's neues
--- Format): { { reactor=, label=, path = { {side=,integrator=}, ... } }, ... }
+-- Serialisiert die flache Routenliste (siehe redstone_router.lua's Format):
+-- { { reactor=, label=, path = { "VALVE-1", "VALVE-5" } }, ... }
 local function write_routes_file(routes, path)
   local dir = fs.getDir(path)
   if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
@@ -41,9 +44,8 @@ local function write_routes_file(routes, path)
   f.writeLine("return {")
   for _, r in ipairs(routes) do
     f.writeLine(string.format("  { reactor = %q, label = %q, path = {", r.reactor or "", r.label or r.reactor or ""))
-    for _, step in ipairs(r.path or {}) do
-      f.writeLine(string.format("    { side = %q%s },", step.side or "",
-        step.integrator and (", integrator = " .. string.format("%q", step.integrator)) or ""))
+    for _, id in ipairs(r.path or {}) do
+      f.writeLine(string.format("    %q,", id))
     end
     f.writeLine("  } },")
   end
@@ -139,26 +141,16 @@ end
 
 local function deep_copy_path(path)
   local out = {}
-  for i, step in ipairs(path or {}) do out[i] = { side = step.side, integrator = step.integrator } end
+  for i, id in ipairs(path or {}) do out[i] = id end
   return out
 end
 
-local function step_label(step)
-  return tostring(step.side or "-") .. (step.integrator and (" @" .. tostring(step.integrator)) or "")
-end
-
-local function path_text(path)
-  local parts = {}
-  for _, step in ipairs(path or {}) do parts[#parts + 1] = step_label(step) end
-  if #parts == 0 then return "KEIN VENTIL" end
-  return table.concat(parts, " > ")
-end
-
 -- Bekannte, online erreichbare VALVE-Nodes (per HELLO/Heartbeat-Discovery,
--- siehe redstone_router.lua) -- Grundlage fuer den Integrator-Auswahl-
--- Schritt beim Anfuegen eines Ventils. Ohne comms-Anbindung oder ohne
--- bekannte VALVE-Nodes bleibt die Liste leer, ein Ventil wird dann direkt
--- als lokale Seite angefuegt (kein zusaetzlicher Auswahlschritt noetig).
+-- siehe redstone_router.lua) -- Grundlage fuer den Ventil-Auswahl-Schritt
+-- beim Anfuegen eines Ventils zu einer Kette. Ohne comms-Anbindung oder
+-- ohne bekannte VALVE-Nodes bleibt die Liste leer -- es gibt dann nichts
+-- anzufuegen (kein lokaler/redstone-basierter Fallback mehr, siehe
+-- redstone_router.lua vom 2026-09-03).
 -- Truncated to keep the picker row readable next to the raw id -- see
 -- installer/valve_naming.lua for where this label comes from.
 local VALVE_LABEL_MAX = 18
@@ -169,7 +161,7 @@ local function short_valve_label(id, label)
 end
 
 -- Returns { { id=, label= }, ... }, sorted by id -- id is the stable key
--- stored in fuel_routes.lua (step.integrator); label is only for display.
+-- stored in fuel_routes.lua (a plain path entry); label is only for display.
 local function known_valve_ids(router)
   local out = {}
   if not router or not router.comms then return out end
@@ -182,6 +174,23 @@ local function known_valve_ids(router)
   end
   table.sort(out, function(a, b) return a.id < b.id end)
   return out
+end
+
+-- Menschenlesbares Label fuer eine Ventil-ID in einer Kette (TREE/LIST-
+-- Ansicht) -- der bekannte Klarname, falls der VALVE-Node aktuell online
+-- ist, sonst die rohe ID.
+local function valve_display_label(router, id)
+  for _, valve in ipairs(known_valve_ids(router)) do
+    if valve.id == id then return valve.label end
+  end
+  return tostring(id)
+end
+
+local function path_text(router, path)
+  if not path or #path == 0 then return "KEIN VENTIL" end
+  local parts = {}
+  for _, id in ipairs(path) do parts[#parts + 1] = valve_display_label(router, id) end
+  return table.concat(parts, " > ")
 end
 
 local function clamp_scroll(value, total, visible)
@@ -224,8 +233,7 @@ function M.new(opts)
       picker_scroll = 0, picker_scroll_up = nil, picker_scroll_down = nil,
       -- Pfad-Editor-Zustand (nur waehrend edit_view=="path").
       editing = nil,          -- { reactor=, label=, path = {...} }, Arbeitskopie
-      pending_side = nil,     -- Seite antippen -> Integrator waehlen -> anfuegen
-      step_btns = {}, side_btns = {}, integrator_btns = {},
+      step_btns = {}, integrator_btns = {},
       done_btn = nil, cancel_btn = nil, clear_btn = nil,
       -- "Weg 3"-Teach-in (siehe handle_teach_pulse()); wird beim Verlassen
       -- des Pfad-Editors automatisch zurueckgesetzt, damit ein spaeter
@@ -367,7 +375,7 @@ function M:_render_tree(target, ui, w, h)
     local is_target = active_target and (tostring(route.reactor or "") == tostring(active_target) or tostring(route.label or "") == tostring(active_target))
     local has_bad_valve, bad_valve_id = route_has_bad_valve(tostring(route.label or route.reactor))
     local status = has_bad_valve and "WARNING" or (is_target and (recent and "LIMITED" or "OK") or "muted")
-    local value_text = path_text(route.path)
+    local value_text = path_text(self.redstone_router, route.path)
     if has_bad_valve then value_text = value_text .. " [" .. bad_valve_id .. " OFFLINE]" end
     if is_target then value_text = value_text .. (recent and " [LAST]" or " [ACTIVE]") end
     mux.data_row(target, 4, y, left_w - 4, { label = tostring(route.label or route.reactor), value = mux.fit(value_text, math.max(1, left_w - 4 - #tostring(route.label or route.reactor) - 2)), status = status, icon = "reactor" })
@@ -416,7 +424,7 @@ function M:_render_tree(target, ui, w, h)
       ry = ry + 1
     end
     if #valve_status_summary == 0 then
-      mux.warning_box(target, right_x + 2, body_top + 2, right_w - 4, { "Keine Funk-Ventile (VALVE-Nodes)", "Lokale Redstone-Seiten ohne Integrator" }, "LIMITED")
+      mux.warning_box(target, right_x + 2, body_top + 2, right_w - 4, { "Keine Ventile in aktiven Routen", "EDIT oeffnen und VALVE-Nodes zuweisen" }, "LIMITED")
     end
   end
 end
@@ -460,7 +468,7 @@ function M:_render_list(target, ui, w, h)
   for i = u.list_scroll + 1, math.min(#reactors, u.list_scroll + visible) do
     local rx = reactors[i]
     local route = self:_find_route(rx.id)
-    local value = route and path_text(route.path) or "NICHT ZUGEWIESEN"
+    local value = route and path_text(self.redstone_router, route.path) or "NICHT ZUGEWIESEN"
     mux.data_row(target, 4, y, w - 6, { label = tostring(rx.label or rx.id), value = mux.fit(value, math.max(1, w - 6 - #tostring(rx.label or rx.id) - 2)), status = route and "OK" or "text", icon = "reactor" })
     reactor_btns[#reactor_btns + 1] = { x1 = 4, x2 = w - 3, y = y, id = rx.id, label = rx.label or rx.id }
     y = y + 1
@@ -481,20 +489,24 @@ function M:_render_list(target, ui, w, h)
     u.list_scroll_up, u.list_scroll_down = nil, nil
   end
 
-  local save_lbl = u.dirty and "[ SPEICHERN * ]" or "[ SPEICHERN ]"
-  local reset_lbl = "[ RESET ]"
-  if w < 34 then save_lbl, reset_lbl = u.dirty and "[SAVE*]" or "[SAVE]", "[RST]" end
-  mux.data_row(target, 2, button_y, w - 3, { label = save_lbl, value = reset_lbl, status = u.dirty and "LIMITED" or "OK", icon = "config" })
-  u.save_btn = { x1 = 2, x2 = math.min(w - 1, 2 + #save_lbl + 2), y = button_y }
-  u.reset_btn = { x1 = math.max(2, w - #reset_lbl - 2), x2 = w - 1, y = button_y }
+  local save_lbl = u.dirty and "SPEICHERN *" or "SPEICHERN"
+  local reset_lbl = "RESET"
+  if w < 34 then save_lbl, reset_lbl = u.dirty and "SAVE*" or "SAVE", "RST" end
+  -- Grosse, deutlich als Button erkennbare, gefuellte Flaechen (2 Zeilen
+  -- hoch) statt reiner farbiger Schrift -- nutzt die ohnehin leere
+  -- Pufferzeile ueber dem Footer, keine Layout-Verschiebung noetig.
+  local total_w = w - 3
+  local reset_w = math.min(math.max(#reset_lbl + 2, 8), math.floor(total_w * 0.35))
+  local save_w = math.max(1, total_w - reset_w - 1)
+  u.save_btn = mux.button(target, 2, button_y - 1, save_w, save_lbl, u.dirty and "LIMITED" or "OK", 2)
+  u.reset_btn = mux.button(target, 2 + save_w + 1, button_y - 1, reset_w, reset_lbl, "OFFLINE", 2)
 end
 
 -- Editor fuer GENAU EINEN Reaktor (u.editing): zeigt die bisher
--- angefuegten Ventilschritte (antippen = entfernen), darunter die 6
--- Redstone-Seiten (antippen = anfuegen -- ist mindestens ein VALVE-Node
--- bekannt, fragt ein Zwischenschritt zuerst, ob lokal oder ueber einen
--- bestimmten VALVE-Node geschaltet werden soll). FERTIG committet die
--- Arbeitskopie in u.routes, ABBRECHEN verwirft sie.
+-- angefuegten Ventilschritte (antippen = entfernen), darunter die bekannten,
+-- per Funk erreichbaren VALVE-Nodes (antippen = ans Ende der Kette
+-- anfuegen). FERTIG committet die Arbeitskopie in u.routes, ABBRECHEN
+-- verwirft sie.
 function M:_render_path(target, ui, w, h)
   local u = self._ui
   local editing = u.editing
@@ -502,14 +514,17 @@ function M:_render_path(target, ui, w, h)
 
   mux.banner(target, 2, 3, w - 3, "VENTILKETTE: " .. tostring(editing.label or editing.reactor), "LIMITED", "reactor")
 
-  local teach_lbl = u.teaching and "[ EINLERNEN: AN ]" or "[ EINLERNEN: AUS ]"
-  local teach_hint = u.teaching and "Hebel am Ventil umlegen, um es anzuhaengen" or "Antippen zum Aktivieren"
-  if w < 40 then
-    teach_lbl = u.teaching and "[TEACH ON]" or "[TEACH]"
-    teach_hint = u.teaching and "HEBEL" or "ANTIPPEN"
+  local teach_lbl = u.teaching and "EINLERNEN: AN -- Hebel am Ventil umlegen" or "EINLERNEN: AUS -- antippen zum Aktivieren"
+  if w < 60 then
+    teach_lbl = u.teaching and "EINLERNEN: AN (Hebel umlegen)" or "EINLERNEN: AUS (antippen)"
   end
-  mux.data_row(target, 2, 4, w - 3, { label = teach_lbl, value = teach_hint, status = u.teaching and "OK" or "muted", icon = "network" })
-  u.teach_btn = { x1 = 2, x2 = math.min(w - 1, 2 + #teach_lbl + 1), y = 4 }
+  if w < 40 then
+    teach_lbl = u.teaching and "TEACH: AN" or "TEACH: AUS"
+  end
+  -- Gefuellte Flaeche statt reiner farbiger Schrift -- zeilenhoehen-neutral
+  -- (Zeile 4 hat keine Reserve nach oben/unten, die Banner-/Inhaltszeilen
+  -- wuerden sonst verschoben), aber als Button klar erkennbar.
+  u.teach_btn = mux.button(target, 2, 4, w - 3, teach_lbl, u.teaching and "OK" or "LIMITED", 1)
 
   local button_y = math.max(7, h - 2)
   local content_top = 5
@@ -529,8 +544,8 @@ function M:_render_path(target, ui, w, h)
   local step_btns = {}
   local sy = content_top + 1
   for i = u.path_scroll + 1, math.min(#editing.path, u.path_scroll + visible_steps) do
-    local step = editing.path[i]
-    mux.data_row(target, 4, sy, w - 6, { label = tostring(i) .. ".", value = step_label(step), status = "OK", icon = "output" })
+    local id = editing.path[i]
+    mux.data_row(target, 4, sy, w - 6, { label = tostring(i) .. ".", value = valve_display_label(self.redstone_router, id), status = "OK", icon = "output" })
     step_btns[#step_btns + 1] = { x1 = 4, x2 = w - 3, y = sy, index = i }
     sy = sy + 1
   end
@@ -539,18 +554,9 @@ function M:_render_path(target, ui, w, h)
   end
   u.step_btns = step_btns
 
-  local side_btns, integrator_btns = {}, {}
-  local items = {}
-  if u.pending_side then
-    mux.banner(target, 2, picker_top, w - 3, "SEITE " .. tostring(u.pending_side):upper() .. " -- ZIEL", "LIMITED", "network")
-    items[#items + 1] = { label = "LOKAL", value = "FUEL-NODE", integrator = nil }
-    for _, valve in ipairs(known_valve_ids(self.redstone_router)) do
-      items[#items + 1] = { label = valve.label, value = "VALVE-NODE", integrator = valve.id }
-    end
-  else
-    mux.card(target, 2, picker_top, w - 3, picker_h, { title = "VENTIL ANFUEGEN", status = "LIMITED", icon = "output" })
-    for _, side in ipairs(BUILTIN_SIDES) do items[#items + 1] = { label = tostring(side):upper(), value = "ANTIPPEN", side = side } end
-  end
+  local integrator_btns = {}
+  local items = known_valve_ids(self.redstone_router)
+  mux.card(target, 2, picker_top, w - 3, picker_h, { title = "VENTIL ANFUEGEN (VALVE-NODE WAEHLEN)", status = "LIMITED", icon = "output" })
 
   local visible_picker = math.max(1, picker_h - 1)
   local picker_max_scroll
@@ -559,23 +565,27 @@ function M:_render_path(target, ui, w, h)
   local picker_y = picker_top + 1
   for i = u.picker_scroll + 1, math.min(#items, u.picker_scroll + visible_picker) do
     local item = items[i]
-    mux.data_row(target, 4, picker_y, w - 6, { label = item.label, value = item.value, status = "OK", icon = item.integrator and "network" or "output" })
-    if u.pending_side then
-      integrator_btns[#integrator_btns + 1] = { x1 = 4, x2 = w - 3, y = picker_y, integrator = item.integrator }
-    else
-      side_btns[#side_btns + 1] = { x1 = 4, x2 = w - 3, y = picker_y, side = item.side }
-    end
+    mux.data_row(target, 4, picker_y, w - 6, { label = item.label, value = "ANTIPPEN", status = "OK", icon = "network" })
+    integrator_btns[#integrator_btns + 1] = { x1 = 4, x2 = w - 3, y = picker_y, integrator = item.id }
     picker_y = picker_y + 1
   end
-  u.side_btns = side_btns
+  if #items == 0 and picker_y <= picker_top + picker_h - 1 then
+    mux.text(target, 4, picker_y, mux.fit("(keine VALVE-Nodes per Funk erreichbar)", math.max(1, w - 7)), colorset.get("muted"), colorset.get("background"))
+  end
   u.integrator_btns = integrator_btns
 
-  local done_lbl, clear_lbl, cancel_lbl = "[ FERTIG ]", "[ LEEREN ]", "[ ABBRECHEN ]"
-  if w < 40 then done_lbl, clear_lbl, cancel_lbl = "[OK]", "[CLR]", "[X]" end
-  mux.data_row(target, 2, button_y, w - 3, { label = done_lbl, value = clear_lbl .. " " .. cancel_lbl, status = "OK", icon = "config" })
-  u.done_btn = { x1 = 2, x2 = math.min(w - 1, 2 + #done_lbl + 1), y = button_y }
-  u.cancel_btn = { x1 = math.max(2, w - #cancel_lbl - 1), x2 = w - 1, y = button_y }
-  u.clear_btn = { x1 = math.max(2, u.cancel_btn.x1 - #clear_lbl - 2), x2 = math.max(2, u.cancel_btn.x1 - 2), y = button_y }
+  local done_lbl, clear_lbl, cancel_lbl = "FERTIG", "LEEREN", "ABBRECHEN"
+  if w < 40 then done_lbl, clear_lbl, cancel_lbl = "OK", "CLR", "X" end
+  -- Grosse, deutlich als Buttons erkennbare, gefuellte Flaechen (2 Zeilen
+  -- hoch) statt reiner farbiger Schrift -- nutzt die ohnehin leere
+  -- Pufferzeile ueber dem Footer, keine Layout-Verschiebung noetig.
+  local total_w = w - 3
+  local done_w = math.max(#done_lbl + 2, math.floor(total_w * 0.36))
+  local cancel_w = math.max(#cancel_lbl + 2, math.floor(total_w * 0.30))
+  local clear_w = math.max(1, total_w - done_w - cancel_w - 2)
+  u.done_btn = mux.button(target, 2, button_y - 1, done_w, done_lbl, "OK", 2)
+  u.clear_btn = mux.button(target, 2 + done_w + 1, button_y - 1, clear_w, clear_lbl, "LIMITED", 2)
+  u.cancel_btn = mux.button(target, 2 + done_w + clear_w + 2, button_y - 1, cancel_w, cancel_lbl, "WARNING", 2)
 end
 
 -- Nur der zentrale Render-Pfad (core/ui_router.lua) uebergibt den echten
@@ -616,7 +626,10 @@ end
 
 function M:handle_touch(x, y)
   local u = self._ui
-  local function hit(b) return b and y == b.y and x >= b.x1 and x <= b.x2 end
+  -- b.y2 (set by mux.button() for multi-row buttons) extends the hit test
+  -- across the button's whole height; single-row zones (b.y2 absent) keep
+  -- the original exact-row behaviour.
+  local function hit(b) return b and y >= b.y and y <= (b.y2 or b.y) and x >= b.x1 and x <= b.x2 end
 
   if hit(u.list_scroll_up) then u.list_scroll = math.max(0, u.list_scroll - 1); return true end
   if hit(u.list_scroll_down) then u.list_scroll = u.list_scroll + 1; return true end
@@ -633,7 +646,6 @@ function M:handle_touch(x, y)
     u.mode = "edit"
     u.edit_view = "list"
     u.editing = nil
-    u.pending_side = nil
     u.list_scroll = 0
     return true
   end
@@ -657,7 +669,6 @@ function M:handle_touch(x, y)
     end
     if hit(u.cancel_btn) then
       u.editing = nil
-      u.pending_side = nil
       u.teaching = false
       u.edit_view = "list"
       u.picker_scroll = 0
@@ -674,7 +685,6 @@ function M:handle_touch(x, y)
         u.dirty = true
       end
       u.editing = nil
-      u.pending_side = nil
       u.teaching = false
       u.edit_view = "list"
       u.picker_scroll = 0
@@ -682,7 +692,6 @@ function M:handle_touch(x, y)
     end
     if hit(u.clear_btn) then
       if u.editing then u.editing.path = {} end
-      u.pending_side = nil
       u.path_scroll = 0
       u.picker_scroll = 0
       return true
@@ -693,27 +702,10 @@ function M:handle_touch(x, y)
         return true
       end
     end
-    if u.pending_side then
-      for _, btn in ipairs(u.integrator_btns or {}) do
-        if hit(btn) then
-          if u.editing then
-            u.editing.path[#u.editing.path + 1] = { side = u.pending_side, integrator = btn.integrator }
-          end
-          u.pending_side = nil
-          u.picker_scroll = 0
-          return true
-        end
-      end
-      return false
-    end
-    for _, btn in ipairs(u.side_btns or {}) do
+    for _, btn in ipairs(u.integrator_btns or {}) do
       if hit(btn) then
-        local known = known_valve_ids(self.redstone_router)
-        if #known > 0 then
-          u.pending_side = btn.side
-          u.picker_scroll = 0
-        elseif u.editing then
-          u.editing.path[#u.editing.path + 1] = { side = btn.side }
+        if u.editing then
+          u.editing.path[#u.editing.path + 1] = btn.integrator
         end
         return true
       end
@@ -737,7 +729,6 @@ function M:handle_touch(x, y)
       u.editing = existing
         and { reactor = existing.reactor, label = existing.label, path = deep_copy_path(existing.path) }
         or { reactor = btn.id, label = btn.label, path = {} }
-      u.pending_side = nil
       u.edit_view = "path"
       u.path_scroll = 0
       u.picker_scroll = 0
@@ -820,18 +811,14 @@ end
 -- an jedem Ventil kurz einen Hebel um (siehe nodes/valve/main.lua's
 -- check_teach_input()/ROUTE_TEACH_PULSE); die gemeldete Node wird in genau
 -- dieser Reihenfolge an die Kette angehaengt, waehrend der Teach-Modus aktiv
--- ist. "side" ist fuer eine per Funk adressierte VALVE-Node physisch
--- bedeutungslos (nur ein von normalize_tree()/validate_tree() verlangter
--- Schluessel-Bestandteil) -- ein fester Platzhalter genuegt.
-local TEACH_PLACEHOLDER_SIDE = "back"
-
+-- ist.
 function M:handle_teach_pulse(node_id)
   local u = self._ui
   if not node_id then return false end
   if u.mode ~= "edit" or u.edit_view ~= "path" or not u.editing or not u.teaching then return false end
   local last = u.editing.path[#u.editing.path]
-  if last and last.integrator == node_id then return false end  -- Doppel-Puls/Prellen ignorieren
-  u.editing.path[#u.editing.path + 1] = { side = TEACH_PLACEHOLDER_SIDE, integrator = node_id }
+  if last == node_id then return false end  -- Doppel-Puls/Prellen ignorieren
+  u.editing.path[#u.editing.path + 1] = node_id
   return true
 end
 

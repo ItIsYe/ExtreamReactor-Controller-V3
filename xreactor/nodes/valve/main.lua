@@ -33,6 +33,10 @@ local DEFAULT_CONFIG = {
   reset_log_on_start = true,
   wireless_modem = nil,
   sorter_name = nil,
+  -- Redstone-Fallback-Seite, NUR verwendet wenn kein Sorter gefunden werden
+  -- kann (siehe nodes/valve/controller.lua). nil = kein Fallback konfiguriert
+  -- -> Ventil bleibt ohne Sorter unsteuerbar, wie zuvor.
+  redstone_side = nil,
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval = 5,
@@ -69,6 +73,11 @@ local function add_config_warning(message) table.insert(config_warnings, message
 if config.sorter_name ~= nil and (type(config.sorter_name) ~= "string" or config.sorter_name == "") then
   add_config_warning("sorter_name ungueltig, wird ignoriert (automatische Suche)")
   config.sorter_name = nil
+end
+local VALID_REDSTONE_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+if config.redstone_side ~= nil and (type(config.redstone_side) ~= "string" or not VALID_REDSTONE_SIDES[config.redstone_side]) then
+  add_config_warning("redstone_side ungueltig, wird ignoriert (top/bottom/left/right/front/back erlaubt)")
+  config.redstone_side = nil
 end
 
 local node_id = support_runtime.init_logging({
@@ -190,6 +199,7 @@ local function build_status_payload()
   payload.blocked = state.initialized and state.current_high or nil
   payload.actuator_ready = actuator_ready
   payload.actuator_name = state.sorter_name
+  payload.actuator_mode = state.actuator_mode
   payload.write_error = state.last_write_error
   return payload
 end
@@ -208,6 +218,7 @@ services:add(telemetry_service.new({
       actuator_ready = state.initialized and state.last_write_error == nil,
       write_error = state.last_write_error,
       actuator_name = state.sorter_name,
+      actuator_mode = state.actuator_mode,
       trusted_source = state.trusted_source,
       pairing_persisted = state.pairing_persisted,
       pairing_error = state.pairing_error,
@@ -219,6 +230,7 @@ services:init()
 local initial_state = controller:get_state()
 utils.log(CONFIG.LOG_PREFIX,
   "VALVE-Node gestartet: sorter=" .. tostring(initial_state.sorter_name or "auto")
+    .. " actuator_mode=" .. tostring(initial_state.actuator_mode)
     .. " node_id=" .. tostring(node_id), "INFO")
 
 local quiesce_handshake = _G.__xreactor_update_handshake
