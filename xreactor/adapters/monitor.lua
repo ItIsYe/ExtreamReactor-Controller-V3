@@ -130,6 +130,20 @@ local function is_too_small_for_main(mon, name)
   return too_small
 end
 
+-- Ein Monitor, der direkt an einer Computer-Seite haengt, ist gleichzeitig
+-- oft auch ueber ein daran angeschlossenes Wired Modem im Netzwerk
+-- erreichbar -- dieselbe physische Anzeige unter zwei Namen (z.B. "top"
+-- UND "monitor_48"). peripheral.getNames() listet beide, monitor.find()
+-- kennt darum zwei "Kandidaten" fuer ein einziges Geraet. Ein
+-- monitor_touch-Event traegt aber IMMER den direkten Seitennamen, nie den
+-- Netzwerk-Alias (reales Nutzerlog 2026-09-03: event_monitor="top",
+-- bound_monitor="monitor_48" bei jedem einzelnen Tap -- Touch traf exakt
+-- die Footer-Buttons, wurde aber dauerhaft als "fremder Monitor"
+-- verworfen). Wird an einer Seite direkt ein ausreichend grosser Monitor
+-- gefunden, hat er darum Vorrang vor jedem Netzwerk-Namen, unabhaengig
+-- von der gewaehlten Strategie.
+local DIRECT_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+
 function monitor.find(preferred_name, strategy, scale, log_prefix)
   -- Keep cache lifetime tied to the physical peripheral inventory. This is
   -- deliberately done once per discovery call: a periodic scan reuses the
@@ -161,6 +175,12 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
   end
   if #candidates == 0 then
     return nil
+  end
+  for _, entry in ipairs(candidates) do
+    if DIRECT_SIDES[entry.name] then
+      maybe_set_scale(entry.mon, entry.name, scale, log_prefix)
+      return entry
+    end
   end
   local normalized = tostring(strategy or "largest"):lower()
   if normalized == "first" then
