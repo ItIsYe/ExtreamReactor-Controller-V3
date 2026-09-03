@@ -63,6 +63,15 @@ local DEFAULT_CONFIG = {
   wireless_modem = nil,
   wired_modem = nil,
   storage_bus = "meBridge_0",
+  -- Reserve wird item-basiert aus dem storage_bus (ME Bridge) gezaehlt:
+  -- eine Liste von Fuel-Item-IDs, deren ME-Bestand aufsummiert die
+  -- Reserve ergibt. unit_multiplier erlaubt Bloecke (z.B. 9 Ingots/Block)
+  -- im selben Ingot-Aequivalent wie target/minimum_reserve mitzuzaehlen.
+  reserve_items = {
+    { item = "bigreactors:blutonium_ingot" },
+    { item = "alltheores:uranium_ingot" },
+    { item = "alltheores:uranium_block", unit_multiplier = 9 },
+  },
   target = 2000,
   minimum_reserve = 2000,
   heartbeat_interval = 2,
@@ -211,6 +220,20 @@ end
 -- Name bleibt weiterhin eine strikte Bindung.
 local DEFAULT_STORAGE_BUS = "meBridge_0"
 
+-- Die reale ME Bridge (Advanced Peripherals) hat weder tanks() noch
+-- getFluidAmount() (das waere ein dedizierter Fluid-Tank-Block) --
+-- sie ist eine Item-Schnittstelle (getItem/exportItemToPeripheral/
+-- importItemFromPeripheral, siehe logistics_router.lua's
+-- find_me_bridge_by_methods()). Reale Logs (2026-09-03) zeigten
+-- FUEL-Nodes mit korrekt benanntem storage_bus, die trotzdem nie als
+-- Storage erkannt wurden, weil die Methodenpruefung auf eine Fluid-
+-- Peripherie zielte statt auf die tatsaechliche ME-Bridge-API. Reserve
+-- wird item-basiert ueber config.reserve_items gezaehlt (storage.lua).
+local function is_storage_candidate(method_set)
+  return method_set.tanks or method_set.getFluidAmount
+    or (method_set.getItem and method_set.exportItemToPeripheral and method_set.importItemFromPeripheral)
+end
+
 local function discover()
   local names
   local registry_devices
@@ -231,7 +254,7 @@ local function discover()
       end
       return name == configured
     end,
-    match = function(method_set) return method_set.tanks or method_set.getFluidAmount end
+    match = is_storage_candidate
   })
   for _, entry in ipairs(storage_devices) do table.insert(registry_devices, entry) end
   registry:sync(registry_devices)
@@ -265,7 +288,7 @@ local function build_status_payload()
     comms = comms, registry = registry, health = health,
     non_rt_payload = non_rt_payload, master_alerts = master_alerts,
     master_seen_ts = master_seen_ts, reserve = reserve, storage = fuel_storage.get(),
-    read_fuel = function() return fuel_storage.read_fuel(warn_once, support_runtime) end,
+    read_fuel = function() return fuel_storage.read_fuel(config, warn_once, support_runtime) end,
     enforce_reserve = function(current) return fuel_storage.enforce_reserve(current, reserve, safety, utils) end,
     is_master_connected = is_master_connected, get_router = get_router,
     routing_load_status = routing_load_status, get_rs_router = get_rs_router,

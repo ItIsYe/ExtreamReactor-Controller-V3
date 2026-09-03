@@ -1,9 +1,11 @@
 -- nodes/fuel/storage.lua
 --
--- Buendelt die Fluessig-Reserve-Verfolgung (storage_bus), getrennt von
--- der Item-Logistik (logistics_router.lua/ME Bridge) -- separates
--- Peripheral fuer einen separaten Zweck. Haelt seinen eigenen State
--- (gewrapptes storage-Peripheral); main.lua ruft nur die Funktionen auf.
+-- Buendelt die Reserve-Verfolgung (storage_bus) -- item-basiert ueber
+-- config.reserve_items, wenn storage_bus eine ME Bridge ist (haeufigster
+-- Fall), sonst fluid-basiert (tanks()/getFluidAmount()) fuer einen
+-- dedizierten Tank-Block. Kann dasselbe physische Peripheral wie die
+-- Item-Logistik (logistics_router.lua/ME Bridge) sein, ist aber eine
+-- eigene Config/eigener State -- main.lua ruft nur die Funktionen auf.
 
 local M = {}
 
@@ -29,7 +31,39 @@ function M.get()
   return storage
 end
 
-function M.read_fuel(warn_once, support_runtime)
+-- ME Bridge (Advanced Peripherals) ist eine Item-Schnittstelle, kein
+-- Fluid-Tank -- die Reserve ist die Summe der konfigurierten Fuel-Items
+-- (config.reserve_items) im ME-System, per getItem() abgefragt.
+-- unit_multiplier rechnet z.B. Bloecke in Ingot-Aequivalent um, damit
+-- das Ergebnis in derselben Einheit wie target/minimum_reserve steht.
+local function read_items(config, warn_once, support_runtime)
+  local items = config and config.reserve_items
+  if type(items) ~= "table" or #items == 0 then return nil end
+  local total = 0
+  local any_ok = false
+  for _, entry in ipairs(items) do
+    local item_id = type(entry) == "table" and entry.item or nil
+    if type(item_id) == "string" and item_id ~= "" then
+      local ok, info = support_runtime.safe_wrapped_call(storage, "getItem", { name = item_id })
+      if ok then
+        any_ok = true
+        local amount = type(info) == "table" and tonumber(info.amount) or 0
+        local multiplier = tonumber(entry.unit_multiplier) or 1
+        total = total + (amount or 0) * multiplier
+      else
+        warn_once("storage_read_item:" .. item_id, "Storage getItem failed for " .. item_id .. ": " .. tostring(info))
+      end
+    end
+  end
+  if any_ok then return total end
+  return nil
+end
+
+function M.read_fuel(config, warn_once, support_runtime)
+  if storage and storage.getItem then
+    local total = read_items(config, warn_once, support_runtime)
+    if total ~= nil then return total end
+  end
   if storage and storage.tanks then
     local ok, tank_data = support_runtime.safe_wrapped_call(storage, "tanks")
     if ok and type(tank_data) == "table" then
