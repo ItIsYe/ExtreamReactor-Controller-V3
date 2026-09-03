@@ -10,6 +10,7 @@
 local M = {}
 local ui_completion = require("nodes.fuel.ui_completion")
 local window_buffer = require("core.window_buffer")
+local mux = require("core.mockup_ui")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
@@ -17,6 +18,56 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 local monitor_router = nil
 local current_mon = nil
 local render_surface = window_buffer.new()
+
+-- FUEL is primarily operated from the local touch monitor, so readability
+-- wins over maximum information density. CC:Tweaked only supports 0.5 scale
+-- steps: prefer 1.0 on sufficiently large monitors, but fall back to the old
+-- 0.5 layout when 1.0 would leave too little logical screen space.
+local PREFERRED_UI_SCALE = 1.0
+local FALLBACK_UI_SCALE = 0.5
+local MIN_LARGE_WIDTH = 40
+local MIN_LARGE_HEIGHT = 18
+local scale_state = setmetatable({}, { __mode = "k" })
+
+local function normalized_scale(value)
+  local n = tonumber(value) or PREFERRED_UI_SCALE
+  n = math.floor(n * 2 + 0.5) / 2
+  if n < 0.5 then n = 0.5 end
+  if n > 5 then n = 5 end
+  return n
+end
+
+local function ensure_readable_scale(ctx, mon)
+  if not mon or (ctx and ctx.devices and ctx.devices.monitor_is_term) then return end
+  if type(mon.setTextScale) ~= "function" or type(mon.getSize) ~= "function" then return end
+
+  local requested = normalized_scale(ctx and ctx.config and ctx.config.fuel_ui_scale)
+  local cached = scale_state[mon]
+  if cached and cached.requested == requested then
+    -- Discovery still applies the historical 0.5 scale in nodes/fuel/main.lua.
+    -- Detect that external scale drift instead of trusting our cache forever.
+    local ok_current, current = pcall(mon.getTextScale)
+    if ok_current and tonumber(current) == cached.applied then return end
+  end
+
+  local applied = requested
+  local ok_set = pcall(mon.setTextScale, requested)
+  if not ok_set then
+    scale_state[mon] = { requested = requested, applied = nil }
+    return
+  end
+
+  local ok_size, w, h = pcall(mon.getSize)
+  if ok_size and requested > FALLBACK_UI_SCALE
+      and ((tonumber(w) or 0) < MIN_LARGE_WIDTH
+        or (tonumber(h) or 0) < MIN_LARGE_HEIGHT) then
+    if pcall(mon.setTextScale, FALLBACK_UI_SCALE) then
+      applied = FALLBACK_UI_SCALE
+    end
+  end
+
+  scale_state[mon] = { requested = requested, applied = applied }
+end
 
 local function ensure_completion(ctx)
   if ctx and ctx.fuel_ui then
@@ -78,6 +129,30 @@ function M.build_model(ctx)
   return model
 end
 
+-- All four FUEL pages share the same page-navigation controls. The old
+-- labels were short and their touch zones were exactly the text width.
+-- Longer, bracketed labels make the controls visually obvious and enlarge
+-- the physical touch target without consuming an additional content row.
+local function large_footer(target, center)
+  local ok, w, h = pcall(function() return target.getSize() end)
+  if not ok or not w or not h then return nil end
+  local left = w >= 42 and "[ << ZURUECK ]" or "[ < ZUR ]"
+  local right = w >= 42 and "[ WEITER >> ]" or "[ WEITER ]"
+  return mux.footer_nav(target, h, w, {
+    left = left,
+    center = center,
+    right = right,
+    inset = 2,
+  })
+end
+
+local function page_with_large_footer(render_fn, center)
+  return function(target, model, should_clear)
+    render_fn(target, model, should_clear)
+    return large_footer(target, center)
+  end
+end
+
 function M.render_monitor(ctx, model)
   local devices = ctx.devices
   if not devices.monitor then
@@ -91,6 +166,7 @@ function M.render_monitor(ctx, model)
   end
   ensure_completion(ctx)
   local mon = devices.monitor
+  ensure_readable_scale(ctx, mon)
   current_mon = mon
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
@@ -98,12 +174,15 @@ function M.render_monitor(ctx, model)
       error_title = "FUEL UI ERROR",
       on_render_error = ctx.on_render_error,
       pages = {
-        { name = "Overview", render = fuel_ui.render_overview },
-        { name = "Details", render = fuel_ui.render_details,
+        { name = "Overview", render = page_with_large_footer(fuel_ui.render_overview, "FUEL OVERVIEW") },
+        { name = "Details", render = page_with_large_footer(fuel_ui.render_details, "FUEL DETAILS"),
           handle_touch = function(x, y) return fuel_ui.handle_details_touch and fuel_ui.handle_details_touch(x, y) or false end },
-        { name = "Diagnostics", render = fuel_ui.render_diagnostics,
+        { name = "Diagnostics", render = page_with_large_footer(fuel_ui.render_diagnostics, "FUEL DIAGNOSTICS"),
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        { name = "Router", render = function(target, model, should_clear) return ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
+        { name = "Router", render = function(target, page_model, should_clear)
+            ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear)
+            return large_footer(target, "ROUTER")
+          end,
           handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },

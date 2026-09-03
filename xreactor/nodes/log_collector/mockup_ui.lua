@@ -46,7 +46,6 @@ function M.render(ctx)
   bx = bx + badge(bx, 3, stats.paused and "PAUSED" or status, status) + 1
   bx = bx + badge(bx, 3, "CH " .. tostring(ctx.channel), "INFO") + 1
   if bx < w - 12 then bx = bx + badge(bx, 3, "DISKS " .. tostring(#(stats.disks or {})), #(stats.disks or {}) > 0 and "OK" or "ERR") + 1 end
-  if bx < w - 10 then badge(bx, 3, "MODE " .. tostring(ctx.log_mode()), "INFO") end
 
   local banner = stats.paused and "DISK WRITES PAUSIERT"
     or stats.last_error and "LOG SYSTEM WARNING"
@@ -124,7 +123,6 @@ function M.render(ctx)
   end
 
   ctx.draw_pause_button(2, h - 2)
-  ctx.draw_log_mode_buttons(math.max(2, math.floor(w * 0.42)), h - 2)
   queue(1, h, string.rep(" ", w), color("white", 1), color("gray", 128))
   line(2, h, "LOG COLLECTOR", color("white", 1), color("gray", 128))
   local right = stats.paused and "PAUSED" or status
