@@ -1,18 +1,13 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Regression test fuer den mehrstufigen Ventilketten-Editor auf der
--- FUEL-Router-Seite (siehe nodes/fuel/router_ui.lua). Reaktor waehlen ->
--- Ventil fuer Ventil antippen (aus den bekannten VALVE-Nodes) -> FERTIG.
--- Dieser Test treibt handle_touch() direkt (dieselbe Technik wie
--- tests/ui_router_page_nav_debounce_test.lua: Touch-Zonen werden manuell so
--- gesetzt, wie render() sie gesetzt haette, ohne den vollen Monitor-/mux-
--- Renderpfad zu mocken) und beweist den kompletten Ablauf End-to-End
--- inklusive Speichern + Uebernahme durch den echten redstone_router.
---
--- Feature (2026-09-03): der fruehere zweistufige Picker (erst Seite, dann
--- optional ein VALVE-Node dafuer) ist einem einstufigen Picker gewichen --
--- ein Pfad-Eintrag ist jetzt direkt die VALVE-Node-ID (String), kein
--- {side=,integrator=}-Paar mehr.
+-- Regression test fuer den Ventilketten-Editor auf der FUEL-Router-Seite
+-- (siehe nodes/fuel/router_ui.lua), an das 2026-09-04-Einzelbildschirm-
+-- Schema angepasst: Reaktor einlernen (aus einer live-meldenden RT-Node,
+-- kein manuell getippter Name mehr) -> Inlet setzen -> Ventil fuer Ventil
+-- antippen -> FERTIG. Treibt handle_touch() direkt (Touch-Zonen werden
+-- manuell so gesetzt, wie render() sie gesetzt haette, ohne den vollen
+-- Monitor-/mux-Renderpfad zu mocken) und beweist den kompletten Ablauf
+-- End-to-End inklusive atomarem Speichern.
 
 local files = {}
 
@@ -48,6 +43,7 @@ _G.peripheral = {
   find = function() return nil end,
   isPresent = function() return false end,
   wrap = function() return nil end,
+  getNames = function() return {} end,
 }
 
 local redstone_router = require('nodes.fuel.redstone_router')
@@ -76,33 +72,44 @@ local rs = redstone_router.new({
 })
 rs:refresh()
 
-local reactors = { { id = 'R1', label = 'Reactor1' }, { id = 'R2', label = 'Reactor2' } }
+local config = { logistics = { reactors = {} } }
+local live_reactors = { { id = 'R1', label = 'Reactor1' }, { id = 'R2', label = 'Reactor2' } }
+local refresh_calls = 0
+local logistics_router_stub = { refresh_peripherals = function() refresh_calls = refresh_calls + 1 end }
+
 local ui = router_ui.new({
+  config = config,
   redstone_router = rs,
-  config_path = '/xreactor/config/fuel_routes.lua',
-  get_reactors = function() return reactors end,
+  logistics_router = logistics_router_stub,
+  config_path = '/xreactor_config/fuel_routes.lua',
+  get_reactors = function() return live_reactors end,
   log = function() end,
 })
 
-assert_eq(#ui._ui.routes, 0, 'must start with no routes configured')
-assert_eq(ui._ui.mode, 'tree', 'must start on the tree tab')
+assert_eq(#ui._ui.reactors, 0, 'must start with no reactors configured')
+assert_eq(ui._ui.mode, 'list', 'must start on the single main screen')
 
--- ── Tab wechseln: TREE -> EDIT ───────────────────────────────────────────────
-ui._ui.edit_btn = { x1 = 10, x2 = 15, y = 3 }
-assert_true(ui:handle_touch(12, 3), 'tapping the EDIT tab must be consumed')
+-- ── EINLERNEN antippen -> Picker mit den live meldenden Reaktoren ──────────
+ui._ui.learn_btn = { x1 = 2, x2 = 20, y = 4 }
+assert_true(ui:handle_touch(5, 4), 'tapping EINLERNEN must be consumed')
+assert_eq(ui._ui.mode, 'learn')
+
+-- ── Reactor2 antippen -> Bearbeitung startet mit dem echten gelernten Namen ─
+ui._ui.learn_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R2', label = 'Reactor2' } }
+assert_true(ui:handle_touch(10, 8), 'tapping a learnable reactor row must be consumed')
 assert_eq(ui._ui.mode, 'edit')
-assert_eq(ui._ui.edit_view, 'list')
-
--- ── Reactor2 antippen -> Pfad-Editor fuer R2 oeffnet mit leerer Kette ───────
-ui._ui.reactor_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R2', label = 'Reactor2' } }
-assert_true(ui:handle_touch(10, 8), 'tapping a reactor row must be consumed')
-assert_eq(ui._ui.edit_view, 'path')
 assert_true(ui._ui.editing ~= nil)
-assert_eq(ui._ui.editing.reactor, 'R2')
+assert_eq(ui._ui.editing.reactor_id, 'R2')
+assert_eq(ui._ui.editing.label, 'Reactor2')
 assert_eq(#ui._ui.editing.path, 0)
 
--- ── Ersten VALVE-Node antippen -- ein Pfad-Eintrag ist jetzt direkt die ────
---    VALVE-Node-ID, kein Zwischenschritt mehr noetig. ──────────────────────
+-- ── PFAD-Zeile antippen -> Ventilketten-Editor fuer R2 ─────────────────────
+ui._ui.path_row = { x1 = 4, x2 = 40, y = 5 }
+assert_true(ui:handle_touch(10, 5))
+assert_eq(ui._ui.mode, 'path')
+
+-- ── Ersten VALVE-Node antippen -- ein Pfad-Eintrag ist direkt die ─────────
+--    VALVE-Node-ID, kein Zwischenschritt mehr noetig. ─────────────────────
 ui._ui.integrator_btns = { { x1 = 4, x2 = 40, y = 11, integrator = 'VALVE-2' } }
 assert_true(ui:handle_touch(10, 11))
 assert_eq(#ui._ui.editing.path, 1)
@@ -123,60 +130,73 @@ assert_true(ui:handle_touch(10, 7))
 assert_eq(#ui._ui.editing.path, 1, 'removing step 1 must leave only the former second step')
 assert_eq(ui._ui.editing.path[1], 'VALVE-1')
 
--- ── FERTIG: committet die Arbeitskopie in u.routes ──────────────────────────
-ui._ui.done_btn = { x1 = 2, x2 = 12, y = 20 }
+-- ── Pfad-FERTIG: zurueck zum Formular, noch nicht in u.reactors uebernommen ─
+ui._ui.path_done_btn = { x1 = 2, x2 = 12, y = 20 }
 assert_true(ui:handle_touch(5, 20))
-assert_eq(ui._ui.edit_view, 'list')
-assert_eq(#ui._ui.routes, 1)
-assert_eq(ui._ui.routes[1].reactor, 'R2')
-assert_eq(#ui._ui.routes[1].path, 1)
+assert_eq(ui._ui.mode, 'edit')
+assert_eq(#ui._ui.reactors, 0, 'the path editor must not commit by itself')
+
+-- ── Formular-FERTIG: committet die Arbeitskopie in u.reactors ──────────────
+ui._ui.edit_done_btn = { x1 = 2, x2 = 12, y = 22 }
+assert_true(ui:handle_touch(5, 22))
+assert_eq(ui._ui.mode, 'list')
+assert_eq(#ui._ui.reactors, 1)
+assert_eq(ui._ui.reactors[1].reactor_id, 'R2')
+assert_eq(#ui._ui.reactors[1].path, 1)
 assert_true(ui._ui.dirty)
 
 -- ── Reactor1 bekommt bewusst KEINE Ventilkette (direkter Export ohne ───────
 --    Ventil-Gating ist weiterhin ein gueltiger Anwendungsfall). ────────────
-ui._ui.reactor_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R1', label = 'Reactor1' } }
+ui._ui.learn_btn = { x1 = 2, x2 = 20, y = 4 }
+ui:handle_touch(5, 4)
+ui._ui.learn_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R1', label = 'Reactor1' } }
 assert_true(ui:handle_touch(10, 8))
-assert_eq(ui._ui.editing.reactor, 'R1')
-ui._ui.done_btn = { x1 = 2, x2 = 12, y = 20 }
-assert_true(ui:handle_touch(5, 20))
-assert_eq(#ui._ui.routes, 2)
+assert_eq(ui._ui.editing.reactor_id, 'R1')
+ui._ui.edit_done_btn = { x1 = 2, x2 = 12, y = 22 }
+assert_true(ui:handle_touch(5, 22))
+assert_eq(#ui._ui.reactors, 2)
 
--- ── ABBRECHEN darf eine bestehende Route NICHT veraendern ───────────────────
-ui._ui.reactor_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R2', label = 'Reactor2' } }
+-- ── ABBRECHEN darf einen bestehenden Reaktor NICHT veraendern ──────────────
+ui._ui.reactor_btns = { { x1 = 4, x2 = 40, y = 8, reactor_id = 'R2' } }
 assert_true(ui:handle_touch(10, 8))
+ui._ui.path_row = { x1 = 4, x2 = 40, y = 5 }
+assert_true(ui:handle_touch(10, 5))
 ui._ui.integrator_btns = { { x1 = 4, x2 = 40, y = 11, integrator = 'VALVE-2' } }
 assert_true(ui:handle_touch(10, 11)) -- editing.path now has 2 steps
 assert_eq(#ui._ui.editing.path, 2)
-ui._ui.cancel_btn = { x1 = 30, x2 = 40, y = 20 }
-assert_true(ui:handle_touch(35, 20))
-assert_eq(ui._ui.edit_view, 'list')
+ui._ui.path_done_btn = { x1 = 2, x2 = 12, y = 20 }
+ui:handle_touch(5, 20)
+ui._ui.edit_cancel_btn = { x1 = 30, x2 = 40, y = 22 }
+assert_true(ui:handle_touch(35, 22))
+assert_eq(ui._ui.mode, 'list')
 assert_eq(ui._ui.editing, nil)
-assert_eq(#ui._ui.routes[1].path, 1, 'ABBRECHEN must discard the working copy, the committed route stays unchanged')
+assert_eq(#ui._ui.reactors[1].path, 1, 'ABBRECHEN must discard the working copy, the committed reactor stays unchanged')
 
--- ── SPEICHERN: validiert, schreibt atomar, aktualisiert den echten Router ──
-ui._ui.save_btn = { x1 = 2, x2 = 20, y = 22 }
-assert_true(ui:handle_touch(5, 22))
+-- ── SPEICHERN: validiert, schreibt atomar, aktualisiert config + stoesst ───
+--    logistics_router:refresh_peripherals() an. ───────────────────────────
+ui._ui.save_btn = { x1 = 2, x2 = 20, y = 24 }
+assert_true(ui:handle_touch(5, 24))
 assert_eq(ui._ui.save.state, 'SAVED', 'save must succeed: ' .. tostring(ui._ui.save.error))
 assert_true(not ui._ui.dirty)
+assert_eq(refresh_calls, 1, 'a successful save must refresh the logistics router once')
+assert_eq(#config.logistics.reactors, 2, 'the live config must be updated with the saved snapshot')
 
--- Der ECHTE redstone_router kennt jetzt beide Routen.
-local path_to_r2 = rs:get_path_to('R2')
-assert_eq(#path_to_r2, 1)
-assert_eq(path_to_r2[1], 'VALVE-1')
-local rtable = rs:get_routing_table()
-assert_eq(#rtable, 2, 'both reactors must be present in the live routing table')
-
--- Die gespeicherte Datei ist mit derselben Validierung ladbar, die der
--- Router selbst verwendet.
-local persisted = dofile('/xreactor/config/fuel_routes.lua')
+-- Die gespeicherte Datei ist mit dofile ladbar und traegt beide Reaktoren
+-- mit ihren gelernten Namen und dem konfigurierten Pfad.
+local persisted = dofile('/xreactor_config/fuel_routes.lua')
 assert_eq(#persisted, 2)
-local validation = redstone_router.validate_tree(persisted)
-assert_true(validation.ok, 'the persisted file must itself validate cleanly')
+local by_id = {}
+for _, r in ipairs(persisted) do by_id[r.reactor_id] = r end
+assert_true(by_id.R1 ~= nil and by_id.R2 ~= nil)
+assert_eq(#by_id.R2.path, 1)
+assert_eq(by_id.R2.path[1], 'VALVE-1')
+assert_eq(#by_id.R1.path, 0)
 
--- ── RESET leert alle Routen (muss anschliessend erneut speicherbar sein) ───
-ui._ui.reset_btn = { x1 = 41, x2 = 50, y = 22 }
-assert_true(ui:handle_touch(45, 22))
-assert_eq(#ui._ui.routes, 0)
-assert_true(ui._ui.dirty)
+-- ── RESET verwirft nicht gespeicherte Aenderungen und laedt aus der ────────
+--    zuletzt gespeicherten config.logistics.reactors zurueck. ─────────────
+ui._ui.reset_btn = { x1 = 41, x2 = 50, y = 24 }
+assert_true(ui:handle_touch(45, 24))
+assert_eq(#ui._ui.reactors, 2, 'RESET must reload the last-saved reactor list, not clear it')
+assert_true(not ui._ui.dirty)
 
 print("fuel_router_ui_multi_valve_chain_builder_test.lua: ok")
