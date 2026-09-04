@@ -45,31 +45,43 @@ local CONFIG = {
     discovery_interval = 60,
     me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
     --
-    -- reactors: one entry per reactor.
+    -- reactors: one entry per reactor. reactor_id and label are learned
+    -- from the owning RT node's own broadcasts (router_ui.lua's reactor-
+    -- teach flow), never typed by hand -- the FUEL router page lists every
+    -- currently-broadcasting RT reactor by its real name; tapping one
+    -- takes over its reactor_id/label here.
     --   reactor_id    = ID of the reactor as reported by its RT node's status
     --                   (fuel level comes via network relay from Master, see
-    --                   master/fuel_relay.lua, not a local peripheral read.
-    --                   Check the RT node's own log/dashboard for the exact
-    --                   reactor id string it reports.)
+    --                   master/fuel_relay.lua, not a local peripheral read.)
+    --   label         = the reactor's real display name, as reported by RT.
     --   inlet         = where to deliver fuel (transporter or chest — must be dedicated
     --                   to THIS reactor; no shared pipes for targeted delivery)
-    --   item          = fuel item name
+    --   path          = ordered list of VALVE-Node ids to open for this
+    --                   reactor's delivery (see redstone_tree note below —
+    --                   this is the only place a route is configured; FUEL
+    --                   derives the topology redstone_router.lua consumes
+    --                   from this field automatically).
     --   request_below = fuel ratio below which reactor requests resupply (0.0–1.0)
-    --   fill_amount   = how many items to export per resupply event
+    --   fill_amount   = how many ingot-equivalent items to export per resupply event
     --   min_in_me     = minimum ME stock to maintain (never export below this)
     --
+    -- No `item` field: FUEL decides Uranium vs Blutonium, and Ingot vs
+    -- Block, automatically on every delivery, based on which currently has
+    -- more ME stock (see logistics_router.lua's build_fuel_families()/
+    -- pick_fuel_family()/pick_fuel_form(), fed by config.reserve_items).
+    --
     -- Example (two reactors, RT-reported fuel level, ME-connected delivery):
-    -- { name          = "Reaktor A",
-    --   reactor_id    = "node-52-reactor-0",
+    -- { reactor_id    = "node-52-reactor-0",
+    --   label         = "Reaktor A",
     --   inlet         = "mekanism:ultimate_logistical_transporter_0",
-    --   item          = "bigreactors:yellorium_ingot",
+    --   path          = { "VALVE-1" },
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
-    -- { name          = "Reaktor B",
-    --   reactor_id    = "node-52-reactor-1",
+    -- { reactor_id    = "node-52-reactor-1",
+    --   label         = "Reaktor B",
     --   inlet         = "mekanism:ultimate_logistical_transporter_1",
-    --   item          = "bigreactors:yellorium_ingot",
+    --   path          = { "VALVE-2" },
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
@@ -79,35 +91,23 @@ local CONFIG = {
     -- { name = "Reaktor A Waste", outlet = "mekanism:ultimate_logistical_transporter_2" },
     waste              = {},
     --
-    -- redstone_tree: one route per reactor, each with an ORDERED list of
-    -- VALVE-Node IDs ("path") that must be blocked/opened together for that
-    -- reactor's export. Pipe must be configured: "High Redstone =
-    -- Interrupt" in Mekanism. CC blocks ALL known valves, then opens ONLY
-    -- the target reactor's own path.
-    --
-    -- Flat list: repeat the SAME id in more than one reactor's path to
-    -- express a shared valve -- no nesting needed. The in-game Router page
-    -- (4/4, EDIT tab) builds exactly this format: pick a reactor, then tap
-    -- valves one at a time to build its chain. Old tree configs (with
-    -- {side=,integrator=} steps, or nested side/children trees) are still
-    -- understood automatically (see nodes/fuel/redstone_router.lua's
-    -- normalize_tree()) -- any 'side' they carried is ignored.
+    -- redstone_tree: NOT hand-configured. logistics_router.lua's
+    -- refresh_peripherals() rebuilds it automatically, every refresh, from
+    -- each entry in `reactors` above (reactor_id + label + path) -- this
+    -- key only exists so redstone_router.lua (shared with
+    -- nodes/reprocessor/feed_router.lua, which manages its own, unrelated
+    -- redstone_tree) has something to consume; whatever is written here
+    -- directly is overwritten on the next refresh.
     --
     -- path[i]: the node_id of a VALVE-Node (a small standalone CC:Tweaked
     --   computer sitting at the valve, role VALVE, see nodes/valve/main.lua)
     --   -- it has no Wired Modem to FUEL, only Wireless, addressed by its
-    --   node_id (auto-discovered once online, see redstone_router.lua
-    --   refresh()). Use the VALVE node's own boot log for its assigned
-    --   node_id, e.g. "VALVE-1".
+    --   node_id (auto-discovered once online). Pipe must be configured:
+    --   "High Redstone = Interrupt" in Mekanism. CC blocks ALL known
+    --   valves, then opens ONLY the target reactor's own path. Repeating
+    --   the same VALVE id in more than one reactor's path expresses a
+    --   shared trunk valve -- no nesting needed.
     -- valve_open_ms: how long to keep valve open after export (default 2000ms)
-    --
-    -- { reactor = "RT-1", label = "Reaktor A", path = { "VALVE-1" } },
-    -- { reactor = "RT-2", label = "Reaktor B", path = { "VALVE-2" } },
-    -- { reactor = "RT-3", label = "Reaktor C", path = { "VALVE-1", "VALVE-3" } },
-    --   -- ^ two valves in series: a shared trunk valve (VALVE-1) plus
-    --   -- Reaktor C's own branch valve (VALVE-3). Repeating "VALVE-1" as
-    --   -- the first step of another reactor's path means that reactor
-    --   -- shares the same trunk valve.
     redstone_tree      = {},
     valve_open_ms      = 2000,
   },

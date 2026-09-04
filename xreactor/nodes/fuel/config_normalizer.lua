@@ -94,8 +94,8 @@ function M.normalize(config_values, defaults, add_warning, utils)
         add_warning(string.format("logistics.reactors[%d] missing inlet peripheral", i))
         unsafe_reactor_config = true
       end
-      if not nonempty_string(r.item) then
-        add_warning(string.format("logistics.reactors[%d] missing item name", i))
+      if r.path ~= nil and type(r.path) ~= "table" then
+        add_warning(string.format("logistics.reactors[%d].path invalid; expected a list of VALVE-Node ids", i))
         unsafe_reactor_config = true
       end
       if r.request_below ~= nil then

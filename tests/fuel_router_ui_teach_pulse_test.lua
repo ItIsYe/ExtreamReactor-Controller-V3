@@ -8,6 +8,10 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- umgelegten Hebel, siehe nodes/valve/main.lua) die meldende Node in
 -- GENAU DIESER Reihenfolge an die gerade bearbeitete Kette an. Treibt
 -- handle_touch() wie tests/fuel_router_ui_multi_valve_chain_builder_test.lua.
+--
+-- 2026-09-04: an das neue Einzelbildschirm-Schema angepasst (u.mode
+-- "list"/"edit"/"path" statt der alten edit_view-Unterscheidung; Reaktoren
+-- tragen reactor_id statt id, path bleibt eine flache Liste von VALVE-Ids).
 
 _G.fs = {
   exists = function() return false end,
@@ -21,6 +25,7 @@ _G.peripheral = {
   find = function() return nil end,
   isPresent = function() return false end,
   wrap = function() return nil end,
+  getNames = function() return {} end,
 }
 
 local redstone_router = require('nodes.fuel.redstone_router')
@@ -43,22 +48,31 @@ local rs = redstone_router.new({
 })
 rs:refresh()
 
+local config = {
+  logistics = {
+    reactors = { { reactor_id = 'R1', label = 'Reactor1', inlet = nil, path = {}, request_below = 0.25, fill_amount = 64, min_in_me = 32 } },
+  },
+}
+
 local ui = router_ui.new({
+  config = config,
   redstone_router = rs,
-  config_path = '/xreactor/config/fuel_routes.lua',
-  get_reactors = function() return { { id = 'R1', label = 'Reactor1' } } end,
+  config_path = '/xreactor_config/fuel_routes.lua',
+  get_reactors = function() return {} end,
   log = function() end,
 })
 
--- 1. Ausserhalb des Pfad-Editors (TREE-Tab): ein Puls wird ignoriert.
+-- 1. Ausserhalb des Pfad-Editors ("list"-Bildschirm): ein Puls wird ignoriert.
 assert_true(not ui:handle_teach_pulse('VALVE-1'), 'a teach pulse must be ignored outside the path editor')
 
--- 2. Im Pfad-Editor, aber Teach-Modus NICHT aktiv: weiterhin ignoriert.
-ui._ui.edit_btn = { x1 = 10, x2 = 15, y = 3 }
-ui:handle_touch(12, 3)
-ui._ui.reactor_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R1', label = 'Reactor1' } }
+-- 2. Reaktor antippen -> "edit", dann PFAD-Zeile antippen -> "path". Teach-
+--    Modus ist zu Beginn NICHT aktiv: weiterhin ignoriert.
+ui._ui.reactor_btns = { { x1 = 4, x2 = 40, y = 8, reactor_id = 'R1' } }
 ui:handle_touch(10, 8)
-assert_eq(ui._ui.edit_view, 'path')
+assert_eq(ui._ui.mode, 'edit')
+ui._ui.path_row = { x1 = 4, x2 = 40, y = 5 }
+ui:handle_touch(10, 5)
+assert_eq(ui._ui.mode, 'path')
 assert_true(not ui._ui.teaching, 'teach mode must start OFF')
 assert_true(not ui:handle_teach_pulse('VALVE-1'), 'a teach pulse must be ignored while teach mode is off')
 assert_eq(#ui._ui.editing.path, 0)
@@ -100,9 +114,9 @@ assert_eq(#ui._ui.editing.path, 4)
 ui._ui.teach_btn = { x1 = 2, x2 = 20, y = 4 }
 ui:handle_touch(5, 4) -- wieder an
 assert_true(ui._ui.teaching)
-ui._ui.cancel_btn = { x1 = 30, x2 = 40, y = 20 }
+ui._ui.path_cancel_btn = { x1 = 30, x2 = 40, y = 20 }
 ui:handle_touch(35, 20)
-assert_eq(ui._ui.edit_view, 'list')
+assert_eq(ui._ui.mode, 'edit')
 assert_true(not ui._ui.teaching, 'leaving the path editor (cancel) must reset teach mode')
 
 print("fuel_router_ui_teach_pulse_test.lua: ok")

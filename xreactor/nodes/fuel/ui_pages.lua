@@ -77,6 +77,7 @@ function M.new(opts)
       }
     end
 
+    local content_bottom
     if w >= 58 and h >= 18 then
       local left_w = math.floor((w - 5) / 2)
       local right_x = 3 + left_w
@@ -98,14 +99,63 @@ function M.new(opts)
         mux.data_row(mon, right_x + 2, y, right_w - 4, { label = tostring(r.text or ""), value = "", status = r.status or "text", icon = "network" })
         y = y + 1
       end
+      content_bottom = math.max(10 + card_h - 1, y - 1)
     else
-      if h >= 11 then section_arrow(mon, 2, 10, w - 3, "SYSTEM DIAGNOSTICS", "LIMITED", "network") end
       local y = 12
-      for i = 1, #rows do
-        if y >= h - 1 then break end
-        local r = rows[i]
-        mux.data_row(mon, 2, y, w - 3, { label = tostring(r.text or ""), value = "", status = r.status or "text", icon = "network" })
-        y = y + 1
+      if h >= 11 then
+        section_arrow(mon, 2, 10, w - 3, "SYSTEM DIAGNOSTICS", "LIMITED", "network")
+        for i = 1, #rows do
+          if y >= h - 1 then break end
+          local r = rows[i]
+          mux.data_row(mon, 2, y, w - 3, { label = tostring(r.text or ""), value = "", status = r.status or "text", icon = "network" })
+          y = y + 1
+        end
+        content_bottom = y - 1
+      else
+        content_bottom = 10
+      end
+    end
+
+    -- Fuel-Bestand je Familie (Uran/Blutonium) + zuletzt gelieferte Sorte
+    -- pro Reaktor -- Uranium vs. Blutonium und Ingot vs. Block werden
+    -- automatisch entschieden (siehe logistics_router.lua), diese Sektion
+    -- macht sichtbar, was FUEL zuletzt gewaehlt hat und warum (groesserer
+    -- Bestand gewinnt). Nur gerendert, wenn genug Platz uebrig ist -- die
+    -- Kernzeilen oben haben Vorrang.
+    local logistics = (model.payload or {}).logistics or {}
+    local families = logistics.fuel_families
+    local reactors = logistics.reactors or {}
+    local fuel_section_top = content_bottom and (content_bottom + 2) or nil
+    if fuel_section_top and fuel_section_top < h - 2 then
+      local fy = fuel_section_top
+      section_arrow(mon, 2, fy, w - 3, "FUEL-BESTAND", "LIMITED", "fuel")
+      fy = fy + 2
+      if families and #families > 0 then
+        for i, fam in ipairs(families) do
+          if fy >= h - 1 then break end
+          local preferred = i == 1 and fam.total > 0
+          mux.data_row(mon, 4, fy, w - 6, {
+            label = string.format("%s%s", tostring(fam.element or "?"), preferred and " [BEVORZUGT]" or ""),
+            value = string.format("ING %d / BLK %d / SUM %d", fam.ingot_amt or 0, fam.block_amt or 0, fam.total or 0),
+            status = preferred and "OK" or "text", icon = "fuel",
+          })
+          fy = fy + 1
+        end
+      elseif fy < h - 1 then
+        mux.data_row(mon, 4, fy, w - 6, { label = "FUEL-BESTAND", value = "KEINE ME BRIDGE", status = "WARNING", icon = "fuel" })
+        fy = fy + 1
+      end
+      for _, reactor in ipairs(reactors) do
+        if fy >= h - 1 then break end
+        local value = reactor.last_item
+          and (tostring(reactor.last_item) .. " (" .. tostring(reactor.last_element or "?") .. ")")
+          or "NOCH KEINE LIEFERUNG"
+        mux.data_row(mon, 4, fy, w - 6, {
+          label = tostring(reactor.label or reactor.reactor_id or "?"),
+          value = mux.fit(value, math.max(1, w - 6 - #tostring(reactor.label or reactor.reactor_id or "?") - 2)),
+          status = reactor.last_item and "text" or "LIMITED", icon = "reactor",
+        })
+        fy = fy + 1
       end
     end
 

@@ -68,11 +68,15 @@ local DEFAULT_CONFIG = {
   -- eine Liste von Fuel-Item-IDs, deren ME-Bestand aufsummiert die
   -- Reserve ergibt. unit_multiplier erlaubt Bloecke (z.B. 9 Ingots/Block)
   -- im selben Ingot-Aequivalent wie target/minimum_reserve mitzuzaehlen.
+  -- `element` gruppiert Ingot+Block derselben Fuel-Sorte -- dieselbe Liste
+  -- ist auch die austauschbare Fuel-Familien-Tabelle, aus der
+  -- logistics_router.lua bei jeder Lieferung automatisch die Sorte mit dem
+  -- groesseren ME-Bestand waehlt (siehe build_fuel_families() dort).
   reserve_items = {
-    { item = "bigreactors:blutonium_ingot" },
-    { item = "bigreactors:blutonium_block", unit_multiplier = 9 },
-    { item = "alltheores:uranium_ingot" },
-    { item = "alltheores:uranium_block", unit_multiplier = 9 },
+    { item = "bigreactors:blutonium_ingot", element = "blutonium" },
+    { item = "bigreactors:blutonium_block", element = "blutonium", unit_multiplier = 9 },
+    { item = "alltheores:uranium_ingot", element = "uranium" },
+    { item = "alltheores:uranium_block", element = "uranium", unit_multiplier = 9 },
   },
   target = 2000,
   minimum_reserve = 2000,
@@ -110,14 +114,17 @@ CONFIG.CONFIG_PATH = USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- /xreactor_config/fuel_routes.lua (vom Router-Editor atomar geschrieben)
--- wird VOR der ersten Router-Erzeugung geladen und mit derselben
--- validate_tree()-Funktion geprueft wie der Router selbst -- nur bei
--- Erfolg wird das Ergebnis nach config.logistics.redstone_tree
--- uebernommen. Bei fehlender/ungueltiger Datei bleibt redstone_tree
--- unveraendert und routing_load_status haelt den Fehler fest.
+-- /xreactor_config/fuel_routes.lua (vom Router atomar geschrieben, siehe
+-- router_ui.lua) wird VOR config_normalizer.normalize() geladen und nach
+-- config.logistics.reactors uebernommen -- normalize() validiert danach
+-- jeden Reaktor-Eintrag (reactor_id/inlet/path/Schwellwerte) im selben
+-- Durchlauf wie den Rest der Config. redstone_tree wird nie aus dieser
+-- Datei uebernommen: logistics_router.lua baut es bei jedem refresh()
+-- automatisch aus reactors[*].path (siehe dessen
+-- build_redstone_tree_from_reactors()). Bei fehlender/nicht ladbarer Datei
+-- bleibt logistics.reactors leer und routing_load_status haelt den Fehler
+-- fest.
 local routing_load_status = { ok = true, source = "config" }
 do
   local routes_path = "/xreactor_config/fuel_routes.lua"
@@ -125,21 +132,16 @@ do
     local ok_load, content = pcall(dofile, routes_path)
     if not ok_load or type(content) ~= "table" then
       routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
-      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Reaktor-Konfiguration bleibt leer: " .. tostring(content))
     else
-      local validation = redstone_router_lib.validate_tree(content)
-      if not validation.ok then
-        local fe = validation.errors[1]
-        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
-        add_config_warning("fuel_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
-      else
-        config.logistics = config.logistics or {}
-        config.logistics.redstone_tree = content
-        routing_load_status = { ok = true, source = routes_path }
-      end
+      config.logistics = config.logistics or {}
+      config.logistics.reactors = content
+      routing_load_status = { ok = true, source = routes_path }
     end
   end
 end
+
+config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
@@ -198,7 +200,9 @@ end
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
+      config = config,
       redstone_router = get_rs_router(),
+      logistics_router = get_router(),
       config_path = "/xreactor_config/fuel_routes.lua",
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       routing_load_status = routing_load_status,
