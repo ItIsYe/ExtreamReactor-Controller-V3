@@ -70,6 +70,7 @@ local DEFAULT_CONFIG = {
   -- im selben Ingot-Aequivalent wie target/minimum_reserve mitzuzaehlen.
   reserve_items = {
     { item = "bigreactors:blutonium_ingot" },
+    { item = "bigreactors:blutonium_block", unit_multiplier = 9 },
     { item = "alltheores:uranium_ingot" },
     { item = "alltheores:uranium_block", unit_multiplier = 9 },
   },
