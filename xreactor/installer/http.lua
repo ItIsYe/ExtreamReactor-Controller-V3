@@ -17,7 +17,11 @@ local function read_response(response)
   if not response then return nil, "empty response" end
   if type(response.getResponseCode) == "function" then
     local ok_code, code = pcall(response.getResponseCode)
-    if ok_code and type(code) == "number" and code ~= 200 then
+    -- Muss denselben Erfolgsbereich wie auto_update.lua akzeptieren
+    -- (200-299), nicht nur exakt 200 -- sonst behandeln beide Module
+    -- denselben Server anders und ein 2xx-Code ausserhalb von genau 200
+    -- (z.B. 204/206) liesse hier den Download unnoetig fehlschlagen.
+    if ok_code and type(code) == "number" and (code < 200 or code >= 300) then
       pcall(response.close)
       return nil, "HTTP " .. tostring(code)
     end

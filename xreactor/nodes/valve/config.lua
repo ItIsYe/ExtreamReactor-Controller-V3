@@ -6,10 +6,14 @@
 -- nodes/valve/main.lua, Kommando SET_VALVE). redstone_router.lua auf der
 -- FUEL-Seite adressiert diesen Node ueber seine node_id.
 --
--- Steuert ausschliesslich einen Mekanism Logistical Sorter (setAutoMode()),
--- kein Redstone-Aktor/"side"-Feld. sorter_name wird bei nil automatisch per
--- Methodensignatur erkannt, wie wireless_modem -- nur bei mehreren Sortern
--- am selben Computer explizit setzen.
+-- Steuert bevorzugt einen Mekanism Logistical Sorter (setAutoMode()).
+-- sorter_name wird bei nil automatisch per Methodensignatur erkannt, wie
+-- wireless_modem -- nur bei mehreren Sortern am selben Computer explizit
+-- setzen. Wird KEIN Sorter gefunden, ist redstone_side (top/bottom/left/
+-- right/front/back) ein optionaler Redstone-Fallback-Aktor -- sobald
+-- irgendein Sorter ansteuerbar ist, haelt der Controller ohnehin JEDE
+-- Redstone-Seite aktiv auf false (siehe nodes/valve/controller.lua), damit
+-- ein Redstone-Signal die per API gesetzte Ejection nie uebersteuern kann.
 --
 -- Fest eingebauter 1x1-Statusmonitor (gruen=offen, rot=blockiert), wird
 -- automatisch erkannt -- kein Config-Feld noetig, anders als das geteilte
@@ -21,6 +25,7 @@ return {
   reset_log_on_start = true,
   wireless_modem  = nil,   -- nil = automatisch erkennen
   sorter_name     = nil,   -- nil = automatisch erkennen
+  redstone_side   = nil,   -- nil = kein Redstone-Fallback (nur bei fehlendem Sorter relevant)
   -- Fail-Safe-Grundzustand beim Boot/bei Verbindungsverlust: Ventil
   -- geschlossen (high=true -> Sorter-Auto-Modus AUS, siehe main.lua
   -- write_actuator()).

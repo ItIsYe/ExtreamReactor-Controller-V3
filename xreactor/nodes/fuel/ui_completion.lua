@@ -122,6 +122,15 @@ local function fuel_text(reactor)
   return pct .. " " .. tostring(reactor.fuel_data_state or "MISSING") .. " " .. tostring(reactor.delivery_state or reactor.operational_state or "?")
 end
 
+-- Uran vs. Blutonium und Ingot vs. Block werden pro Lieferung automatisch
+-- entschieden (siehe logistics_router.lua's pick_fuel_family()/
+-- pick_fuel_form()) -- es gibt kein statisch konfiguriertes "item" mehr.
+-- Die Detailseite zeigt darum die zuletzt tatsaechlich gelieferte Sorte.
+local function last_delivery_text(reactor)
+  if not reactor.last_item then return "NOCH KEINE LIEFERUNG" end
+  return tostring(reactor.last_item) .. " (" .. tostring(reactor.last_element or "?") .. ")"
+end
+
 local function footer(mon, h, w, center)
   return mux.footer_nav(mon, h, w, { center = center, inset = 3 })
 end
@@ -179,7 +188,7 @@ function M.attach(instance, opts)
 
     if #reactors == 0 and y < h - 1 then
       y = data_row(mon, w, h, y, {
-        label = "NAECHSTER SCHRITT", value = "ROUTER > EDIT / RT-NODE ONLINE",
+        label = "NAECHSTER SCHRITT", value = "ROUTER > REAKTOR EINLERNEN",
         status = "LIMITED", icon = "config"
       })
     end
@@ -219,14 +228,14 @@ function M.attach(instance, opts)
       if h >= 5 then mux.banner(mon, 2, 5, math.max(1, w - 3), "KEINE REAKTOREN KONFIGURIERT", "WARNING", nil) end
       if h >= 14 then
         mux.warning_box(mon, 2, 7, math.max(1, w - 3), {
-          "Noch keine Reaktor-Ziele vorhanden",
-          "RT-Nodes online bringen oder logistics.reactors konfigurieren",
-          "Danach Seite 4 ROUTER oeffnen und EDIT waehlen",
-          "Dort Reaktor antippen und Ventilkette festlegen",
+          "Noch keine Reaktoren konfiguriert",
+          "RT-Nodes online bringen, dann Seite 4 ROUTER oeffnen",
+          "REAKTOR EINLERNEN antippen, gewuenschten Reaktor waehlen",
+          "Danach Inlet, Pfad und Schwellwerte einstellen",
         }, "WARNING")
       elseif h >= 8 then
         mux.data_row(mon, 2, 7, math.max(1, w - 3), {
-          label = "NAECHSTER SCHRITT", value = "ROUTER > EDIT",
+          label = "NAECHSTER SCHRITT", value = "ROUTER > EINLERNEN",
           status = "LIMITED", icon = "config"
         })
       end
@@ -241,9 +250,17 @@ function M.attach(instance, opts)
     end
 
     if #reactors > 1 and h >= 6 then
-      mux.data_row(mon, 2, 6, math.max(1, w - 3), { label = state.details_index > 1 and "[<] PREV" or "", value = state.details_index < #reactors and "NEXT [>]" or "", status = "LIMITED", icon = "reactor" })
-      state.details_prev = state.details_index > 1 and { x1 = 2, x2 = math.min(w - 1, 11), y = 6 } or nil
-      state.details_next = state.details_index < #reactors and { x1 = math.max(2, w - 11), x2 = w - 1, y = 6 } or nil
+      local prev_label = w >= 42 and "[ << REAKTOR ]" or "[ << ]"
+      local next_label = w >= 42 and "[ REAKTOR >> ]" or "[ >> ]"
+      mux.data_row(mon, 2, 6, math.max(1, w - 3), {
+        label = state.details_index > 1 and prev_label or "",
+        value = state.details_index < #reactors and next_label or "",
+        status = "LIMITED", icon = "reactor"
+      })
+      state.details_prev = state.details_index > 1
+        and { x1 = 2, x2 = math.min(w - 1, 3 + #prev_label), y = 6 } or nil
+      state.details_next = state.details_index < #reactors
+        and { x1 = math.max(2, w - #next_label - 2), x2 = w - 1, y = 6 } or nil
     else
       state.details_prev, state.details_next = nil, nil
     end
@@ -251,7 +268,7 @@ function M.attach(instance, opts)
     local pct = type(reactor.fuel_pct) == "number" and (tostring(reactor.fuel_pct) .. "%") or "--"
     local age = reactor.fuel_age_s ~= nil and (tostring(reactor.fuel_age_s) .. "s") or "--"
     local inlet = tostring(reactor.inlet or reactor.configured_inlet or "MISSING")
-    local item = tostring(reactor.item or "?")
+    local last_item = last_delivery_text(reactor)
     local request = reactor.request_below and (tostring(math.floor(reactor.request_below * 100 + 0.5)) .. "%") or "?"
     local fill = reactor.fill_amount and tostring(reactor.fill_amount) or "?"
     local min_me = reactor.min_in_me and tostring(reactor.min_in_me) or "?"
@@ -263,7 +280,7 @@ function M.attach(instance, opts)
       y = data_row(mon, w, h, y, { label = "ID", value = tostring(reactor.reactor_id or "MISSING"), status = reactor.reactor_id and "text" or "WARNING", icon = "reactor" })
       y = data_row(mon, w, h, y, { label = "FUEL/DATA", value = pct .. " " .. tostring(reactor.fuel_data_state or "MISSING") .. " " .. age, status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "fuel" })
       y = data_row(mon, w, h, y, { label = "STATE/ROUTE", value = delivery .. " / " .. routing, status = severity_for_reactor(reactor), icon = "network" })
-      y = data_row(mon, w, h, y, { label = "IN/ITEM", value = mux.fit(inlet .. " / " .. item, math.max(1, w - 12)), status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
+      y = data_row(mon, w, h, y, { label = "IN/LETZTES", value = mux.fit(inlet .. " / " .. last_item, math.max(1, w - 12)), status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
       data_row(mon, w, h, y, { label = "POLICY", value = "REQ<" .. request .. " F" .. fill .. " ME" .. min_me, status = "text", icon = "config" })
     elseif h < 19 then
       y = data_row(mon, w, h, y, { label = "ID", value = tostring(reactor.reactor_id or "MISSING"), status = reactor.reactor_id and "text" or "WARNING", icon = "reactor" })
@@ -271,7 +288,7 @@ function M.attach(instance, opts)
       y = data_row(mon, w, h, y, { label = "DATA", value = tostring(reactor.fuel_data_state or "MISSING") .. " · " .. age .. " · " .. tostring(reactor.fuel_source or "-"), status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "network" })
       y = data_row(mon, w, h, y, { label = "STATE/ROUTE", value = delivery .. " / " .. routing, status = severity_for_reactor(reactor), icon = "network" })
       y = data_row(mon, w, h, y, { label = "INLET", value = inlet, status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
-      y = data_row(mon, w, h, y, { label = "ITEM", value = item, status = "text", icon = "fuel" })
+      y = data_row(mon, w, h, y, { label = "LETZTE LIEFERUNG", value = last_item, status = "text", icon = "fuel" })
       data_row(mon, w, h, y, { label = "POLICY", value = "REQ<" .. request .. " FILL " .. fill .. " ME " .. min_me, status = "text", icon = "config" })
     else
       y = data_row(mon, w, h, y, { label = "REACTOR ID", value = tostring(reactor.reactor_id or "MISSING"), status = reactor.reactor_id and "text" or "WARNING", icon = "reactor" })
@@ -281,7 +298,7 @@ function M.attach(instance, opts)
       y = data_row(mon, w, h, y, { label = "STATE", value = delivery, status = severity_for_reactor(reactor), icon = "reactor" })
       y = data_row(mon, w, h, y, { label = "ROUTING", value = routing, status = route_severity(routing), icon = "network" })
       y = data_row(mon, w, h, y, { label = "INLET", value = inlet, status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
-      y = data_row(mon, w, h, y, { label = "ITEM", value = item, status = "text", icon = "fuel" })
+      y = data_row(mon, w, h, y, { label = "LETZTE LIEFERUNG", value = last_item, status = "text", icon = "fuel" })
       y = data_row(mon, w, h, y, { label = "REQUEST BELOW", value = request, status = "text", icon = "config" })
       y = data_row(mon, w, h, y, { label = "FILL AMOUNT", value = fill, status = "text", icon = "config" })
       data_row(mon, w, h, y, { label = "ME MINIMUM", value = min_me, status = "text", icon = "config" })

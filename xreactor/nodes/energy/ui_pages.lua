@@ -107,9 +107,23 @@ function M.new(opts)
 
     if h >= 20 then
       local cw = math.floor((w - 5 - 3) / 4)
+      -- Overview zeigt nur 2 Matrix-Kacheln als Kurzueberblick; Discovery
+      -- kann aber 0, 1 oder 3+ Matrizen liefern. Statt fix "MATRIX A"/"MATRIX B"
+      -- zu behaupten (irrefuehrend bei 1 Matrix oder falscher Reihenfolge bei
+      -- 3+), zeigen die Kacheln den echten Alias/ID der jeweiligen Matrix; die
+      -- vollstaendige Liste inkl. Gesamtzahl steht auf der MATRICES-Seite (2/4).
+      local matrices_list = model.matrices or {}
+      local function matrix_tile(idx)
+        local m = matrices_list[idx]
+        if not m then
+          return { label = "MATRIX " .. idx, value = "n/a", status = "muted", icon = "storage" }
+        end
+        local label = tostring(m.alias or m.label or m.id or ("MATRIX " .. idx))
+        return { label = label:upper(), value = format_percent(m.percent), status = "OK", icon = "storage" }
+      end
       local items = {
-        { label = "MATRIX A", value = (model.matrices or {})[1] and format_percent((model.matrices or {})[1].percent) or "n/a", status = "OK", icon = "storage" },
-        { label = "MATRIX B", value = (model.matrices or {})[2] and format_percent((model.matrices or {})[2].percent) or "n/a", status = "OK", icon = "storage" },
+        matrix_tile(1),
+        matrix_tile(2),
         { label = "TREND", value = trend, status = trend_key, icon = "flow" },
         { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
       }
@@ -291,11 +305,16 @@ function M.new(opts)
 
   local function energy_status_key(model)
     local total = model and model.total or {}
-    local pct = tonumber(total.percent)
+    local ratio = tonumber(total.percent)
     if model and model.degraded then return "WARNING" end
-    if not pct then return "muted" end
+    if not ratio then return "muted" end
+    -- total.percent is a 0-1 ratio (see format_percent()/status_from_percent()
+    -- above); the emergency_below_pct/warning_below_pct/limited_above_pct
+    -- thresholds (defaults and the optional operator override file) are
+    -- authored on a 0-100 scale, so convert once before comparing.
+    local pct = ratio * 100
     local emergency_below, warning_below, limited_above = 15, 30, 95
-    local cfg_path = "/xreactor/config/ampel_thresholds.lua"
+    local cfg_path = "/xreactor_config/ampel_thresholds.lua"
     if fs and fs.exists and fs.exists(cfg_path) then
       local ok_read, cfg = pcall(function()
         local f = fs.open(cfg_path, "r"); if not f then return nil end

@@ -19,7 +19,7 @@ _G.peripheral = {
 local peers = { ['VALVE-A'] = { down = false, stale = false } }
 local router = redstone_router.new({
   config = { logistics = { redstone_tree = {
-    { side = 'top', integrator = 'VALVE-A', reactor = 'R1', label = 'R1' },
+    { integrator = 'VALVE-A', reactor = 'R1', label = 'R1' },
   } } },
   comms = { get_peers = function() return peers end },
   log = function() end,
@@ -28,7 +28,7 @@ local router = redstone_router.new({
 router:refresh()
 
 local function ack_current(high)
-  local key = 'VALVE-A|top'
+  local key = 'VALVE-A'
   local entry = assert(router._state.pending_valve_acks[key], 'pending valve command required')
   router:handle_valve_ack({
     type = 'VALVE_ACK', command_id = entry.command_id,

@@ -4,7 +4,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5
 }
@@ -25,6 +25,7 @@ local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
+local discovery_stability = require("core.discovery_stability")
 local ui_service = require("services.ui_service")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
@@ -59,7 +60,7 @@ local DEFAULT_CONFIG = {
 -- Die Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
 -- ueberschrieben -- Config muss in eine geschuetzte Nutzerdatei migriert
 -- werden.
-local WATER_USER_CONFIG_PATH = "/xreactor/config/water.lua"
+local WATER_USER_CONFIG_PATH = "/xreactor_config/water.lua"
 if not fs.exists(WATER_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -466,7 +467,14 @@ local function init()
     end
   })
   services:add(comms)
-  services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
+  local discovery_stability_cache = discovery_stability.new({})
+  services:add(discovery_service.new({
+    registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
+    should_discover = function(service, ts, event, due)
+      return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
+    end,
+    managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
+  }))
   services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { tanks = #config.loop_tanks } end }))
   services:add(ui_service.new({
     interval = 1,

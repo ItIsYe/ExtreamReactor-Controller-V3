@@ -53,34 +53,50 @@ local function set_setpoints(command, ctx, record)
   end
 
   local value = command.value or {}
-  if not capacity_learning_locked(ctx) then
-    local learning = ctx.capacity_learning or {}
-    return record({
-      ok = false,
-      error = "capacity learning not locked",
-      reason_code = "CAPACITY_LEARNING",
-      capacity_ready = false,
-      capacity_source = learning.reason or "LEARNING",
-      capacity_stable_samples = learning.at_target or 0,
-      command_value = value
-    })
-  end
+  local capacity_ready = capacity_learning_locked(ctx)
+  -- Fix: get_learning(ctx) (ueber ctx.get_capacity_learning(), falls vorhanden)
+  -- statt ctx.capacity_learning direkt -- letzteres ist bei command_handler's
+  -- ctx ein einmalig bei build_command_ctx()/init() eingefrorener Schnappschuss
+  -- (siehe nodes/rt/main.lua), NIE aktualisiert. capacity_learning_locked()
+  -- oben nutzt bereits get_learning() und wird daher korrekt irgendwann true,
+  -- sobald echte Kapazitaet gemessen wurde -- aber ctx.capacity_learning blieb
+  -- dabei fuer die Restlaufzeit des Nodes auf dem Init-Zustand (meist leer/0)
+  -- eingefroren. Reale Logs (2026-09-02) zeigten dadurch "SET_SETPOINTS
+  -- pct=100.0% ... power=0" dauerhaft, auch lange nach erfolgreicher Kapazi-
+  -- taetsmessung -- targets.power (nur fuer die UI-"Soll"-Anzeige gedacht,
+  -- siehe unten) wurde nie ungleich 0, obwohl targets.power_percent (die
+  -- tatsaechliche Regelgroesse) korrekt uebernommen wurde.
+  local learning = get_learning(ctx) or {}
 
   -- Master sendet nur den Prozentwert — RT berechnet Flow, Coil,
-  -- Reaktor-Stab vollständig autonom daraus.
+  -- Reaktor-Stab vollständig autonom daraus. Ohne bekannte Kapazität ist
+  -- ein Prozentwert relativ zu einer unbekannten Grundlage sinnlos, daher
+  -- wird NUR die Prozent-Uebernahme uebersprungen solange Capacity-Learning
+  -- noch laeuft. assignment_state/desired_node_state (State-Machine-
+  -- Uebergaenge wie Zuweisung/SHED/Shutdown) sind davon unabhaengig und
+  -- muessen auch waehrend der Lernphase wirksam werden -- vorher blockierte
+  -- diese Sperre das GESAMTE Kommando, sodass der Master einer noch
+  -- lernenden RT-Node z.B. nie einen "shed"/"startup"-Zustand zuweisen
+  -- konnte, bis das Capacity-Learning fertig war.
   local targets = ctx.targets
-  local pct = number_or_nil(value.power_target_percent)
-  if pct then
-    pct = math.max(0, math.min(100, pct))
-    targets.power_percent = pct
-    -- targets.power aus capacity_max berechnen damit UI "soll" korrekt anzeigt
-    local cap = ctx.capacity_learning and ctx.capacity_learning.max_output or 0
-    if cap > 0 then
-      targets.power = cap * pct / 100
+  if capacity_ready then
+    local pct = number_or_nil(value.power_target_percent)
+    if pct then
+      pct = math.max(0, math.min(100, pct))
+      targets.power_percent = pct
+      -- targets.power aus capacity_max berechnen damit UI "soll" korrekt anzeigt
+      local cap = number_or_nil(learning.max_output) or 0
+      if cap > 0 then
+        targets.power = cap * pct / 100
+      end
+      log_command(ctx, "INFO", string.format(
+        "SET_SETPOINTS pct=%.1f%% state=%s power=%.0f",
+        pct, tostring(value.assignment_state or "?"), targets.power or 0))
     end
+  else
     log_command(ctx, "INFO", string.format(
-      "SET_SETPOINTS pct=%.1f%% state=%s power=%.0f",
-      pct, tostring(value.assignment_state or "?"), targets.power or 0))
+      "SET_SETPOINTS: capacity learning not locked, skipping power_target_percent (state=%s)",
+      tostring(value.assignment_state or "?")))
   end
   if value.assignment_state ~= nil then
     targets.assignment_state = tostring(value.assignment_state)
@@ -101,6 +117,8 @@ local function set_setpoints(command, ctx, record)
         current_state = current,
         desired_node_state = desired_state,
         shutdown_stage = value.shutdown_stage,
+        capacity_ready = capacity_ready,
+        capacity_source = (not capacity_ready) and (learning.reason or "LEARNING") or nil,
         command_value = value
       })
     end
@@ -110,6 +128,8 @@ local function set_setpoints(command, ctx, record)
       current_state = current,
       desired_node_state = desired_state,
       shutdown_stage = value.shutdown_stage,
+      capacity_ready = capacity_ready,
+      capacity_source = (not capacity_ready) and (learning.reason or "LEARNING") or nil,
       command_value = value
     })
   end
@@ -117,7 +137,13 @@ local function set_setpoints(command, ctx, record)
   -- command_value mitsenden damit ack_matches_setpoints() auf Master-Seite
   -- greifen kann (ACK_MATCH Dedup). Ohne command_value würde der Master jede
   -- Sekunde ein neues Paket senden (should_debounce_resend = 1000ms Fenster).
-  return record({ ok = true, command_value = value })
+  return record({
+    ok = true,
+    capacity_ready = capacity_ready,
+    capacity_source = (not capacity_ready) and (learning.reason or "LEARNING") or nil,
+    capacity_stable_samples = (not capacity_ready) and (learning.at_target or 0) or nil,
+    command_value = value
+  })
 end
 
 local function set_scalar_target(command, ctx, key, fallback)

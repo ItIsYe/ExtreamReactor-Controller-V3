@@ -4,7 +4,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5
 }
@@ -25,10 +25,12 @@ local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
+local discovery_stability = require("core.discovery_stability")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
+local me_bridge_compat = require("core.me_bridge_compat")
 local support_runtime = require("nodes.support.runtime")
 local role_logic = require("nodes.support.role_logic")
 local support_ui_pages = require("nodes.support.ui_pages")
@@ -62,6 +64,20 @@ local DEFAULT_CONFIG = {
   wireless_modem = nil,
   wired_modem = nil,
   storage_bus = "meBridge_0",
+  -- Reserve wird item-basiert aus dem storage_bus (ME Bridge) gezaehlt:
+  -- eine Liste von Fuel-Item-IDs, deren ME-Bestand aufsummiert die
+  -- Reserve ergibt. unit_multiplier erlaubt Bloecke (z.B. 9 Ingots/Block)
+  -- im selben Ingot-Aequivalent wie target/minimum_reserve mitzuzaehlen.
+  -- `element` gruppiert Ingot+Block derselben Fuel-Sorte -- dieselbe Liste
+  -- ist auch die austauschbare Fuel-Familien-Tabelle, aus der
+  -- logistics_router.lua bei jeder Lieferung automatisch die Sorte mit dem
+  -- groesseren ME-Bestand waehlt (siehe build_fuel_families() dort).
+  reserve_items = {
+    { item = "bigreactors:blutonium_ingot", element = "blutonium" },
+    { item = "bigreactors:blutonium_block", element = "blutonium", unit_multiplier = 9 },
+    { item = "alltheores:uranium_ingot", element = "uranium" },
+    { item = "alltheores:uranium_block", element = "uranium", unit_multiplier = 9 },
+  },
   target = 2000,
   minimum_reserve = 2000,
   heartbeat_interval = 2,
@@ -78,7 +94,7 @@ local DEFAULT_CONFIG = {
 -- jedem Auto-Update ueberschrieben wird -- kanonische Nutzer-Config an
 -- einem vom Manifest unberuehrten Pfad, mit einmaliger Migration eines
 -- eventuell bereits vorhandenen Standes aus der alten Quelldatei.
-local USER_CONFIG_PATH = "/xreactor/config/fuel.lua"
+local USER_CONFIG_PATH = "/xreactor_config/fuel.lua"
 if not fs.exists(USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -98,36 +114,34 @@ CONFIG.CONFIG_PATH = USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- /xreactor/config/fuel_routes.lua (vom Router-Editor atomar geschrieben)
--- wird VOR der ersten Router-Erzeugung geladen und mit derselben
--- validate_tree()-Funktion geprueft wie der Router selbst -- nur bei
--- Erfolg wird das Ergebnis nach config.logistics.redstone_tree
--- uebernommen. Bei fehlender/ungueltiger Datei bleibt redstone_tree
--- unveraendert und routing_load_status haelt den Fehler fest.
+-- /xreactor_config/fuel_routes.lua (vom Router atomar geschrieben, siehe
+-- router_ui.lua) wird VOR config_normalizer.normalize() geladen und nach
+-- config.logistics.reactors uebernommen -- normalize() validiert danach
+-- jeden Reaktor-Eintrag (reactor_id/inlet/path/Schwellwerte) im selben
+-- Durchlauf wie den Rest der Config. redstone_tree wird nie aus dieser
+-- Datei uebernommen: logistics_router.lua baut es bei jedem refresh()
+-- automatisch aus reactors[*].path (siehe dessen
+-- build_redstone_tree_from_reactors()). Bei fehlender/nicht ladbarer Datei
+-- bleibt logistics.reactors leer und routing_load_status haelt den Fehler
+-- fest.
 local routing_load_status = { ok = true, source = "config" }
 do
-  local routes_path = "/xreactor/config/fuel_routes.lua"
+  local routes_path = "/xreactor_config/fuel_routes.lua"
   if fs.exists(routes_path) then
     local ok_load, content = pcall(dofile, routes_path)
     if not ok_load or type(content) ~= "table" then
       routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
-      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Reaktor-Konfiguration bleibt leer: " .. tostring(content))
     else
-      local validation = redstone_router_lib.validate_tree(content)
-      if not validation.ok then
-        local fe = validation.errors[1]
-        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
-        add_config_warning("fuel_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
-      else
-        config.logistics = config.logistics or {}
-        config.logistics.redstone_tree = content
-        routing_load_status = { ok = true, source = routes_path }
-      end
+      config.logistics = config.logistics or {}
+      config.logistics.reactors = content
+      routing_load_status = { ok = true, source = routes_path }
     end
   end
 end
+
+config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
@@ -186,8 +200,10 @@ end
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
+      config = config,
       redstone_router = get_rs_router(),
-      config_path = "/xreactor/config/fuel_routes.lua",
+      logistics_router = get_router(),
+      config_path = "/xreactor_config/fuel_routes.lua",
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       routing_load_status = routing_load_status,
       get_reactors = function()
@@ -196,6 +212,30 @@ local function get_router_ui()
     })
   end
   return router_ui_instance
+end
+
+-- "meBridge_0" ist der Konventions-Default aus DEFAULT_CONFIG, keine
+-- Zusicherung ueber die tatsaechliche Peripherie: Advanced Peripherals
+-- vergibt generierte Namen wie "meBridge_0"/"meBridge_1" je nach
+-- Anschlussreihenfolge (siehe nodes/fuel/logistics_router.lua's und
+-- nodes/reprocessor/feed_router.lua's find_me_bridge_by_methods() fuer
+-- denselben, dort bereits behobenen Fall). Reale Logs (2026-09-02) zeigten
+-- FUEL-Nodes, deren Storage-Bus per exaktem Namensvergleich dauerhaft als
+-- "[FEHLT]" galt, obwohl eine ME Bridge tatsaechlich am Netz haengt --
+-- nur eben nicht unter Index 0. Ein wirklich individuell konfigurierter
+-- Name bleibt weiterhin eine strikte Bindung.
+local DEFAULT_STORAGE_BUS = "meBridge_0"
+
+-- Die reale ME Bridge (Advanced Peripherals) hat weder tanks() noch
+-- getFluidAmount() (das waere ein dedizierter Fluid-Tank-Block) --
+-- sie ist eine Item-Schnittstelle (core/me_bridge_compat.lua deckt beide
+-- API-Generationen ab, siehe dort). Reale Logs (2026-09-03) zeigten
+-- FUEL-Nodes mit korrekt benanntem storage_bus, die trotzdem nie als
+-- Storage erkannt wurden, weil die Methodenpruefung auf eine Fluid-
+-- Peripherie zielte statt auf die tatsaechliche ME-Bridge-API. Reserve
+-- wird item-basiert ueber config.reserve_items gezaehlt (storage.lua).
+local function is_storage_candidate(method_set)
+  return method_set.tanks or method_set.getFluidAmount or me_bridge_compat.is_bridge(method_set)
 end
 
 local function discover()
@@ -211,8 +251,14 @@ local function discover()
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
   local storage_devices = support_discovery.collect_devices_by_methods(names, {
     kind = "storage",
-    allow_name = function(name) return not config.storage_bus or name == config.storage_bus end,
-    match = function(method_set) return method_set.tanks or method_set.getFluidAmount end
+    allow_name = function(name)
+      local configured = config.storage_bus
+      if configured == nil or configured == "" or configured == DEFAULT_STORAGE_BUS or configured == "meBridge" then
+        return true
+      end
+      return name == configured
+    end,
+    match = is_storage_candidate
   })
   for _, entry in ipairs(storage_devices) do table.insert(registry_devices, entry) end
   registry:sync(registry_devices)
@@ -246,7 +292,7 @@ local function build_status_payload()
     comms = comms, registry = registry, health = health,
     non_rt_payload = non_rt_payload, master_alerts = master_alerts,
     master_seen_ts = master_seen_ts, reserve = reserve, storage = fuel_storage.get(),
-    read_fuel = function() return fuel_storage.read_fuel(warn_once, support_runtime) end,
+    read_fuel = function() return fuel_storage.read_fuel(config, warn_once, support_runtime) end,
     enforce_reserve = function(current) return fuel_storage.enforce_reserve(current, reserve, safety, utils) end,
     is_master_connected = is_master_connected, get_router = get_router,
     routing_load_status = routing_load_status, get_rs_router = get_rs_router,
@@ -372,7 +418,14 @@ local function init()
       router_ui_instance:handle_teach_pulse(message.src)
     end
   end })
-  services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
+  local discovery_stability_cache = discovery_stability.new({})
+  services:add(discovery_service.new({
+    registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
+    should_discover = function(service, ts, event, due)
+      return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
+    end,
+    managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
+  }))
   services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
   services:add(ui_service.new({
     interval = 1,

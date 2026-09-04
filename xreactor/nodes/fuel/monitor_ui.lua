@@ -10,13 +10,86 @@
 local M = {}
 local ui_completion = require("nodes.fuel.ui_completion")
 local window_buffer = require("core.window_buffer")
+local mux = require("core.mockup_ui")
+local utils = require("core.utils")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
 local monitor_router = nil
 local current_mon = nil
+local bound_monitor_name = nil
 local render_surface = window_buffer.new()
+
+-- Diagnose fuer "Touch reagiert nicht" (2026-09-03 Nutzerbericht): loggt
+-- jeden monitor_touch mit dem tatsaechlichen Peripherie-Namen aus dem
+-- Event gegen den aktuell gebundenen FUEL-Monitor -- ohne das muss der
+-- Nutzer live am PC UND am Monitor gleichzeitig sein, um einen simplen
+-- Namens-/Skalierungs-Mismatch zu erkennen. Nur fuer monitor_touch (die
+-- haeufige "key"-Navigation waere reines Log-Rauschen).
+local function log_touch_diag(event, consumed_by)
+  if not event or event[1] ~= "monitor_touch" then return end
+  local touched_name, x, y = event[2], event[3], event[4]
+  local w, h = nil, nil
+  if current_mon and type(current_mon.getSize) == "function" then
+    local ok, mw, mh = pcall(current_mon.getSize)
+    if ok then w, h = mw, mh end
+  end
+  utils.log("FUEL", string.format(
+    "Touch-Diag: event_monitor=%s bound_monitor=%s x=%s y=%s bound_size=%sx%s consumed_by=%s",
+    tostring(touched_name), tostring(bound_monitor_name), tostring(x), tostring(y),
+    tostring(w), tostring(h), tostring(consumed_by)), "INFO")
+end
+
+-- FUEL is primarily operated from the local touch monitor, so readability
+-- wins over maximum information density. CC:Tweaked only supports 0.5 scale
+-- steps: prefer 1.0 on sufficiently large monitors, but fall back to the old
+-- 0.5 layout when 1.0 would leave too little logical screen space.
+local PREFERRED_UI_SCALE = 1.0
+local FALLBACK_UI_SCALE = 0.5
+local MIN_LARGE_WIDTH = 40
+local MIN_LARGE_HEIGHT = 18
+local scale_state = setmetatable({}, { __mode = "k" })
+
+local function normalized_scale(value)
+  local n = tonumber(value) or PREFERRED_UI_SCALE
+  n = math.floor(n * 2 + 0.5) / 2
+  if n < 0.5 then n = 0.5 end
+  if n > 5 then n = 5 end
+  return n
+end
+
+local function ensure_readable_scale(ctx, mon)
+  if not mon or (ctx and ctx.devices and ctx.devices.monitor_is_term) then return end
+  if type(mon.setTextScale) ~= "function" or type(mon.getSize) ~= "function" then return end
+
+  local requested = normalized_scale(ctx and ctx.config and ctx.config.fuel_ui_scale)
+  local cached = scale_state[mon]
+  if cached and cached.requested == requested then
+    -- Discovery still applies the historical 0.5 scale in nodes/fuel/main.lua.
+    -- Detect that external scale drift instead of trusting our cache forever.
+    local ok_current, current = pcall(mon.getTextScale)
+    if ok_current and tonumber(current) == cached.applied then return end
+  end
+
+  local applied = requested
+  local ok_set = pcall(mon.setTextScale, requested)
+  if not ok_set then
+    scale_state[mon] = { requested = requested, applied = nil }
+    return
+  end
+
+  local ok_size, w, h = pcall(mon.getSize)
+  if ok_size and requested > FALLBACK_UI_SCALE
+      and ((tonumber(w) or 0) < MIN_LARGE_WIDTH
+        or (tonumber(h) or 0) < MIN_LARGE_HEIGHT) then
+    if pcall(mon.setTextScale, FALLBACK_UI_SCALE) then
+      applied = FALLBACK_UI_SCALE
+    end
+  end
+
+  scale_state[mon] = { requested = requested, applied = applied }
+end
 
 local function ensure_completion(ctx)
   if ctx and ctx.fuel_ui then
@@ -78,10 +151,35 @@ function M.build_model(ctx)
   return model
 end
 
+-- All four FUEL pages share the same page-navigation controls. The old
+-- labels were short and their touch zones were exactly the text width.
+-- Longer, bracketed labels make the controls visually obvious and enlarge
+-- the physical touch target without consuming an additional content row.
+local function large_footer(target, center)
+  local ok, w, h = pcall(function() return target.getSize() end)
+  if not ok or not w or not h then return nil end
+  local left = w >= 42 and "[ << ZURUECK ]" or "[ < ZUR ]"
+  local right = w >= 42 and "[ WEITER >> ]" or "[ WEITER ]"
+  return mux.footer_nav(target, h, w, {
+    left = left,
+    center = center,
+    right = right,
+    inset = 2,
+  })
+end
+
+local function page_with_large_footer(render_fn, center)
+  return function(target, model, should_clear)
+    render_fn(target, model, should_clear)
+    return large_footer(target, center)
+  end
+end
+
 function M.render_monitor(ctx, model)
   local devices = ctx.devices
   if not devices.monitor then
     current_mon = nil
+    bound_monitor_name = nil
     render_surface:bind(nil, nil)
     if monitor_router then
       if monitor_router.set_monitor_name then monitor_router:set_monitor_name(nil) end
@@ -91,19 +189,24 @@ function M.render_monitor(ctx, model)
   end
   ensure_completion(ctx)
   local mon = devices.monitor
+  ensure_readable_scale(ctx, mon)
   current_mon = mon
+  bound_monitor_name = devices.monitor_name
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
     monitor_router = ctx.ui_router.new({
       error_title = "FUEL UI ERROR",
       on_render_error = ctx.on_render_error,
       pages = {
-        { name = "Overview", render = fuel_ui.render_overview },
-        { name = "Details", render = fuel_ui.render_details,
+        { name = "Overview", render = page_with_large_footer(fuel_ui.render_overview, "FUEL OVERVIEW") },
+        { name = "Details", render = page_with_large_footer(fuel_ui.render_details, "FUEL DETAILS"),
           handle_touch = function(x, y) return fuel_ui.handle_details_touch and fuel_ui.handle_details_touch(x, y) or false end },
-        { name = "Diagnostics", render = fuel_ui.render_diagnostics,
+        { name = "Diagnostics", render = page_with_large_footer(fuel_ui.render_diagnostics, "FUEL DIAGNOSTICS"),
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        { name = "Router", render = function(target, model, should_clear) return ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
+        { name = "Router", render = function(target, page_model, should_clear)
+            ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear)
+            return large_footer(target, "ROUTER")
+          end,
           handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },
@@ -136,6 +239,12 @@ function M.handle_input(event)
     ui_diag_extra.pointer_events_received = ui_diag_extra.pointer_events_received + 1
   end
   if monitor_router and monitor_router:handle_input(event) then
+    -- Covers both a footer prev/next hit AND a silently swallowed touch
+    -- from a monitor other than the one FUEL is bound to (name mismatch --
+    -- see router:monitor_touch_matches() in core/ui_router.lua). Can't
+    -- tell the two apart from here; the event_monitor/bound_monitor
+    -- comparison in the log line itself is what disambiguates.
+    log_touch_diag(event, "router_nav_or_foreign_swallow")
     return true
   end
   if kind ~= "monitor_touch" and kind ~= "mouse_click" then
@@ -146,6 +255,7 @@ function M.handle_input(event)
     local x, y = event and event[3], event and event[4]
     ui_diag_extra.page_handler_calls = ui_diag_extra.page_handler_calls + 1
     local consumed = page.handle_touch(x, y) == true
+    log_touch_diag(event, consumed and "page_handler" or "page_handler_unconsumed")
     if consumed and monitor_router then
       -- Page-local state (details pagination / router editor) is not part of
       -- the telemetry model snapshot. Force exactly one following redraw so
@@ -158,6 +268,7 @@ function M.handle_input(event)
     end
     return consumed
   end
+  log_touch_diag(event, "no_page_handler")
   return false
 end
 

@@ -180,7 +180,7 @@ function registry.new(opts)
   local self = {}
   self.node_id = opts.node_id or "UNKNOWN"
   local role = opts.role or "node"
-  self.path = opts.path or ("/xreactor/config/registry_" .. tostring(role) .. "_" .. tostring(self.node_id) .. ".json")
+  self.path = opts.path or ("/xreactor_config/registry_" .. tostring(role) .. "_" .. tostring(self.node_id) .. ".json")
   self.log_prefix = opts.log_prefix or "REGISTRY"
   self.aliases = opts.aliases or {}
   self.state = load_registry(self.path)

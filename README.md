@@ -2,8 +2,7 @@
 
 CC:Tweaked SCADA-Steuerung für Extreme Reactors 2 auf ATM10 (Minecraft 1.21.1).
 
-> **Branch:** `beta` — aktuell instabil, siehe [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md)
-> **Stabiler Rollback-Punkt:** Branch `beckup-vor-audit` (beta-v512, 2026-08-09)
+> **Status:** siehe [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) für den aktuellen Projektstand
 
 ## Schnellstart
 
@@ -23,19 +22,19 @@ Dann Computer neu starten — der Installer erkennt die Rolle automatisch und in
 | FUEL | Brennstoff-Verwaltung und Logistics |
 | VALVE | Ventil-Steuerung (Redstone) |
 | WATER | Wasserkühlung |
+| REPROCESSING | Wiederaufbereitung |
 | LOG | Zentraler Log-Collector |
 
 ## Branches
-- `beta` — aktueller Entwicklungszweig, **aktuell instabil**
+- `beta` — aktueller Entwicklungszweig
 - `main` — stabile Releases
-- `beckup-vor-audit` — letzter bekannter stabiler Stand vor den Agent-Audit-PRs (2026-08-09)
 
 ## Dokumentation
-- [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) — aktueller Projektstatus, offene Bugs, Rollback-Anleitung
+- [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) — aktueller Projektstatus
 - [`docs/CI_MAINTENANCE.md`](docs/CI_MAINTENANCE.md) — CI-Wartung und bekannte Bugs
 - [`docs/README.md`](docs/README.md) — vollständiger Dokumentationsindex
 
 ## Wichtige Regeln
 - Dateien **ausschließlich über den Installer** installieren — nie manuell per curl/Server-Konsole
-- Manifest und release.lua werden automatisch bei jedem Commit aktualisiert
+- Manifest und release.lua vor jedem Commit manuell resynchronisieren (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`), aktualisiert aber nichts automatisch
 - Vor dem Mergen von Agent-generierten PRs: einzeln auf einem Test-Computer verifizieren

@@ -4,9 +4,14 @@ local constants = require('shared.constants')
 local health = require('core.health')
 local handlers = require('master.message_handlers')
 
+-- node.status uses constants.status_levels (OK/LIMITED/WARNING/EMERGENCY/
+-- OFFLINE/MANUAL), a separate enum from node.health.status's own
+-- OK/DEGRADED/DOWN -- assign_node_status_from_health() translates between
+-- them (health.status.DEGRADED -> constants.status_levels.WARNING), so a
+-- degraded node's node.status is WARNING, not the raw health.status value.
 local nodes = {
   ["ENERGY-1"] = {
-    id = "ENERGY-1", role = constants.roles.ENERGY_NODE, status = health.status.DEGRADED,
+    id = "ENERGY-1", role = constants.roles.ENERGY_NODE, status = constants.status_levels.WARNING,
     health = { status = health.status.DEGRADED, reasons = { [health.reasons.COMMS_DOWN] = true } }
   }
 }
@@ -26,9 +31,9 @@ local handler = handlers.new({
 })
 
 handler.update_node({ type = constants.message_types.HEARTBEAT, sender_id='ENERGY-1', node_id='ENERGY-1', role=constants.roles.ENERGY_NODE, payload={state='RUNNING'} })
-if nodes['ENERGY-1'].status ~= health.status.DEGRADED then error('heartbeat must not blindly force degraded node to OK without healthy payload') end
+if nodes['ENERGY-1'].status ~= constants.status_levels.WARNING then error('heartbeat must not blindly force degraded node to OK without healthy payload') end
 
 handler.update_node({ type = constants.message_types.STATUS, sender_id='ENERGY-1', node_id='ENERGY-1', role=constants.roles.ENERGY_NODE, payload={ health={ status=health.status.OK, reasons={} } } })
-if nodes['ENERGY-1'].status ~= health.status.OK then error('healthy STATUS payload must clear degraded status') end
+if nodes['ENERGY-1'].status ~= constants.status_levels.OK then error('healthy STATUS payload must clear degraded status') end
 
 print('master_status_recovery_semantics_test.lua: ok')

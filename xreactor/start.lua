@@ -2,7 +2,8 @@
 -- Liest Rolle, startet Node + Auto-Update Loop parallel.
 
 local INSTALL_ROOT = "/xreactor"
-local ROLE_PATH    = INSTALL_ROOT .. "/config/role.lua"
+local CONFIG_DIR   = "/xreactor_config"
+local ROLE_PATH    = CONFIG_DIR .. "/role.lua"
 local RELEASE_PATH = INSTALL_ROOT .. "/release.lua"
 
 local ROLE_ENTRY = {
@@ -19,21 +20,6 @@ local ROLE_ENTRY = {
 }
 
 local function p(msg) pcall(print, tostring(msg)) end
-
--- Entfernt nur echte, installer-eigene, jederzeit regenerierbare
--- Zwischenverzeichnisse -- NICHT /xreactor_logs (core/logger.lua's
--- DEFAULT_LOG_DIR), da ein knapper Speicherstand keine Erlaubnis ist,
--- vorhandene Logs zu vernichten.
-local function cleanup_space()
-  if not fs.getFreeSpace then return end
-  local ok, free = pcall(fs.getFreeSpace, "/")
-  if ok and type(free) == "number" and free < 4096 then
-    pcall(fs.delete, "/xreactor_stage")
-    pcall(fs.delete, "/xreactor_backup_prev")
-    p("STARTUP: Speicher bereinigt")
-  end
-end
-cleanup_space()
 
 -- installer/journal.lua schreibt bei jedem Installationslauf ein Journal
 -- ausserhalb von /xreactor, das erst als letzter Schritt (zusammen mit
@@ -174,41 +160,9 @@ local function attempt_recovery_resume()
   local ok_w = pcall(function() f.write(body) end)
   pcall(f.close)
   if not ok_w then error("Kann Recovery-Installer nicht schreiben: " .. tmp, 0) end
-  -- A crash may have happened before the installer restored role.lua into
-  -- the new /xreactor tree. The verified recovery backup is outside that
-  -- tree; restore the minimal unattended-install identity before rerunning
-  -- /installer so it never falls into an interactive role prompt.
-  local backup_path = "/xreactor_recovery/config_backup.lua"
-  if (not fs.exists(ROLE_PATH)) and fs.exists(backup_path) then
-    local backup_file = fs.open(backup_path, "r")
-    if not backup_file then error("Recovery-Config-Backup nicht lesbar", 0) end
-    local ok_read, backup_source = pcall(backup_file.readAll)
-    pcall(backup_file.close)
-    if not ok_read or type(backup_source) ~= "string" then
-      error("Recovery-Config-Backup nicht lesbar", 0)
-    end
-    local loader, load_err = load(backup_source, "=recovery_config_backup", "t", {})
-    if not loader then error("Recovery-Config-Backup ungueltig: " .. tostring(load_err), 0) end
-    local ok_backup, backup = pcall(loader)
-    if not ok_backup or type(backup) ~= "table" then
-      error("Recovery-Config-Backup ungueltig", 0)
-    end
-    for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
-      local content = backup[rel]
-      if type(content) == "string" then
-        local dst = INSTALL_ROOT .. "/config/" .. rel
-        local dir = fs.getDir(dst)
-        if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
-        local out = fs.open(dst, "w")
-        if not out then error("Recovery-Minimal-Config nicht schreibbar: " .. rel, 0) end
-        local ok_restore, restore_err = pcall(function() out.write(content) end)
-        pcall(out.close)
-        if not ok_restore then
-          error("Recovery-Minimal-Config fehlgeschlagen: " .. rel .. " (" .. tostring(restore_err) .. ")", 0)
-        end
-      end
-    end
-  end
+  -- Config lives under CONFIG_DIR, a sibling of /xreactor never touched by
+  -- a (re-)install -- a recovery-resume re-running /installer can never
+  -- lose role.lua, so there is nothing left to restore here.
   if not fs.exists(ROLE_PATH) then
     error("Recovery kann Rolle nicht bestimmen: role.lua und Backup fehlen", 0)
   end
@@ -282,7 +236,7 @@ if fs.exists(auto_path) then
   local ok_load, auto_mod = pcall(dofile, auto_path)
   if ok_load and type(auto_mod) == "table" and type(auto_mod.make_loop) == "function" then
     local interval = 120
-    local cfg_path = INSTALL_ROOT .. "/config/remote_update.lua"
+    local cfg_path = CONFIG_DIR .. "/remote_update.lua"
     if fs.exists(cfg_path) then
       local f = fs.open(cfg_path, "r"); if f then
         local src = f.readAll(); f.close()

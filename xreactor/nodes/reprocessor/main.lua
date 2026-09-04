@@ -4,7 +4,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5
 }
@@ -25,6 +25,7 @@ local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
+local discovery_stability = require("core.discovery_stability")
 local ui_service = require("services.ui_service")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
@@ -60,7 +61,7 @@ local DEFAULT_CONFIG = {
 -- Die Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
 -- ueberschrieben -- Config muss in eine geschuetzte Nutzerdatei migriert
 -- werden, sonst geht jede manuelle Bearbeitung beim naechsten Update verloren.
-local REPROC_USER_CONFIG_PATH = "/xreactor/config/reprocessor.lua"
+local REPROC_USER_CONFIG_PATH = "/xreactor_config/reprocessor.lua"
 if not fs.exists(REPROC_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -82,12 +83,12 @@ local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- /xreactor/config/reproc_routes.lua (die vom Router-Editor geschriebene
+-- /xreactor_config/reproc_routes.lua (die vom Router-Editor geschriebene
 -- kanonische Routenquelle) muss beim Start geladen werden, sonst gehen
 -- gespeicherte Routen bei jedem Neustart verloren.
 local routing_load_status = { ok = true, source = "config" }
 do
-  local routes_path = "/xreactor/config/reproc_routes.lua"
+  local routes_path = "/xreactor_config/reproc_routes.lua"
   if fs.exists(routes_path) then
     local ok_load, content = pcall(dofile, routes_path)
     if not ok_load or type(content) ~= "table" then
@@ -407,7 +408,7 @@ end
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
-      redstone_router = get_rs_router(), config_path = "/xreactor/config/reproc_routes.lua",
+      redstone_router = get_rs_router(), config_path = "/xreactor_config/reproc_routes.lua",
       routing_load_status = routing_load_status,
       log = function(level, msg) utils.log("REPROC", msg, level) end,
       get_reactors = function()
@@ -486,7 +487,14 @@ local function init()
       router_ui_instance:handle_teach_pulse(message.src)
     end
   end })
-  services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
+  local discovery_stability_cache = discovery_stability.new({})
+  services:add(discovery_service.new({
+    registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
+    should_discover = function(service, ts, event, due)
+      return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
+    end,
+    managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
+  }))
   services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { standby = standby } end }))
   services:add(ui_service.new({
     interval = 1,

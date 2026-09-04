@@ -4,6 +4,7 @@ _G.peripheral = {
   find = function() return nil end,
   isPresent = function() return false end,
   wrap = function() return nil end,
+  getNames = function() return {} end,
 }
 _G.redstone = { setOutput = function() end }
 
@@ -19,8 +20,11 @@ local comms = { get_peers = function() return peers end }
 local reactors, routes = {}, {}
 for i = 1, 20 do
   local id = string.format('R%02d', i)
-  reactors[#reactors + 1] = { id = id, label = 'Reactor ' .. tostring(i) }
-  routes[#routes + 1] = { reactor = id, label = 'Reactor ' .. tostring(i), path = { { side = 'back' } } }
+  reactors[#reactors + 1] = {
+    reactor_id = id, label = 'Reactor ' .. tostring(i), inlet = 'inlet_' .. i,
+    path = { 'VALVE-01' }, request_below = 0.25, fill_amount = 64, min_in_me = 32,
+  }
+  routes[#routes + 1] = { reactor = id, label = 'Reactor ' .. tostring(i), path = { 'VALVE-01' } }
 end
 
 local rs = redstone_router.new({
@@ -29,9 +33,11 @@ local rs = redstone_router.new({
 })
 rs:refresh()
 
+local config = { logistics = { reactors = reactors } }
 local page = router_ui.new({
+  config = config,
   redstone_router = rs,
-  get_reactors = function() return reactors end,
+  get_reactors = function() return {} end,
   log = function() end,
 })
 
@@ -57,14 +63,13 @@ local function assert_touch_bounds()
   local lists = {
     reactor_btns = u.reactor_btns,
     step_btns = u.step_btns,
-    side_btns = u.side_btns,
     integrator_btns = u.integrator_btns,
   }
   for name, list in pairs(lists) do
     for i, button in ipairs(list or {}) do assert_button_bounds(button, name .. '[' .. i .. ']') end
   end
   local singles = {
-    'save_btn', 'reset_btn', 'teach_btn', 'done_btn', 'clear_btn', 'cancel_btn',
+    'save_btn', 'reset_btn', 'learn_btn', 'edit_done_btn', 'path_clear_btn', 'edit_cancel_btn', 'path_cancel_btn',
     'list_scroll_up', 'list_scroll_down', 'path_scroll_up', 'path_scroll_down',
     'picker_scroll_up', 'picker_scroll_down',
   }
@@ -97,26 +102,23 @@ local function any_button(list, field, expected)
 end
 
 -- 20 reactors must remain reachable on a short monitor.
-page._ui.mode = 'edit'
-page._ui.edit_view = 'list'
+page._ui.mode = 'list'
 local list_footer = render('reactor list initial')
 assert(list_footer, 'router page must render a visible footer')
 assert(#page._ui.reactor_btns < #reactors, 'short monitor should paginate the reactor list')
 assert(page._ui.list_scroll_down, 'reactor list must expose a down pager')
 for _ = 1, 40 do
-  if any_button(page._ui.reactor_btns, 'id', 'R20') then break end
+  if any_button(page._ui.reactor_btns, 'reactor_id', 'R20') then break end
   tap(page._ui.list_scroll_down)
   render('reactor list page')
 end
-assert(any_button(page._ui.reactor_btns, 'id', 'R20'), 'last configured reactor must be reachable')
+assert(any_button(page._ui.reactor_btns, 'reactor_id', 'R20'), 'last configured reactor must be reachable')
 
 -- A 12-step valve chain must not overflow the card and the last step must be reachable.
-local sides = { 'top', 'bottom', 'left', 'right', 'front', 'back' }
 local long_path = {}
-for i = 1, 12 do long_path[i] = { side = sides[((i - 1) % #sides) + 1] } end
-page._ui.edit_view = 'path'
-page._ui.editing = { reactor = 'R01', label = 'Reactor 1', path = long_path }
-page._ui.pending_side = nil
+for i = 1, 12 do long_path[i] = string.format('VALVE-%02d', ((i - 1) % 20) + 1) end
+page._ui.mode = 'path'
+page._ui.editing = { reactor_id = 'R01', label = 'Reactor 1', inlet = 'inlet_1', path = long_path, request_below = 0.25, fill_amount = 64, min_in_me = 32 }
 page._ui.path_scroll = 0
 page._ui.picker_scroll = 0
 render('long path initial')
@@ -128,19 +130,7 @@ for _ = 1, 30 do
 end
 assert(any_button(page._ui.step_btns, 'index', 12), 'last valve step must be reachable')
 
--- All six local sides must be reachable even when the picker is short.
-page._ui.pending_side = nil
-page._ui.picker_scroll = 0
-render('side picker initial')
-for _ = 1, 20 do
-  if any_button(page._ui.side_btns, 'side', 'back') then break end
-  tap(page._ui.picker_scroll_down)
-  render('side picker page')
-end
-assert(any_button(page._ui.side_btns, 'side', 'back'), 'last built-in side must be reachable')
-
--- 20 VALVE nodes must also be pageable in the integrator picker.
-page._ui.pending_side = 'front'
+-- 20 VALVE nodes must be pageable in the picker.
 page._ui.picker_scroll = 0
 render('integrator picker initial')
 for _ = 1, 40 do
@@ -155,15 +145,11 @@ assert(any_button(page._ui.integrator_btns, 'integrator', 'VALVE-20'), 'last VAL
 local sizes = { {30, 12}, {40, 16}, {51, 19}, {80, 20}, {100, 30} }
 for _, size in ipairs(sizes) do
   width, height = size[1], size[2]
-  page._ui.mode = 'edit'
-  page._ui.edit_view = 'list'
+  page._ui.mode = 'list'
   render(string.format('list %dx%d', width, height))
-  page._ui.edit_view = 'path'
-  page._ui.editing = { reactor = 'R01', label = 'Reactor 1', path = long_path }
-  page._ui.pending_side = nil
+  page._ui.mode = 'path'
+  page._ui.editing = { reactor_id = 'R01', label = 'Reactor 1', inlet = 'inlet_1', path = long_path, request_below = 0.25, fill_amount = 64, min_in_me = 32 }
   render(string.format('path %dx%d', width, height))
-  page._ui.pending_side = 'front'
-  render(string.format('picker %dx%d', width, height))
 end
 
 print('fuel_router_ui_pagination_test.lua: ok')
