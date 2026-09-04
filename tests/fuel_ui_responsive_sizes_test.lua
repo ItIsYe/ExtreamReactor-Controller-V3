@@ -59,15 +59,13 @@ local mon = { getSize = function() return width, height end }
 local reactors = {
   {
     label = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', configured_inlet = 'inlet_1', connected = true,
-    last_item = 'bigreactors:yellorium_ingot', last_element = 'yellorium',
-    request_below = 0.25, fill_amount = 64, min_in_me = 32,
+    item = 'bigreactors:yellorium_ingot', request_below = 0.25, fill_amount = 64, min_in_me = 32,
     fuel_pct = 60, fuel_data_state = 'FRESH', fuel_age_s = 2, fuel_source = 'MASTER',
     route_state = 'ROUTE_READY', operational_state = 'READY', delivery_state = 'READY',
   },
   {
     label = 'R2', reactor_id = 'rid-2', inlet = 'inlet_2', configured_inlet = 'inlet_2', connected = true,
-    last_item = 'bigreactors:yellorium_ingot', last_element = 'yellorium',
-    request_below = 0.30, fill_amount = 32, min_in_me = 16,
+    item = 'bigreactors:yellorium_ingot', request_below = 0.30, fill_amount = 32, min_in_me = 16,
     fuel_pct = 20, fuel_data_state = 'FRESH', fuel_age_s = 3, fuel_source = 'DIRECT',
     route_state = 'ROUTE_READY', operational_state = 'READY', delivery_state = 'REQUESTING',
   },

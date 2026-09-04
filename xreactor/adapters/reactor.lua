@@ -160,7 +160,7 @@ function reactor.inspect(name, log_prefix)
   if fuel == nil then fuel = read_number(name, "getFuelAmount", log_prefix) end
   if waste == nil then waste = read_number(name, "getWasteAmount", log_prefix) end
   if fuel_max == nil then fuel_max = read_number(name, "getFuelAmountMax", log_prefix) end
-  local rods = reactor.read_control_rods(name, log_prefix, method_set)
+  local rods = reactor.read_control_rods(name, log_prefix)
   local steam = read_number(name,
     has_method(method_set, "getHotFluidAmount") and "getHotFluidAmount"
       or has_method(method_set, "getSteamAmount") and "getSteamAmount"
@@ -213,15 +213,9 @@ end
 
 -- Returns aggregate and completeness data. Safety callers must use minimum +
 -- complete, not only average insertion.
--- method_set is optional: pass the already-computed set from a caller that
--- just did its own build_method_set(name) (e.g. reactor.inspect()) to skip
--- a second, redundant peripheral.getMethods() call on the same peripheral.
-function reactor.read_control_rods_detail(name, log_prefix, method_set)
+function reactor.read_control_rods_detail(name, log_prefix)
   if not name then return nil, "missing peripheral" end
-  if not method_set then
-    local _, computed_set = build_method_set(name)
-    method_set = computed_set
-  end
+  local _, method_set = build_method_set(name)
 
   local function summarize(levels, expected_count, source)
     local sum, count, min_level, max_level = 0, 0, nil, nil
@@ -381,8 +375,8 @@ function reactor.apply_rod_level(name, level, log_prefix)
   return nil, "unsupported methods (available=" .. tostring(#methods) .. ")"
 end
 
-function reactor.read_control_rods(name, log_prefix, method_set)
-  local detail, err = reactor.read_control_rods_detail(name, log_prefix, method_set)
+function reactor.read_control_rods(name, log_prefix)
+  local detail, err = reactor.read_control_rods_detail(name, log_prefix)
   if detail then return detail.average end
   return nil, err
 end

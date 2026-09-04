@@ -41,20 +41,15 @@ M.PRESETS = {
   update_available  = { instrument = "chime",  pitch = 8,  volume = 1, cooldown_ms = 30000 },
 }
 
-local SPEAKER_PROBE_INTERVAL_S = 30
-
--- Full peripheral.getNames()+getType() scan of every peripheral, only to
--- find one that's a speaker. Cached below (like optional/ampel.lua's
--- monitor cache) so this only runs once per SPEAKER_PROBE_INTERVAL_S
--- instead of on every single play() call.
-local function scan_for_speaker()
+local function find_speaker()
   if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
   local ok, names = pcall(peripheral.getNames)
   if not ok or type(names) ~= "table" then return nil end
   for _, name in ipairs(names) do
     local ok_t, ptype = pcall(peripheral.getType, name)
     if ok_t and tostring(ptype):find("speaker", 1, true) then
-      return name
+      local ok_w, spk = pcall(peripheral.wrap, name)
+      if ok_w and spk then return spk end
     end
   end
   return nil
@@ -65,29 +60,7 @@ end
 -- REPROCESSOR, LOG) kann seine eigene Instanz erstellen und beliebige
 -- Ereignisse ausloesen, ohne sich gegenseitig zu beeinflussen.
 function M.new()
-  local self = { last_played_ms = {}, speaker_cache = { name = nil, next_probe = 0 } }
-
-  -- Resolved speaker NAME is cached (re-probed every 30s, or immediately
-  -- if the cached name stops working) -- peripheral.wrap(name) itself is
-  -- cheap once the name is known, the expensive part is the getNames()+
-  -- getType() search this skips on a cache hit.
-  local function find_speaker()
-    local cache = self.speaker_cache
-    if cache.name then
-      local ok_w, spk = pcall(peripheral.wrap, cache.name)
-      if ok_w and spk then return spk end
-      cache.name = nil
-    end
-    local now = (os.clock and os.clock()) or 0
-    if now < (cache.next_probe or 0) then return nil end
-    cache.next_probe = now + SPEAKER_PROBE_INTERVAL_S
-    local name = scan_for_speaker()
-    if not name then return nil end
-    local ok_w, spk = pcall(peripheral.wrap, name)
-    if not ok_w or not spk then return nil end
-    cache.name = name
-    return spk
-  end
+  local self = { last_played_ms = {} }
 
   -- play(event_name, overrides): event_name ist entweder ein Key aus
   -- M.PRESETS ("alarm"/"clear"/"warning"/"startup") oder ein beliebiger

@@ -40,16 +40,8 @@ function M.new(opts)
     return false
   end
 
-  -- type_by_name is the current discover() call's name->getType() cache
-  -- (built once per scan below, see discover()'s "type_by_name" loop) --
-  -- passed in explicitly since is_blocked_type() is defined here, before
-  -- discover()'s locals exist, so it can't see them as an upvalue. Falls
-  -- back to a fresh getType() call when no cache is passed.
-  local function is_blocked_type(name, type_by_name)
-    local type_name = type_by_name and type_by_name[name]
-    if type_name == nil then
-      type_name = runtime.peripheral.getType(name)
-    end
+  local function is_blocked_type(name)
+    local type_name = runtime.peripheral.getType(name)
     if not type_name then
       return false
     end
@@ -172,14 +164,8 @@ function M.new(opts)
     local previous_adapters = runtime.devices.adapters or { matrices = {}, storages = {} }
     local next_matrix_identity_cache = {}
 
-    -- P-DISC: cache each name's getType() once here instead of calling it
-    -- again inside is_blocked_type() (via consider_name() below) for the
-    -- same name -- getType() previously ran twice per peripheral per scan.
-    local type_by_name = {}
     for _, name in ipairs(names) do
-      local ptype = runtime.peripheral.getType(name)
-      type_by_name[name] = ptype
-      if ptype == "monitor" then
+      if runtime.peripheral.getType(name) == "monitor" then
         registry_devices[#registry_devices + 1] = {
           name = name,
           type = "monitor",
@@ -193,7 +179,7 @@ function M.new(opts)
     local function consider_name(name)
       if seen[name] then return end
       seen[name] = true
-      if exclude_set[name] or is_blocked_type(name, type_by_name) then return end
+      if exclude_set[name] or is_blocked_type(name) then return end
       local forced_matrix = is_matrix_override(name)
       if include_set and not include_set[name] and not forced_matrix then return end
 

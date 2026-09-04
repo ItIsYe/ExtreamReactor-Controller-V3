@@ -72,24 +72,77 @@ local function rt_status(model)
   return "WARNING"
 end
 
--- Single inspect() pass per reactor, producing both the per-device detail
--- record AND the min/max/avg temperature stats -- previously two separate
--- functions each called reactor_adapter.inspect() independently for the
--- same reactors, doubling the (expensive, real-peripheral-call) inspect
--- sweep on every monitor update for no reason.
-function M.build_reactor_status(devices, reactor_adapter, log_prefix)
-  local list = {}
+function M.collect_reactor_temp_stats(devices, reactor_adapter, log_prefix)
   local min_temp, max_temp, sum_temp, count = nil, nil, 0, 0
   for _, entry in ipairs(devices.reactors or {}) do
     local info = reactor_adapter and type(reactor_adapter.inspect) == "function" and entry and entry.name and reactor_adapter.inspect(entry.name, log_prefix) or nil
-    if type(info) ~= "table" then info = {} end
-    local temp = info.temperature
+    local temp = type(info) == "table" and info.temperature or nil
     if type(temp) == "number" then
       count = count + 1
       sum_temp = sum_temp + temp
       if not min_temp or temp < min_temp then min_temp = temp end
       if not max_temp or temp > max_temp then max_temp = temp end
     end
+  end
+  return min_temp, max_temp, count > 0 and (sum_temp / count) or nil
+end
+
+function M.collect_turbine_rpm_stats(devices, turbine_adapter, read_turbine_rpm, get_device_caps, log_prefix)
+  local min_rpm, max_rpm, sum_rpm, count = nil, nil, 0, 0
+  for _, entry in ipairs(devices.turbines or {}) do
+    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
+      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
+    local rpm = type(info) == "table" and info.rpm or nil
+    if type(rpm) ~= "number" and entry and entry.name
+        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
+      local turbine = peripheral.wrap(entry.name)
+      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
+      rpm = read_turbine_rpm and read_turbine_rpm(turbine, caps) or nil
+    end
+    if type(rpm) == "number" then
+      count = count + 1
+      sum_rpm = sum_rpm + rpm
+      if not min_rpm or rpm < min_rpm then min_rpm = rpm end
+      if not max_rpm or rpm > max_rpm then max_rpm = rpm end
+    end
+  end
+  return min_rpm, max_rpm, count > 0 and (sum_rpm / count) or nil
+end
+
+function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
+  local list, total_output = {}, 0
+  for _, entry in ipairs(devices.turbines or {}) do
+    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
+      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
+    if type(info) ~= "table" then info = {} end
+    local rpm, flow = info.rpm, info.flow
+    if (type(rpm) ~= "number" or type(flow) ~= "number") and entry and entry.name
+        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
+      local turbine = peripheral.wrap(entry.name)
+      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
+      if type(rpm) ~= "number" and read_turbine_rpm then rpm = read_turbine_rpm(turbine, caps) end
+      if type(flow) ~= "number" and read_turbine_flow then flow = read_turbine_flow(turbine, caps) end
+    end
+    local energy = num(info.energy, nil)
+    if energy then total_output = total_output + energy end
+    list[#list + 1] = {
+      id = entry.id,
+      bound = entry.bound ~= false,
+      rpm = rpm,
+      flow = flow,
+      energy = energy,
+      active = info.active,
+      inductor = info.coil_engaged,
+    }
+  end
+  return list, total_output
+end
+
+function M.build_reactor_status_details(devices, reactor_adapter, log_prefix)
+  local list = {}
+  for _, entry in ipairs(devices.reactors or {}) do
+    local info = reactor_adapter and type(reactor_adapter.inspect) == "function" and entry and entry.name and reactor_adapter.inspect(entry.name, log_prefix) or nil
+    if type(info) ~= "table" then info = {} end
     local rods = info.control_rod_level
     if rods == nil and reactor_adapter and type(reactor_adapter.read_control_rods) == "function" and entry and entry.name then
       rods = reactor_adapter.read_control_rods(entry.name, log_prefix)
@@ -111,51 +164,15 @@ function M.build_reactor_status(devices, reactor_adapter, log_prefix)
       coolant_filled_percentage = info.coolant_filled_percentage,
     }
   end
-  return list, min_temp, max_temp, count > 0 and (sum_temp / count) or nil
-end
-
--- Same consolidation as M.build_reactor_status() above, for turbines.
-function M.build_turbine_status(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
-  local list, total_output = {}, 0
-  local min_rpm, max_rpm, sum_rpm, rpm_count = nil, nil, 0, 0
-  for _, entry in ipairs(devices.turbines or {}) do
-    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
-      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
-    if type(info) ~= "table" then info = {} end
-    local rpm, flow = info.rpm, info.flow
-    if (type(rpm) ~= "number" or type(flow) ~= "number") and entry and entry.name
-        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
-      local turbine = peripheral.wrap(entry.name)
-      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
-      if type(rpm) ~= "number" and read_turbine_rpm then rpm = read_turbine_rpm(turbine, caps) end
-      if type(flow) ~= "number" and read_turbine_flow then flow = read_turbine_flow(turbine, caps) end
-    end
-    if type(rpm) == "number" then
-      rpm_count = rpm_count + 1
-      sum_rpm = sum_rpm + rpm
-      if not min_rpm or rpm < min_rpm then min_rpm = rpm end
-      if not max_rpm or rpm > max_rpm then max_rpm = rpm end
-    end
-    local energy = num(info.energy, nil)
-    if energy then total_output = total_output + energy end
-    list[#list + 1] = {
-      id = entry.id,
-      bound = entry.bound ~= false,
-      rpm = rpm,
-      flow = flow,
-      energy = energy,
-      active = info.active,
-      inductor = info.coil_engaged,
-    }
-  end
-  return list, total_output, min_rpm, max_rpm, rpm_count > 0 and (sum_rpm / rpm_count) or nil
+  return list
 end
 
 function M.update_status_snapshot(ctx)
   local summary = ctx.devices.registry_summary or ctx.registry:get_summary() or {}
-  local reactors, min_temp, max_temp, avg_temp = M.build_reactor_status(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
-  local turbines, actual_output, min_rpm, max_rpm, avg_rpm = M.build_turbine_status(
-    ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
+  local min_temp, max_temp, avg_temp = M.collect_reactor_temp_stats(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
+  local min_rpm, max_rpm, avg_rpm = M.collect_turbine_rpm_stats(
+    ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.get_device_caps, ctx.log_prefix)
+  local turbines, actual_output = M.build_turbine_status_details(ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
   local capacity = ctx.capacity_learning or {}
   ctx.last_status_snapshot = {
     ts = os.epoch("utc"),
@@ -179,7 +196,7 @@ function M.update_status_snapshot(ctx)
     capacity_stable_samples = capacity.ready and 1 or 0,
     capacity_stable_turbines = capacity.at_target or 0,
     capacity_total_turbines = capacity.total_turbines or 0,
-    reactors = reactors,
+    reactors = M.build_reactor_status_details(ctx.devices, ctx.reactor_adapter, ctx.log_prefix),
     turbines = turbines,
   }
   return ctx.last_status_snapshot

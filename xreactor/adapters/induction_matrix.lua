@@ -427,15 +427,9 @@ function matrix.detect(name, log_prefix, opts)
     return nil, "unsupported_value:" .. table.concat(type_summary, ",") .. ":" .. describe_value(first_payload)
   end
 
-  -- stored/capacity mirror the underlying storage_adapter's own features
-  -- (not just "does a storage_adapter exist") -- energy_storage.lua's ER2
-  -- passive-reactor-port profile has no capacity method at all
-  -- (profile.capacity == nil, features.capacity == false there), which
-  -- storage_adapter ~= nil alone can't tell apart from a fully-featured
-  -- matrix. Same pattern already used for input/output below.
   local features = {
-    stored = storage_adapter and storage_adapter.features and storage_adapter.features.stored or false,
-    capacity = storage_adapter and storage_adapter.features and storage_adapter.features.capacity or false,
+    stored = storage_adapter ~= nil,
+    capacity = storage_adapter ~= nil,
     input = storage_adapter and storage_adapter.features and storage_adapter.features.input or false,
     output = storage_adapter and storage_adapter.features and storage_adapter.features.output or false,
     cells = get_cells ~= nil,

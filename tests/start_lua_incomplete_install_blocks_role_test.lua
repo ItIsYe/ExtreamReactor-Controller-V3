@@ -34,8 +34,7 @@ local repo_root = os.getenv("REPO_ROOT") or "."
 local src = read_file(repo_root .. "/xreactor/start.lua")
 
 local guard_snippet = 'local INSTALL_ROOT = "/xreactor"\n'
-  .. 'local CONFIG_DIR = "/xreactor_config"\n'
-  .. 'local ROLE_PATH = CONFIG_DIR .. "/role.lua"\n'
+  .. 'local ROLE_PATH = INSTALL_ROOT .. "/config/role.lua"\n'
   .. extract(src, "local function p(msg)", "\nlocal function read_role()")
 
 -- Sanity: the extraction must actually contain the guard, not just p().
@@ -57,12 +56,11 @@ local function run_guard(journal_files, http_should_succeed)
   local sleep_calls = 0
   local dofile_calls = {}
 
-  -- CONFIG_DIR is a sibling of /xreactor never touched by the install-time
-  -- tree wipe, so a real node with an interrupted install still has its
-  -- role.lua from before -- exactly the scenario an incomplete journal
-  -- represents here.
+  -- A real interrupted update has the verified external config backup used
+  -- by start.lua to restore role identity before unattended recovery.
   if journal_files then
-    fs_files['/xreactor_config/role.lua'] = 'return { role = "RT" }\n'
+    fs_files['/xreactor_recovery/config_backup.lua'] =
+      'return { ["role.lua"] = "return { role = \\\"RT\\\" }\\n" }\n'
   end
 
   _G.fs = {

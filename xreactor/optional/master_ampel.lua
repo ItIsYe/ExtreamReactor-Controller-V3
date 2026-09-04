@@ -88,7 +88,7 @@ function M.determine_color(runtime, constants)
 
   -- 2. ROT: kritische Alerts oder RT im SAFE/EMERGENCY.
   local alert_service = runtime.refs and runtime.refs.alert_service
-  local counts = alert_service and alert_service.get_counts and alert_service:get_counts() or {}
+  local counts = alert_service and alert_service.get_counts_by_severity and alert_service:get_counts_by_severity() or {}
   if (counts.CRITICAL or 0) > 0 then return "red" end
 
   local nodes = state.nodes or {}

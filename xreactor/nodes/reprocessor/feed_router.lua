@@ -26,7 +26,6 @@
 --   redstone_tree = { ... }  -- siehe nodes/fuel/redstone_router.lua
 
 local redstone_router_lib = require("nodes.fuel.redstone_router")
-local me_bridge_compat = require("core.me_bridge_compat")
 
 local M = {}
 
@@ -74,17 +73,16 @@ end
 -- ---- peripheral discovery --------------------------------------------------
 
 -- Faellt, sofern kein expliziter Name konfiguriert ist, auf eine
--- Methodensignatur-Suche zurueck (core/me_bridge_compat.lua, deckt beide
--- Advanced-Peripherals-API-Generationen ab) -- Advanced Peripherals
--- vergibt generierte Namen wie "meBridge_0"/"me_bridge_3", nicht den
--- Konventions-Default "me_bridge".
+-- Methodensignatur-Suche zurueck (getItem + exportItemToPeripheral) --
+-- Advanced Peripherals vergibt generierte Namen wie "meBridge_0", nicht
+-- den Konventions-Default "me_bridge".
 local function find_me_bridge_by_methods()
   for _, name in ipairs(peripheral.getNames() or {}) do
     local ok, methods = pcall(peripheral.getMethods, name)
     if ok and type(methods) == "table" then
       local set = {}
       for _, m in ipairs(methods) do set[m] = true end
-      if me_bridge_compat.is_bridge(set) then
+      if set.getItem and set.exportItemToPeripheral then
         return name
       end
     end
@@ -153,7 +151,7 @@ local function feed_one(self, cfg)
 
   -- Verfügbarkeit in ME prüfen
   local me_info = safe_call(bridge, "getItem", { name = item })
-  local in_me = me_bridge_compat.item_amount(me_info)
+  local in_me = type(me_info) == "table" and (me_info.amount or 0) or 0
   if in_me < amount then
     self.warn_once("me_low:" .. tostring(target.label),
       string.format("FeedRouter: ME hat nur %d %s (brauche %d) — übersprungen", in_me, item, amount))
@@ -166,11 +164,8 @@ local function feed_one(self, cfg)
   -- eine vorherige Befuellung noch nicht abgeschlossen ist -- wird dann
   -- einfach uebersprungen, das naechste Intervall versucht es erneut.
   local started, reason = self.rs_router:begin_transaction(target.label, function()
-    local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, target.inlet)
-    local err = nil
-    if not ok then err = result; result = nil end
-    local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
-      or (type(result) == "number" and result or 0)
+    local result, err = safe_call(bridge, "exportItemToPeripheral", { name = item, count = amount }, target.inlet)
+    local exported = type(result) == "table" and (result.amount or 0) or (type(result) == "number" and result or 0)
     if exported and exported > 0 then
       self._state.total_feeds = self._state.total_feeds + 1
       self._state.last_feed_ts = os.epoch("utc")

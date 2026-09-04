@@ -43,7 +43,6 @@ do
 
   _G.stage_mod = { write = function() return false, "simulated disk full" end }
   _G.INSTALL_ROOT = "/xreactor"
-  _G.CONFIG_DIR = "/xreactor_config"
   _G.role = { label = "FUEL-NODE" }
 
   local ok, err = run_snippet(role_snippet, function() end)
@@ -57,7 +56,7 @@ end
 
 -- ── Fall 2: INSTALL_ROOT-Neuanlage-Fehler muss abbrechen ────────────────────
 do
-  local root_snippet = extract(src, "-- Alte Installation löschen", "local ok_j2, err_j2 = journal_mod.write")
+  local root_snippet = extract(src, "-- Alte Installation löschen", "-- Minimal-Restore sofort")
 
   local existed = { ["/xreactor"] = true }
   _G.INSTALL_ROOT = "/xreactor"

@@ -22,6 +22,11 @@ local function value_label(command)
 end
 
 local function log_with_devices(devices, level, message)
+  local logger = type(devices) == "table" and devices.command_logger or nil
+  if type(logger) == "function" then
+    local ok = pcall(logger, level or "INFO", message)
+    if ok then return end
+  end
   utils.log("SUPPORT", message, level or "INFO")
 end
 

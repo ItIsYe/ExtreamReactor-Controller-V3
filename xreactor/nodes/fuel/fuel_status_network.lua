@@ -216,4 +216,6 @@ function M.make_overhear_service(cache, constants)
   }
 end
 
+M._store_direct = store_direct
+
 return M

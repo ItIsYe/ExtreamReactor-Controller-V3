@@ -7,7 +7,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor_config/node_id.txt",
+  NODE_ID_PATH = "/xreactor/config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5,
 }
@@ -33,10 +33,6 @@ local DEFAULT_CONFIG = {
   reset_log_on_start = true,
   wireless_modem = nil,
   sorter_name = nil,
-  -- Redstone-Fallback-Seite, NUR verwendet wenn kein Sorter gefunden werden
-  -- kann (siehe nodes/valve/controller.lua). nil = kein Fallback konfiguriert
-  -- -> Ventil bleibt ohne Sorter unsteuerbar, wie zuvor.
-  redstone_side = nil,
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval = 5,
@@ -48,7 +44,7 @@ local DEFAULT_CONFIG = {
   }
 }
 
-local VALVE_USER_CONFIG_PATH = "/xreactor_config/valve.lua"
+local VALVE_USER_CONFIG_PATH = "/xreactor/config/valve.lua"
 if not fs.exists(VALVE_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -74,24 +70,11 @@ if config.sorter_name ~= nil and (type(config.sorter_name) ~= "string" or config
   add_config_warning("sorter_name ungueltig, wird ignoriert (automatische Suche)")
   config.sorter_name = nil
 end
-local VALID_REDSTONE_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
-if config.redstone_side ~= nil and (type(config.redstone_side) ~= "string" or not VALID_REDSTONE_SIDES[config.redstone_side]) then
-  add_config_warning("redstone_side ungueltig, wird ignoriert (top/bottom/left/right/front/back erlaubt)")
-  config.redstone_side = nil
-end
 
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
   config_meta = config_meta, config_warnings = config_warnings
 })
-
--- Clear display name assigned once by the installer (installer/valve_
--- naming.lua) -- read-only here, never written back. Broadcast on every
--- outgoing message as comms_service's "label" so FUEL's routing UI can
--- show it instead of the raw node_id (see core/comms.lua's peer.label).
-local valve_name_cfg = utils.load_config("/xreactor_config/valve_name.lua", { name = nil })
-local valve_label = type(valve_name_cfg.name) == "string" and valve_name_cfg.name ~= ""
-  and valve_name_cfg.name or nil
 
 local valve_health = health.new({})
 local desired_high = config.default_blocked ~= false
@@ -164,7 +147,7 @@ local function check_teach_input()
   teach_input_state = any_high
 end
 
-local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label })
+local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX })
 local services = service_manager.new()
 services:add(comms)
 services:add({ name = "valve_channel", wants_events = true, tick = function(_self, dt, event)
@@ -199,7 +182,6 @@ local function build_status_payload()
   payload.blocked = state.initialized and state.current_high or nil
   payload.actuator_ready = actuator_ready
   payload.actuator_name = state.sorter_name
-  payload.actuator_mode = state.actuator_mode
   payload.write_error = state.last_write_error
   return payload
 end
@@ -218,7 +200,6 @@ services:add(telemetry_service.new({
       actuator_ready = state.initialized and state.last_write_error == nil,
       write_error = state.last_write_error,
       actuator_name = state.sorter_name,
-      actuator_mode = state.actuator_mode,
       trusted_source = state.trusted_source,
       pairing_persisted = state.pairing_persisted,
       pairing_error = state.pairing_error,
@@ -230,7 +211,6 @@ services:init()
 local initial_state = controller:get_state()
 utils.log(CONFIG.LOG_PREFIX,
   "VALVE-Node gestartet: sorter=" .. tostring(initial_state.sorter_name or "auto")
-    .. " actuator_mode=" .. tostring(initial_state.actuator_mode)
     .. " node_id=" .. tostring(node_id), "INFO")
 
 local quiesce_handshake = _G.__xreactor_update_handshake

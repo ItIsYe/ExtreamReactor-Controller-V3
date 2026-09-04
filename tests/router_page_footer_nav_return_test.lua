@@ -3,16 +3,23 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- Regression test fuer den gemeldeten Bug "ZURUECK-Button funktioniert
 -- nicht" auf der FUEL/REPROCESSOR-Router-Seite (Fix 2026-07-26).
 --
--- core/ui_router.lua nutzt den Rueckgabewert von page.render() als Quelle
--- fuer die sichtbaren ZURUECK/WEITER-Touch-Zonen. Deshalb muss jede Router-
--- Page einen Footer mit left/right-Koordinaten zurueckgeben.
+-- Root cause: die "Router"-Seiten-Eintraege in nodes/fuel/monitor_ui.lua
+-- und nodes/reprocessor/main.lua wrappen router_ui.lua:render() in einer
+-- eigenen Closure (statt sie wie Overview/Details/Diagnostics direkt als
+-- page.render zuzuweisen) -- diese Closure gab bisher NICHTS zurueck.
+-- core/ui_router.lua's render() nutzt den Rueckgabewert von page.render()
+-- (page_footer) aber, um zu entscheiden, ob es die tatsaechlich sichtbaren
+-- ZURUECK/WEITER-Touch-Zonen von router_ui.lua uebernimmt oder stattdessen
+-- seinen eigenen generischen "< Page X/Y >"-Indikator mit einer eigenen,
+-- an einer ANDEREN Position liegenden Touch-Zone zeichnet. Mit
+-- page_footer == nil (der Bug) registrierte core/ui_router.lua die
+-- Touch-Zone also an der FALSCHEN Stelle -- ein Tap auf den sichtbaren
+-- ZURUECK-Button (von router_ui.lua gezeichnet) traf nie diese Zone.
 --
--- FUEL hat seit beta-v613 absichtlich einen eigenen, groesseren Footer:
--- router_ui:render() zeichnet zuerst den Router-Inhalt, danach zeichnet
--- large_footer() die tatsaechlich sichtbaren grossen FUEL-Navigationsbuttons.
--- Folglich muessen fuer FUEL die Koordinaten von large_footer() an den
--- ui_router zurueckgereicht werden. REPROCESSING verwendet weiterhin direkt
--- den Footer von router_ui:render().
+-- Extrahiert (String-Marker, wie tests/valve_failed_write_retry_test.lua)
+-- exakt den "Router"-Tabelleneintrag aus beiden Dateien und beweist, dass
+-- sein render()-Feld den Rueckgabewert von get_router_ui():render()
+-- durchreicht, statt ihn zu verschlucken.
 
 local function read_file(path)
   local f = assert(io.open(path, 'r'))
@@ -33,57 +40,36 @@ local function assert_true(value, message)
   if not value then error(message or 'assert_true failed') end
 end
 
--- 1. nodes/fuel/monitor_ui.lua's "Router"-Eintrag: sichtbar ist der neue
--- grosse FUEL-Footer, also muss genau dessen Touch-Geometrie zurueckkommen.
+-- 1. nodes/fuel/monitor_ui.lua's "Router"-Eintrag (ctx.get_router_ui()).
 do
   local source = read_file('xreactor/nodes/fuel/monitor_ui.lua')
   local entry_src = extract(source,
-    '{ name = "Router", render = function(target, page_model, should_clear)',
+    '{ name = "Router", render = function(target, model, should_clear)',
     'ctx.get_router_ui():handle_touch(x, y) end }')
 
-  local old_router_footer = { left = { x1 = 2, x2 = 10, y = 20 }, right = { x1 = 50, x2 = 60, y = 20 } }
-  local large_fuel_footer = { left = { x1 = 3, x2 = 17, y = 20 }, right = { x1 = 46, x2 = 60, y = 20 } }
-  local render_calls = 0
+  local mock_footer = { left = { x1 = 2, x2 = 10, y = 20 }, right = { x1 = 50, x2 = 60, y = 20 } }
   local mock_router_ui = {
-    render = function(_self, _target, _ui, _colors, _should_clear)
-      render_calls = render_calls + 1
-      return old_router_footer
-    end,
+    render = function(_self, _target, _ui, _colors, _should_clear) return mock_footer end,
     handle_touch = function(_self, _x, _y) return true end,
   }
 
   local chunk = [[
-local ctx = {
-  get_router_ui = function() return ROUTER_UI_MOCK end,
-  ui = nil,
-  colors = nil,
-}
-local large_footer = function(_target, center)
-  assert(center == "ROUTER")
-  return LARGE_FOOTER_MOCK
-end
+local ctx = { get_router_ui = function() return ROUTER_UI_MOCK end }
 return ]] .. entry_src
 
-  local env = {
-    ROUTER_UI_MOCK = mock_router_ui,
-    LARGE_FOOTER_MOCK = large_fuel_footer,
-    assert = assert,
-  }
+  local env = { ROUTER_UI_MOCK = mock_router_ui }
   env._G = env
   local fn = assert(load(chunk, 'fuel_router_page_entry_chunk', 't', env))
   local entry = fn()
 
-  assert_true(type(entry.render) == 'function', 'the FUEL Router page entry must have a render field')
+  assert_true(type(entry.render) == 'function', 'the Router page entry must have a render field')
   local result = entry.render('MON', 'MODEL', true)
-  assert_true(render_calls == 1, 'FUEL Router page must still render router_ui exactly once')
-  assert_true(result == large_fuel_footer,
-    'nodes/fuel/monitor_ui.lua: Router page must return the visible large_footer() touch geometry')
-  assert_true(result.left and result.right,
-    'nodes/fuel/monitor_ui.lua: returned FUEL footer must expose left/right touch zones')
+  assert_true(result == mock_footer,
+    'nodes/fuel/monitor_ui.lua: the Router page render() must return get_router_ui():render()\'s result ' ..
+    '(the visible ZURUECK/WEITER footer coordinates) instead of swallowing it as nil')
 end
 
--- 2. nodes/reprocessor/main.lua's "Router"-Eintrag verwendet weiterhin
--- direkt den Footer von router_ui:render().
+-- 2. nodes/reprocessor/main.lua's "Router"-Eintrag (upvalue get_router_ui()).
 do
   local source = read_file('xreactor/nodes/reprocessor/main.lua')
   local entry_src = extract(source,
@@ -106,10 +92,11 @@ return ]] .. entry_src
   local fn = assert(load(chunk, 'reprocessor_router_page_entry_chunk', 't', env))
   local entry = fn()
 
-  assert_true(type(entry.render) == 'function', 'the REPROCESSOR Router page entry must have a render field')
+  assert_true(type(entry.render) == 'function', 'the Router page entry must have a render field')
   local result = entry.render('MON', 'MODEL', true)
   assert_true(result == mock_footer,
-    'nodes/reprocessor/main.lua: Router page render() must return router_ui:render() footer geometry')
+    'nodes/reprocessor/main.lua: the Router page render() must return get_router_ui():render()\'s result ' ..
+    '(the visible ZURUECK/WEITER footer coordinates) instead of swallowing it as nil')
 end
 
 print("router_page_footer_nav_return_test.lua: ok")

@@ -32,7 +32,7 @@ local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Cont
 
 local MODULE_NAMES = {
   "http", "manifest", "stage", "ui", "journal", "plan_validator",
-  "reactor_naming", "valve_naming",
+  "reactor_naming",
 }
 
 -- Liefert fuer jedes Modul einen minimalen, aber gueltigen Modul-Body

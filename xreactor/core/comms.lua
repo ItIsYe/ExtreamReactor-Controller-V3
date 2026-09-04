@@ -28,7 +28,6 @@ local state = {
   seq = 0,
   node_id = nil,
   role = nil,
-  label = nil,
   proto_ver = nil,
   config = nil,
   network = nil,
@@ -63,7 +62,6 @@ local function reset_runtime_state()
   state.seq = 0
   state.node_id = nil
   state.role = nil
-  state.label = nil
   state.proto_ver = nil
   state.config = nil
   state.network = nil
@@ -215,7 +213,6 @@ local function update_peer(message)
   peer.last_seen = now_ms()
   peer.last_message_type = message.type
   peer.role = message.role
-  peer.label = message.label
   peer.proto_ver = message.proto_ver
   peer.stale_since = nil
   peer.stale_observations = 0
@@ -246,7 +243,6 @@ local function build_message(dst, msg_type, payload)
     node_id = state.node_id,
     dst = dst,
     role = state.role,
-    label = state.label,
     ts = now_ms(),
     timestamp = now_ms(),
     proto_ver = state.proto_ver,
@@ -330,16 +326,11 @@ local function queue_entry(message, channel, opts)
     volatile_key = volatile_key
   }
   table.insert(state.queue, entry)
+  table.sort(state.queue, function(a, b) return a.priority < b.priority end)
   return entry
 end
 
 local function flush_queue()
-  -- Sorted once per flush instead of on every single queue_entry() insert
-  -- (previously re-sorted the whole queue on every enqueue) --
-  -- flush_queue() processes every entry in order every call regardless, so
-  -- sorting immediately before that single pass is equivalent and cheaper
-  -- under bursts of several sends between flushes.
-  table.sort(state.queue, function(a, b) return a.priority < b.priority end)
   local remaining = {}
   local now_ts = now_ms()
   local ttl_ms = (state.config.volatile_ttl_s or DEFAULT_CONFIG.volatile_ttl_s) * 1000
@@ -635,7 +626,6 @@ function comms.init(opts)
   state.network = opts.network or network_lib.init(opts)
   state.node_id = opts.node_id or state.network.id
   state.role = opts.role or state.network.role
-  state.label = opts.label
   state.proto_ver = opts.proto_ver or constants.proto_ver
   state.log_prefix = opts.log_prefix or "COMMS"
   state.logger = opts.logger
@@ -745,7 +735,6 @@ function comms.get_peer_state()
       age = delta,
       stale = delta > state.config.peer_timeout_s,
       role = data.role,
-      label = data.label,
       proto_ver = data.proto_ver,
       stale_since = data.stale_since,
       stale_observations = data.stale_observations or 0,

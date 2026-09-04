@@ -1,5 +1,33 @@
 local M = {}
 
+local function build_matrix_signature(matrices)
+  local parts = {}
+  for _, entry in ipairs(matrices or {}) do
+    table.insert(parts, table.concat({
+      tostring(entry.name or ""),
+      tostring(entry.percent or 0),
+      tostring(entry.stored or 0),
+      tostring(entry.capacity or 0),
+      tostring(entry.input or 0),
+      tostring(entry.output or 0),
+      tostring(entry.status or "")
+    }, ":"))
+  end
+  return table.concat(parts, "|")
+end
+
+local function build_storage_signature(storages)
+  local parts = {}
+  for _, entry in ipairs(storages or {}) do
+    table.insert(parts, table.concat({
+      tostring(entry.id or ""),
+      tostring(entry.stored or 0),
+      tostring(entry.capacity or 0)
+    }, ":"))
+  end
+  return table.concat(parts, "|")
+end
+
 function M.new(opts)
   opts = opts or {}
   local runtime = {
@@ -82,8 +110,39 @@ function M.new(opts)
     return model
   end
 
+  local function build_snapshot_key(model)
+    return runtime.utils.safe_serialize({
+      health = model.health_status,
+      degraded = model.degraded,
+      reason = model.degraded_reason,
+      scan = model.last_scan_ts,
+      scan_result = model.scan_result,
+      err = model.last_error,
+      err_ts = model.last_error_ts,
+      cmd = model.last_command,
+      cmd_ts = model.last_command_ts,
+      matrices = build_matrix_signature(model.matrices),
+      storages = build_storage_signature(model.storages),
+      total = model.total,
+      registry = model.registry_summary,
+      comms = model.comms and model.comms.metrics,
+      master_state = model.master_state,
+      master_age = model.master_age,
+      local_alerts = model.local_alerts_critical
+    }) or tostring(model)
+  end
+
+  local function get_ui_snapshot_key(snapshot_opts)
+    local model = build_ui_model(snapshot_opts)
+    local key = build_snapshot_key(model)
+    runtime.ui_model_cache.key = key
+    return key
+  end
+
   return {
-    build_ui_model = build_ui_model
+    build_ui_model = build_ui_model,
+    build_snapshot_key = build_snapshot_key,
+    get_ui_snapshot_key = get_ui_snapshot_key
   }
 end
 

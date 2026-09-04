@@ -1,24 +1,16 @@
--- Dedicated, testable controller for one Mekanism Logistical Sorter, with a
--- redstone fallback for valves that have no sorter at all.
+-- Dedicated, testable controller for one Mekanism Logistical Sorter.
 --
--- The VALVE role prefers the sorter's automatic-ejection mode as its
--- actuator: blocked=true disables automatic ejection. Whenever a sorter is
--- resolvable, EVERY redstone side is actively held low -- the sorter's own
--- physical redstone input must never be able to override the ejection state
--- this module just wrote via the Mekanism API. Only when no sorter can be
--- found at all does config.redstone_side (if set) become the actuator,
--- using a plain redstone.setOutput()/getOutput() write+readback instead.
--- This module owns the physical write/readback, command deduplication,
--- sender pairing and the optional one-colour status monitor. The top-level
--- main.lua only wires it into CC:Tweaked services.
+-- The VALVE role uses the sorter's automatic-ejection mode as its only
+-- actuator: blocked=true disables automatic ejection.  This module owns the
+-- physical write/readback, command deduplication, sender pairing and the
+-- optional one-colour status monitor.  The top-level main.lua only wires it
+-- into CC:Tweaked services.
 
 local M = {}
 M.__index = M
 
 local AUTO_MODE_READERS = { "getAutoMode", "isAutoMode", "getAutoEject", "isAutoEject" }
 local SEEN_COMMAND_LIMIT = 16
-local ALL_SIDES = { "top", "bottom", "left", "right", "front", "back" }
-local VALID_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
 
 local function now_ms(os_api)
   if os_api and type(os_api.epoch) == "function" then return os_api.epoch("utc") end
@@ -46,7 +38,6 @@ function M.new(opts)
     peripheral = opts.peripheral_api or peripheral,
     colors = opts.colors_api or colors,
     os = opts.os_api or os,
-    redstone = opts.redstone_api or redstone,
 
     current_high = nil,
     initialized = false,
@@ -116,60 +107,13 @@ function M:_read_sorter_auto_mode(sorter)
   return nil, nil, "readback_unavailable"
 end
 
--- Haelt jede Redstone-Seite aktiv auf false, sobald ein Sorter ansteuerbar
--- ist -- ein Sorter reagiert selbst auf ein eingehendes Redstone-Signal
--- (typisches Mekanism-Verhalten), das wuerde die per Mekanism-API gesetzte
--- Ejection unbemerkt uebersteuern. Laeuft bei jedem sorter-basierten Schreib-
--- vorgang mit (nicht nur beim Ersterkennen) -- selbstheilend, falls extern
--- doch mal ein Signal anliegt. pcall-geschuetzt: fehlt die Redstone-API in
--- Tests/Sandboxes, ist das kein Fehler fuer den eigentlichen Ventil-Write.
-function M:_disable_all_redstone_sides()
-  local rs = self.redstone
-  if not rs or type(rs.setOutput) ~= "function" then return end
-  for _, side in ipairs(ALL_SIDES) do
-    pcall(rs.setOutput, side, false)
-  end
-end
-
--- Redstone-Fallback: nur aktiv, wenn KEIN Sorter gefunden werden kann UND
--- config.redstone_side auf eine der sechs gueltigen Seiten gesetzt ist.
--- Ohne Sorter und ohne konfigurierte Seite bleibt das Ventil unsteuerbar
--- (wie zuvor). high=true -> BLOCKED, exakt dieselbe Konvention wie
--- nodes/fuel/redstone_router.lua's eigener redstone.setOutput()-Zweig.
-function M:_write_redstone_actuator(high)
-  local side = self.config.redstone_side
-  if not valid_string(side) or not VALID_SIDES[side] then
-    local label = self.config.sorter_name and ("'" .. tostring(self.config.sorter_name) .. "'")
-      or "automatic discovery failed"
-    return false, "sorter not found (" .. label .. ") and no redstone_side configured"
-  end
-  local rs = self.redstone
-  if not rs or type(rs.setOutput) ~= "function" then
-    return false, "redstone API unavailable"
-  end
-  local ok = pcall(rs.setOutput, side, high)
-  if not ok then
-    return false, "redstone.setOutput failed for side '" .. side .. "'"
-  end
-  if type(rs.getOutput) == "function" then
-    local ok_read, actual = pcall(rs.getOutput, side)
-    if ok_read and type(actual) == "boolean" then
-      if actual ~= high then
-        return false, "redstone readback mismatch side=" .. side
-          .. " expected=" .. tostring(high) .. " actual=" .. tostring(actual)
-      end
-    end
-  end
-  return true, nil, "redstone:" .. side
-end
-
 function M:_write_actuator(high)
   local sorter = self:_get_sorter()
   if not sorter then
-    return self:_write_redstone_actuator(high)
+    local label = self.config.sorter_name and ("'" .. tostring(self.config.sorter_name) .. "'")
+      or "automatic discovery failed"
+    return false, "sorter not found (" .. label .. ")"
   end
-
-  self:_disable_all_redstone_sides()
 
   -- high=true means BLOCKED, so automatic ejection must be disabled.
   local desired_auto = not high
@@ -219,16 +163,6 @@ function M:render_status_monitor()
   else self.status_monitor = nil; self.status_monitor_last_color = nil end
 end
 
--- Menschenlesbare Kennung des aktuell aktiven Aktors, fuer Logs/get_state():
--- ein per Methodensignatur oder Konfig-Name aufgeloester Sorter hat Vorrang,
--- sonst die konfigurierte Redstone-Fallback-Seite (falls gesetzt).
-function M:_actuator_label()
-  local sorter_label = self.sorter_resolved_name or self.config.sorter_name
-  if sorter_label then return tostring(sorter_label) end
-  if valid_string(self.config.redstone_side) then return "redstone:" .. self.config.redstone_side end
-  return "?"
-end
-
 function M:apply_valve(high, force_physical)
   if type(high) ~= "boolean" then return false end
   if not force_physical and self.initialized and high == self.current_high then
@@ -240,7 +174,7 @@ function M:apply_valve(high, force_physical)
   if not ok then
     self.last_write_error = tostring(err)
     self:render_status_monitor()
-    self:_log("Actuator write failed (" .. self:_actuator_label()
+    self:_log("Sorter write failed (" .. tostring(self.sorter_resolved_name or self.config.sorter_name or "?")
       .. "): " .. tostring(err), "ERROR")
     return false
   end
@@ -250,8 +184,8 @@ function M:apply_valve(high, force_physical)
   self.last_write_error = nil
   self.last_command_ts = now_ms(self.os)
   self:render_status_monitor()
-  self:_log(string.format("Actuator %s -> %s proof=%s",
-    self:_actuator_label(),
+  self:_log(string.format("Sorter %s -> %s proof=%s",
+    tostring(self.sorter_resolved_name or self.config.sorter_name or "?"),
     high and "BLOCKED" or "OPEN", tostring(proof or "write")), "INFO")
   return true
 end
@@ -362,19 +296,12 @@ function M:tick_failsafe(stale_command_s, retry_ms)
 end
 
 function M:get_state()
-  local sorter_label = self.sorter_resolved_name or self.config.sorter_name
   return {
     current_high = self.current_high,
     initialized = self.initialized,
     last_write_error = self.last_write_error,
     last_command_ts = self.last_command_ts,
-    sorter_name = sorter_label,
-    -- "sorter" wenn ein Sorter aufloesbar ist (auch wenn der letzte Schreib-
-    -- vorgang fehlschlug -- der Sorter bleibt der bevorzugte Aktor), sonst
-    -- "redstone" wenn eine Fallback-Seite konfiguriert ist, sonst "none".
-    actuator_mode = (self.sorter_device ~= nil or sorter_label ~= nil) and "sorter"
-      or (valid_string(self.config.redstone_side) and "redstone" or "none"),
-    redstone_side = self.config.redstone_side,
+    sorter_name = self.sorter_resolved_name or self.config.sorter_name,
     trusted_source = self.config.trusted_source,
     pairing_persisted = self.pairing_persisted,
     pairing_error = self.last_pairing_error,

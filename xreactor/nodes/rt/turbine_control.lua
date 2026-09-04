@@ -34,28 +34,8 @@
 --   ctx.safe_wrapped_call    -- function(obj, method, ...) -> ok, result
 --   ctx.reactor_control      -- reactor_control-Modul (für setReactorActive,
 --                               has_reactor_rod_write_path, ensure_reactor_ctrl)
---   ctx.modules              -- optional: modules_registry (see cached_rotor_rpm())
 
 local M = {}
-
--- module_lifecycle.update_module_states() always runs before updateControl()
--- in the same control_tick() (safety-first ordering, see main.lua), and
--- unconditionally refreshes every turbine module's .last_rotor_rpm every
--- tick -- so if a module for this turbine name exists, its cached RPM is
--- guaranteed fresh for THIS tick and can be reused instead of calling
--- getRotorSpeed() a second time. Returns (rpm, true) when reused, or
--- (nil, false) when no module was found -- callers fall back to a direct
--- read in that case, exactly like before this optimization existed.
-local function cached_rotor_rpm(ctx, name)
-  local modules = ctx.modules
-  if type(modules) ~= "table" then return nil, false end
-  for _, module in pairs(modules) do
-    if module.type == "turbine" and module.name == name then
-      return module.last_rotor_rpm, true
-    end
-  end
-  return nil, false
-end
 
 -- ── Interne Turbinen-Ctrl-Verwaltung ────────────────────────────────────────
 -- Ersetzt ensure_turbine_ctrl (war ein Modul mit reset()-Methode).
@@ -230,6 +210,7 @@ end
 -- ── Turbinen-Initialisierung ─────────────────────────────────────────────────
 
 function M.init_turbine_ctrl(ctx)
+  ctx.flow_apply_helpers.reset_log_state()
   ctx.turbine_ctrl_store = {}
   ctx.autonom_state.turbines = {}
   local turbines = ctx.config.turbines or {}
@@ -856,10 +837,18 @@ function M.updateControl(ctx)
   end
 
   local turbine_index = 0
+  local eval_total, eval_decision, eval_skipped = 0, 0, 0
+  local skip_reasons = {}
+  local function track_skip(reason)
+    local key = tostring(reason or "UNKNOWN")
+    skip_reasons[key] = (skip_reasons[key] or 0) + 1
+    eval_skipped = eval_skipped + 1
+  end
 
   for _, name in ipairs(ctx.config.turbines or {}) do
     local ctrl = get_turbine_ctrl(ctx, name)
     turbine_index = turbine_index + 1
+    eval_total = eval_total + 1
 
     -- Gleiches Discovery-Cache-Muster wie oben bei Reaktoren.
     local turbine = ctx.peripherals and ctx.peripherals.turbines and ctx.peripherals.turbines[name]
@@ -868,6 +857,7 @@ function M.updateControl(ctx)
       ok, turbine = pcall(peripheral.wrap, name)
     end
     if not ok or not turbine then
+      track_skip("WRAP_FAILED")
       ctx.warn_once("turbine_wrap:" .. name,
         "Turbine wrap failed for " .. name .. ": " .. tostring(turbine))
       goto continue_control_turbine
@@ -877,8 +867,10 @@ function M.updateControl(ctx)
     local has_flow_api, flow_api_reason = turbine_has_flow_setter(ctx, turbine, caps)
     if not has_flow_api then
       ctrl.flow_api_missing_ticks = (ctrl.flow_api_missing_ticks or 0) + 1
+      track_skip(flow_api_reason)
       if ctrl.flow_api_missing_ticks >= 5 then
         warn_unsupported(ctx, name, flow_api_reason)
+      else
       end
       goto continue_control_turbine
     end
@@ -888,18 +880,16 @@ function M.updateControl(ctx)
     if not ok_active then
       ctx.warn_once("turbine_active:" .. name,
         "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
+      track_skip("SET_ACTIVE_FAILED_NONFATAL")
     elseif not active_result then
       ctx.warn_once("turbine_set_active_unavailable:" .. name,
         "Turbine active API unavailable for " .. name .. " (continuing with flow control)")
     end
 
-    local rpm, rpm_cached = cached_rotor_rpm(ctx, name)
-    if not rpm_cached then
-      rpm = nil
-      if turbine.getRotorSpeed then
-        local rpm_ok, value = ctx.safe_wrapped_call(turbine, "getRotorSpeed")
-        if rpm_ok and type(value) == "number" then rpm = value end
-      end
+    local rpm = nil
+    if turbine.getRotorSpeed then
+      local rpm_ok, value = ctx.safe_wrapped_call(turbine, "getRotorSpeed")
+      if rpm_ok and type(value) == "number" then rpm = value end
     end
 
     local effective_target = M.get_turbine_target_rpm(ctx, turbine_index)
@@ -908,6 +898,7 @@ function M.updateControl(ctx)
     if not ok_inductor then
       ctx.warn_once("turbine_inductor:" .. name,
         "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
+      track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
 
     local set_ok, result, _, apply_reason =
@@ -916,16 +907,28 @@ function M.updateControl(ctx)
       ctx.warn_once("turbine_flow:" .. name,
         "Turbine flow update failed for " .. name .. ": " .. tostring(result)
         .. " reason=" .. tostring(apply_reason))
+      track_skip(apply_reason or "FLOW_SET_CALL_FAILED")
       goto continue_control_turbine
     end
     if not result then
+      track_skip(apply_reason or "FLOW_SET_SKIPPED")
       goto continue_control_turbine
     end
 
+    eval_decision = eval_decision + 1
     if not ctx.autonom_control_logged then
       ctx.autonom_control_logged = true
     end
     ::continue_control_turbine::
+  end
+
+  local reason_parts = {}
+  for reason, count in pairs(skip_reasons) do
+    reason_parts[#reason_parts + 1] = tostring(reason) .. "=" .. tostring(count)
+  end
+  table.sort(reason_parts)
+  -- TurbineTick nur loggen wenn Entscheidungen getroffen wurden (nicht leere Ticks)
+  if eval_decision > 0 then
   end
 end
 

@@ -57,7 +57,6 @@ function comms_service.new(opts)
     log_prefix = opts.log_prefix or "COMMS",
     role = opts.role,
     node_id = opts.node_id,
-    label = opts.label,
     on_message = opts.on_message,
     on_command = opts.on_command,
     on_status = opts.on_status,
@@ -151,7 +150,6 @@ function comms_service:init()
     network = self.network,
     node_id = self.network.id,
     role = self.network.role,
-    label = self.label,
     proto_ver = constants.proto_ver,
     log_prefix = self.log_prefix,
     config = self.config.comms or {}
@@ -302,29 +300,11 @@ end
 -- Guarded here as defense-in-depth: a role that forgets to call
 -- services:init() before its event loop now fails safe (drops the
 -- event) instead of crashing on the first modem_message.
---
--- Real-world logs (2026-09-02, VALVE + FUEL) showed a second instance of
--- the same bug class already fixed for the LOG channel: a modem_message
--- carries no inherent routing -- any open channel on the modem a role's
--- wireless comms uses raises the same "modem_message" event, delivered to
--- every handler regardless of which channel it was meant for. VALVE and
--- FUEL both also run nodes/fuel/redstone_router.lua's own raw
--- SET_VALVE/VALVE_ACK/ROUTE_TEACH_PULSE protocol on constants.channels.VALVE
--- -- on the common single-modem setup that channel is opened on the same
--- modem as control/status, so those messages leaked in here too and were
--- rejected by comms.receive()/validateMessage() as "missing role" (they
--- carry src but no role/payload, never having been meant for this
--- pipeline). Filtering by message.type (as already done for LOG_* above)
--- doesn't scale to every sideband protocol a role might add -- filter by
--- channel instead: only control/status traffic belongs on this pipeline.
 function comms_service:handle_event(event)
   if not self.comms then return end
   if event[1] == "modem_message" then
-    local channel, message = event[3], event[5]
+    local _, _, _, _, message = table.unpack(event)
     if utils.handle_remote_log_message and utils.handle_remote_log_message(message) then
-      return true
-    end
-    if channel ~= control_channel(self.config) and channel ~= status_channel(self.config) then
       return true
     end
     self.comms.receive(message)

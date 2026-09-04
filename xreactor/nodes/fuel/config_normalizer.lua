@@ -13,20 +13,6 @@ function M.normalize(config_values, defaults, add_warning, utils)
     config_values.storage_bus = defaults.storage_bus
     add_warning("storage_bus invalid; defaulting to " .. tostring(defaults.storage_bus))
   end
-  if config_values.reserve_items ~= nil and type(config_values.reserve_items) ~= "table" then
-    config_values.reserve_items = defaults.reserve_items
-    add_warning("reserve_items invalid; defaulting to shipped item list")
-  elseif type(config_values.reserve_items) == "table" then
-    local cleaned = {}
-    for i, entry in ipairs(config_values.reserve_items) do
-      if type(entry) == "table" and nonempty_string(entry.item) then
-        cleaned[#cleaned + 1] = entry
-      else
-        add_warning(string.format("reserve_items[%d] invalid; ignoring", i))
-      end
-    end
-    config_values.reserve_items = cleaned
-  end
   if config_values.minimum_reserve == nil and type(config_values.target) == "number" then
     config_values.minimum_reserve = config_values.target
     add_warning("minimum_reserve missing; using target value " .. tostring(config_values.target))
@@ -94,8 +80,8 @@ function M.normalize(config_values, defaults, add_warning, utils)
         add_warning(string.format("logistics.reactors[%d] missing inlet peripheral", i))
         unsafe_reactor_config = true
       end
-      if r.path ~= nil and type(r.path) ~= "table" then
-        add_warning(string.format("logistics.reactors[%d].path invalid; expected a list of VALVE-Node ids", i))
+      if not nonempty_string(r.item) then
+        add_warning(string.format("logistics.reactors[%d] missing item name", i))
         unsafe_reactor_config = true
       end
       if r.request_below ~= nil then

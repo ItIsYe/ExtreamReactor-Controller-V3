@@ -67,28 +67,6 @@ function M.badge(mon, x, y, text, status)
     colors.get("background"), colors.get(status or "OK"))
 end
 
--- A visually prominent action button: a solid, filled block (optionally
--- multiple rows tall) with a centered label -- unlike badge()/data_row(),
--- which only colors the TEXT and leave the surrounding background
--- untouched, this fills the entire w x h area so the button reads
--- unmistakably as "tappable" on a monitor, not just as colored text.
--- Returns its touch bounds { x1, x2, y, y2 } (y2 == y when h == 1),
--- ready to hand straight to a handle_touch() hit-test.
-function M.button(mon, x, y, w, label, status, h)
-  h = math.max(1, math.floor(tonumber(h) or 1))
-  w = math.max(1, math.floor(tonumber(w) or 1))
-  local bg = colors.get(status or "OK")
-  local fg = colors.get("background")
-  local text = fit(tostring(label or ""), math.max(1, w - 2))
-  local label_row = y + math.floor((h - 1) / 2)
-  for row = y, y + h - 1 do
-    write(mon, x, row, string.rep(" ", w), fg, bg)
-  end
-  local tx = x + math.max(0, math.floor((w - #text) / 2))
-  write(mon, tx, label_row, text, fg, bg)
-  return { x1 = x, x2 = x + w - 1, y = y, y2 = y + h - 1 }
-end
-
 function M.clear(mon)
   local w, h = mon.getSize()
   fill(mon, 1, 1, w, h, colors.get("background"))

@@ -164,14 +164,7 @@ local function render_rt_card(mon, x, y, w, rt, hits)
   mux.data_row(mon, bx, by + 4, bw, { label = "SEEN", value = tostring(rt.last_seen_age or "-") .. "s | " .. safe_text(rt.assignment_state, "-"), status = "muted" })
   mux.data_row(mon, bx, by + 5, bw, { label = "SRC", value = safe_text(rt.control_source, "-") .. " | " .. safe_text(rt.display_mode, "-"), status = "muted" })
   mux.data_row(mon, bx, by + 6, bw, { label = "QUEUE / SD", value = safe_text(rt.queue_state, "idle") .. " | " .. safe_text(rt.queue_step, "-") .. " | " .. shutdown_verdict(rt), status = "muted" })
-  -- actual is a raw RF/t figure (often in the thousands) -- clamping it to
-  -- [0,100] before dividing by 100 always saturated the bar near 100%.
-  -- Show output relative to the node's learned capacity (falling back to
-  -- its current target when capacity isn't known yet), same convention as
-  -- nodes/rt/mockup_pages.lua's own capacity-relative progress bar.
-  local capacity = first_number(rt and rt.capacity_max, target, 0)
-  local output_ratio = capacity > 0 and math.max(0, math.min(1, actual / capacity)) or 0
-  mux.outlined_progress(mon, bx, by + 7, bw, output_ratio, status_key, nil)
+  mux.outlined_progress(mon, bx, by + 7, bw, math.max(0, math.min(100, actual)) / 100, status_key, nil)
 end
 
 local function render_overflow_card(mon, x, y, w, hidden_nodes)

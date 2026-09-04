@@ -44,9 +44,14 @@ _G.peripheral = {
   wrap = function() return nil end,
 }
 
-local function ack(router, integrator, applied, high)
-  local entry = router._state.pending_valve_acks and router._state.pending_valve_acks[integrator]
-  if not entry then error('no pending command for ' .. integrator) end
+local function valve_key(integrator, side)
+  return tostring(integrator or '') .. '|' .. tostring(side)
+end
+
+local function ack(router, integrator, side, applied, high)
+  local key = valve_key(integrator, side)
+  local entry = router._state.pending_valve_acks and router._state.pending_valve_acks[key]
+  if not entry then error('no pending command for ' .. key) end
   router:handle_valve_ack({
     type = 'VALVE_ACK', command_id = entry.command_id,
     src = entry.dst, dst = entry.src,
@@ -67,8 +72,8 @@ end
 
 local function make_router()
   local tree = {
-    { integrator = 'VALVE-A', reactor = 'R1', label = 'Reactor1' },
-    { integrator = 'VALVE-B', reactor = 'R2', label = 'Reactor2' },
+    { side = 'top', integrator = 'VALVE-A', reactor = 'R1', label = 'Reactor1' },
+    { side = 'bottom', integrator = 'VALVE-B', reactor = 'R2', label = 'Reactor2' },
   }
   local router = redstone_router.new({
     config = { logistics = { redstone_tree = tree } },
@@ -87,12 +92,12 @@ local router = make_router()
 --    fuer BEIDE Ventile (aus der WAIT_FINAL_ACKS-Phase nach dem Export). ──
 local export1 = false
 router:begin_transaction('R1', function() export1 = true end, 500)
-ack(router, 'VALVE-A', true, true)
-ack(router, 'VALVE-B', true, true)
+ack(router, 'VALVE-A', 'top', true, true)
+ack(router, 'VALVE-B', 'bottom', true, true)
 router:tick(clock)
 assert_eq(router._state.transaction.state, 'WAIT_OPEN_ACKS', 'tx1 should reach WAIT_OPEN_ACKS')
 
-ack(router, 'VALVE-A', true, false)
+ack(router, 'VALVE-A', 'top', true, false)
 router:tick(clock)
 assert_eq(router._state.transaction.state, 'WAIT_SETTLE', 'tx1 should reach WAIT_SETTLE')
 
@@ -105,17 +110,17 @@ clock = clock + 600
 router:tick(clock)
 assert_eq(router._state.transaction.state, 'WAIT_FINAL_ACKS', 'tx1 should reach WAIT_FINAL_ACKS')
 
-ack(router, 'VALVE-A', true, true)
-ack(router, 'VALVE-B', true, true)
+ack(router, 'VALVE-A', 'top', true, true)
+ack(router, 'VALVE-B', 'bottom', true, true)
 router:tick(clock)
 assert_eq(router._state.transaction, nil, 'tx1 should complete cleanly')
 
 -- Stale state now sits in confirmed_valve_state for both keys, both
 -- applied=true/high=true, tied to tx1's now-irrelevant command ids.
-assert_true(router._state.confirmed_valve_state['VALVE-A'] ~= nil, 'stale confirmed state must exist for VALVE-A')
-assert_true(router._state.confirmed_valve_state['VALVE-B'] ~= nil, 'stale confirmed state must exist for VALVE-B')
-local stale_cid_a = router._state.confirmed_valve_state['VALVE-A'].command_id
-local stale_cid_b = router._state.confirmed_valve_state['VALVE-B'].command_id
+assert_true(router._state.confirmed_valve_state['VALVE-A|top'] ~= nil, 'stale confirmed state must exist for VALVE-A')
+assert_true(router._state.confirmed_valve_state['VALVE-B|bottom'] ~= nil, 'stale confirmed state must exist for VALVE-B')
+local stale_cid_a = router._state.confirmed_valve_state['VALVE-A|top'].command_id
+local stale_cid_b = router._state.confirmed_valve_state['VALVE-B|bottom'].command_id
 
 -- ── Transaktion 2: sendet erneut BLOCKED (high=true) fuer dieselben
 --    Ventile -- exakt derselbe angeforderte Wert wie der stale State. ALLE
@@ -128,14 +133,14 @@ assert_eq(ok2, true, 'tx2 should start')
 assert_eq(router._state.transaction.state, 'WAIT_BLOCK_ACKS', 'tx2 should start in WAIT_BLOCK_ACKS')
 
 -- New command ids for the same keys must differ from the stale ones.
-local new_cid_a = router._state.pending_valve_acks['VALVE-A'].command_id
-local new_cid_b = router._state.pending_valve_acks['VALVE-B'].command_id
+local new_cid_a = router._state.pending_valve_acks['VALVE-A|top'].command_id
+local new_cid_b = router._state.pending_valve_acks['VALVE-B|bottom'].command_id
 assert_true(new_cid_a ~= stale_cid_a, 'tx2 must issue a fresh command_id for VALVE-A, distinct from tx1')
 assert_true(new_cid_b ~= stale_cid_b, 'tx2 must issue a fresh command_id for VALVE-B, distinct from tx1')
 
 exhaust_pending_acks(router)
-assert_true(router._state.pending_valve_acks['VALVE-A'] == nil, 'tx2 VALVE-A ack must have been given up on')
-assert_true(router._state.pending_valve_acks['VALVE-B'] == nil, 'tx2 VALVE-B ack must have been given up on')
+assert_true(router._state.pending_valve_acks['VALVE-A|top'] == nil, 'tx2 VALVE-A ack must have been given up on')
+assert_true(router._state.pending_valve_acks['VALVE-B|bottom'] == nil, 'tx2 VALVE-B ack must have been given up on')
 
 router:tick(clock)
 

@@ -47,7 +47,7 @@ if net.id ~= "node-42" then
   error("expected generated node id when config uses role default, got " .. tostring(net.id))
 end
 
-_G.fs._files["/xreactor_config/node_id.txt"] = "persisted-abc"
+_G.fs._files["/xreactor/config/node_id.txt"] = "persisted-abc"
 local net2 = network.init({ role = "ENERGY", node_id = "ENERGY-1" })
 if net2.id ~= "persisted-abc" then
   error("expected persisted node id to win over config defaults")

@@ -6,7 +6,7 @@
 
 local M = {}
 
-local ARMING_CONFIG_PATH = "/xreactor_config/remote_update.lua"
+local ARMING_CONFIG_PATH = "/xreactor/config/remote_update.lua"
 
 local function make_log(opts)
   opts = opts or {}

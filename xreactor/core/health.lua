@@ -1,3 +1,4 @@
+local constants = require("shared.constants")
 local health_codes = require("shared.health_codes")
 
 local health = {}
@@ -78,13 +79,8 @@ function health.summarize_bindings(bindings)
   return table.concat(parts, " ")
 end
 
--- entry is a health entry (as returned by health.new()/build_health()),
--- whose .status is always one of health.status's own OK/DEGRADED/DOWN
--- values -- it never holds a constants.status_levels value like WARNING
--- (that enum belongs to node.status, a different object entirely; see
--- master/message_handlers.lua's health_status_to_level()).
 function health.is_degraded(entry)
-  return entry.status == health.status.DEGRADED
+  return entry.status == health.status.DEGRADED or entry.status == constants.status_levels.WARNING
 end
 
 return health

@@ -141,7 +141,6 @@ function protocol.sanitize_message(message)
     src = normalize_remote_id(message.src or message.sender_id),
     dst = normalize_remote_id(message.dst),
     role = message.role,
-    label = message.label,
     ts = message.ts or message.timestamp,
     timestamp = message.ts or message.timestamp,
     proto_ver = normalize_proto(message.proto_ver),

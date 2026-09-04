@@ -1,15 +1,5 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Regression test fuer den Einzelbildschirm der FUEL-Router-Seite
--- (2026-09-04-Rewrite): kein TREE/EDIT-Tabpaar mehr -- der Statuspunkt
--- "REAKTOREN x/y BEREIT" (Zeile 3) und der EINLERNEN-Button (Zeile 4)
--- muessen bei einer leeren Reaktorliste sichtbar bleiben, auch nach einem
--- zweiten, nicht loeschenden Refresh (header() leert Zeile 3 bei jedem
--- Aufruf -- wenn TREE/EDIT bzw. jetzt REAKTOREN/EINLERNEN weiterhin die
--- gecachten core.ui-Primitiven benutzen wuerden, wuerde ein unveraendertes
--- zweites Frame beide Schreibvorgaenge ueberspringen und die Steuerelemente
--- verschwinden, obwohl ihre Touch-Zonen erhalten bleiben).
-
 _G.colors = _G.colors or {
   black = 1, gray = 2, white = 3, lightGray = 4, cyan = 5, lime = 6,
   green = 7, yellow = 8, orange = 9, red = 10, blue = 11,
@@ -19,7 +9,6 @@ _G.peripheral = {
   find = function() return nil end,
   isPresent = function() return false end,
   wrap = function() return nil end,
-  getNames = function() return {} end,
 }
 _G.redstone = { setOutput = function() end }
 
@@ -62,9 +51,7 @@ local ui = {
   end,
 }
 
-local config = { logistics = { reactors = {} } }
 local page = router_ui.new({
-  config = config,
   redstone_router = {
     config = { logistics = { redstone_tree = {} } },
     get_tree = function() return {} end,
@@ -78,28 +65,23 @@ local page = router_ui.new({
 page:render(mon, ui, nil, true)
 
 local row3 = row_text(3)
-assert(row3:find('REAKTOREN', 1, true), 'reactor-readiness status must be visible on the main screen')
-assert(page._ui.learn_btn, 'EINLERNEN touch zone must exist')
-assert(page._ui.mode == 'list', 'must start on the single main screen')
+assert(row3:find('EDIT', 1, true), 'EDIT tab must remain visible after tree/status rendering')
+assert(row3:find('TREE', 1, true), 'TREE tab must remain visible after tree/status rendering')
+assert(page._ui.edit_btn, 'EDIT touch zone must exist')
+assert(page._ui.empty_edit_btn, 'empty tree must expose explicit EDIT ROUTEN touch zone')
 
--- header() clears row 3 on every refresh. If the status dot still used the
--- cached core.ui primitives, an unchanged second frame would skip the
--- write and the status would disappear even though the touch zone survives.
+-- header() clears row 3 on every refresh. If TREE/EDIT still use the cached
+-- core.ui primitives, an unchanged second frame skips both writes and the
+-- controls disappear even though their touch zones survive.
 page:render(mon, ui, nil, false)
 row3 = row_text(3)
-assert(row3:find('REAKTOREN', 1, true), 'reactor-readiness status must be restored after every header refresh')
-assert(page._ui.learn_btn, 'EINLERNEN touch zone must survive an unchanged refresh')
+assert(row3:find('EDIT', 1, true) and row3:find('TREE', 1, true),
+  'TREE and EDIT must be restored after every header refresh')
 
-local b = page._ui.learn_btn
-assert(page:handle_touch(b.x1, b.y) == true, 'EINLERNEN touch must be consumed')
-assert(page._ui.mode == 'learn', 'EINLERNEN must open the reactor-learn picker')
+local b = page._ui.empty_edit_btn
+assert(page:handle_touch(b.x1, b.y) == true, 'empty-state EDIT touch must be consumed')
+assert(page._ui.mode == 'edit' and page._ui.edit_view == 'list', 'empty-state EDIT must open edit list')
 
 page:render(mon, ui, nil, false)
-assert(#(page._ui.learn_btns or {}) == 1, 'the learn picker must expose the live-broadcasting reactor')
-
-local learn_btn = page._ui.learn_btns[1]
-assert(page:handle_touch(learn_btn.x1, learn_btn.y) == true, 'tapping a learnable reactor must be consumed')
-assert(page._ui.mode == 'edit', 'tapping a learnable reactor must open the edit form')
-assert(page._ui.editing.reactor_id == 'RT-1', 'the edit form must carry the learned reactor_id, not a synthetic label')
-
+assert(#(page._ui.reactor_btns or {}) == 1, 'edit list must expose discovered/configured reactor target')
 print('fuel_router_edit_entry_test.lua: ok')

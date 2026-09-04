@@ -3,7 +3,7 @@
 
 local M = {}
 
-local ARMING_PATH = "/xreactor_config/remote_update.lua"
+local ARMING_PATH = "/xreactor/config/remote_update.lua"
 local RELEASE_PATH = "/xreactor/release.lua"
 local TEMP_INSTALLER = "/xreactor_auto_update_installer.lua"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
@@ -32,7 +32,7 @@ local QUIESCE_TIMEOUT_S = 60
 -- context needed to diagnose a failure right before a reboot -- a
 -- reboot's own first log line ("Loop gestartet") would silently erase
 -- whatever explained it.
-local STATUS_PATH = "/xreactor_config/auto_update_status.txt"
+local STATUS_PATH = "/xreactor/config/auto_update_status.txt"
 local STATUS_MAX_LINES = 20
 
 local function write_status(message)
@@ -170,15 +170,7 @@ local function fetch_remote_version()
   local base_url = GITHUB_RAW .. SOURCE_REF .. "/xreactor/release.lua"
   local last_error = "remote release unavailable"
   for attempt = 1, 3 do
-    -- First attempt uses the plain, cacheable URL -- every node checks this
-    -- on the same fixed cadence forever, so forcing a cache-bust (CDN
-    -- origin bypass) on every single routine check, on every node, was
-    -- observed in the field to contribute to GitHub rate-limiting the
-    -- shared server IP on raw.githubusercontent.com. Only a RETRY (a
-    -- previous attempt already failed, e.g. stale-cache right after a
-    -- fresh push) still forces a fresh fetch.
-    local url = (attempt == 1) and base_url or cache_bust(base_url, attempt)
-    local body, err = http_get_async(url)
+    local body, err = http_get_async(cache_bust(base_url, attempt))
     if body and not is_html(body) then
       local version = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
       if version then return version end
@@ -358,20 +350,15 @@ end
 -- das war von aussen (Terminal/Log-Export) nicht unterscheidbar, ob der
 -- periodische Check ueberhaupt laeuft/durchkommt, oder ob der Loop
 -- irgendwo haengt (siehe auto_update_loop_cadence_test.lua).
--- Returns false only for an actual failed remote-version fetch (timeout,
--- HTTP error, GitHub rate-limit block, ...) -- the caller uses this to back
--- off the check cadence. Every other outcome (skipped/disabled/unknown
--- local version/update performed) is a normal cycle, not a failure.
 local function do_periodic_check(handshake)
   local config, arm_err = load_arming()
-  if not config then log("Auto-Update uebersprungen: " .. tostring(arm_err)); return true end
-  if config.auto_update ~= true then log("Auto-Update deaktiviert (auto_update=false)"); return true end
+  if not config then log("Auto-Update uebersprungen: " .. tostring(arm_err)); return end
+  if config.auto_update ~= true then log("Auto-Update deaktiviert (auto_update=false)"); return end
 
   local remote_version, remote_err = fetch_remote_version()
   local local_version = read_version(RELEASE_PATH)
   if not remote_version then
     log("Remote-Version nicht abrufbar: " .. tostring(remote_err))
-    return false
   elseif not local_version then
     log("Lokale Version unbekannt")
   elseif remote_version > local_version then
@@ -380,7 +367,6 @@ local function do_periodic_check(handshake)
   else
     log("Update-Check ok: lokal v" .. local_version .. " aktuell (remote v" .. remote_version .. ")")
   end
-  return true
 end
 
 local function do_remote_request(handshake)
@@ -420,58 +406,23 @@ local function safe_call(handshake, label, callback)
   if not ok then recover_unexpected(handshake, label, err) end
 end
 
--- Per-node deterministic offset added to every timer delay, derived from
--- the computer ID (0 when unavailable, e.g. in offline tests). Many nodes
--- booted at the same server tick otherwise all poll GitHub raw at the
--- exact same second, forever, on the same fixed interval_s -- observed in
--- the field as a contributor to GitHub rate-limiting/blocking requests
--- from the shared server IP. A stable per-node offset spreads checks
--- across a ~45s window without needing an RNG (which CC:Tweaked does not
--- seed uniquely per computer on its own).
-local JITTER_MAX_S = 45
-local function node_jitter_s()
-  local id = os.getComputerID and os.getComputerID()
-  if type(id) ~= "number" then return 0 end
-  return id % JITTER_MAX_S
-end
-
--- After consecutive failed remote-version fetches (timeouts, HTTP errors,
--- GitHub rate-limit blocks, ...), double the wait before the next check
--- instead of retrying at the same fixed cadence forever -- hammering a
--- source that is already rate-limiting this server's IP only prolongs the
--- block. Resets to the normal cadence as soon as a check succeeds again.
-local BACKOFF_MULTIPLIER = 2
-local BACKOFF_MAX_S = 1800
-
 function M.make_loop(interval_s, handshake)
   interval_s = tonumber(interval_s) or 120
-  local jitter = node_jitter_s()
-  local consecutive_failures = 0
   return function()
-    log("Loop gestartet (Intervall " .. interval_s .. "s, Jitter " .. jitter .. "s)")
-    local next_delay = 30 + jitter
+    log("Loop gestartet (Intervall " .. interval_s .. "s)")
+    local next_delay = 30
     while true do
       -- Handles requests queued before this coroutine began waiting.
       safe_call(handshake, "remote_update", do_remote_request)
 
       local timer = os.startTimer(next_delay)
+      next_delay = interval_s
       while true do
         local event, id = os.pullEvent()
         if event == UPDATE_EVENT then
           safe_call(handshake, "remote_update", do_remote_request)
         elseif event == "timer" and id == timer then
-          local check_ok = true
-          safe_call(handshake, "periodic_update", function(hs)
-            check_ok = do_periodic_check(hs) ~= false
-          end)
-          if check_ok then
-            consecutive_failures = 0
-            next_delay = interval_s + jitter
-          else
-            consecutive_failures = consecutive_failures + 1
-            next_delay = math.min(BACKOFF_MAX_S, interval_s * (BACKOFF_MULTIPLIER ^ consecutive_failures)) + jitter
-            log("Backoff nach Fehlschlag #" .. consecutive_failures .. ": naechster Check in " .. next_delay .. "s")
-          end
+          safe_call(handshake, "periodic_update", do_periodic_check)
           break
         end
       end

@@ -94,28 +94,15 @@ function M.handle(message, ctx)
         return
       end
 
-      -- ctx.execute_command(action, params) gibt selbst schon (ok, message)
-      -- zurueck (siehe master/message_handlers.lua) -- pcall() legt davor
-      -- noch seinen EIGENEN Erfolgs-Flag, macht also drei Rueckgabewerte in
-      -- der Erfolgs-Bahn. Alle drei einzeln einfangen statt nur zwei, sonst
-      -- geht execute_command's echte Erfolgsmeldung verloren und "ok" zeigt
-      -- faelschlich fast immer true (pcalls eigener Flag statt dem echten).
-      local ok_exec, exec_result
+      local ok_exec, exec_result = false, "Keine execute_command-Funktion bereitgestellt"
       if type(ctx.execute_command) == "function" then
-        local pcall_ok, cmd_ok, cmd_msg = pcall(ctx.execute_command, payload.action, payload.params)
-        if not pcall_ok then
-          ok_exec, exec_result = false, tostring(cmd_ok)
-        else
-          ok_exec = cmd_ok == true
-          exec_result = tostring(cmd_msg or (ok_exec and "OK" or "Unbekannter Fehler"))
-        end
-      else
-        ok_exec, exec_result = false, "Keine execute_command-Funktion bereitgestellt"
+        ok_exec, exec_result = pcall(ctx.execute_command, payload.action, payload.params)
+        if not ok_exec then exec_result = tostring(exec_result) end
       end
 
       if ctx.comms and type(ctx.comms.send) == "function" then
         ctx.comms.send(message.sender_id, result_type,
-          { ok = ok_exec, reason = exec_result }, send_opts)
+          { ok = ok_exec == true or ok_exec == nil, reason = tostring(exec_result or "OK") }, send_opts)
       end
       if ctx.log then
         ctx.log(("Pocket command action=%s ok=%s sender=%s"):format(

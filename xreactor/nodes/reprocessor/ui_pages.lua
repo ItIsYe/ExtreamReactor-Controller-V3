@@ -58,15 +58,8 @@ function M.new(opts)
     local stored, capacity, active, buffers = totals(p)
     local ratio = capacity > 0 and math.max(0, math.min(1, stored / capacity)) or 0
     local feed = p.feed or {}
-    -- feed_router.lua:get_summary() liefert target_count/enabled -- die
-    -- fruehere Feldsuche (active_routes/active/routes_active/...) griff
-    -- nirgends, weil diese Namen aus der Fuel-UI kopiert wurden und
-    -- feed_router sie nie erzeugt. ROUTEN zeigte dadurch immer "0/0".
-    -- Es gibt keinen Pro-Route-Aktiv-Zaehler, nur einen globalen
-    -- enabled-Schalter -- solange Feeding aktiv ist, gelten alle
-    -- konfigurierten Targets als aktiv in der Rotation.
-    local routes_total = tonumber(feed.target_count) or 0
-    local routes_active = (feed.enabled == true) and routes_total or 0
+    local routes_active = tonumber(feed.active_routes or feed.active or feed.routes_active) or 0
+    local routes_total = tonumber(feed.total_routes or feed.total or feed.routes_total) or 0
     local key = p.standby and "LIMITED" or model.status == "OK" and "OK" or "WARNING"
     local banner = p.standby and "AUFBEREITUNG STANDBY" or model.status == "OK" and "AUFBEREITUNG NORMAL" or "AUFBEREITUNG WARNING"
 

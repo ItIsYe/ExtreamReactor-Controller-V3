@@ -44,11 +44,16 @@ _G.peripheral = {
   wrap = function() return nil end,
 }
 
--- Findet das zuletzt an eine VALVE-Node-ID gesendete Kommando und beantwortet
--- es per VALVE_ACK -- simuliert eine VALVE-Node-Antwort.
-local function ack(router, integrator, applied, high)
-  local entry = router._state.pending_valve_acks and router._state.pending_valve_acks[integrator]
-  if not entry then error('no pending command for ' .. integrator) end
+local function valve_key(integrator, side)
+  return tostring(integrator or '') .. '|' .. tostring(side)
+end
+
+-- Findet das zuletzt an einen Integrator/Side-Schluessel gesendete Kommando
+-- und beantwortet es per VALVE_ACK -- simuliert eine VALVE-Node-Antwort.
+local function ack(router, integrator, side, applied, high)
+  local key = valve_key(integrator, side)
+  local entry = router._state.pending_valve_acks and router._state.pending_valve_acks[key]
+  if not entry then error('no pending command for ' .. key) end
   router:handle_valve_ack({
     type = 'VALVE_ACK', command_id = entry.command_id,
     src = entry.dst, dst = entry.src,
@@ -58,8 +63,8 @@ end
 
 local function make_router()
   local tree = {
-    { integrator = 'VALVE-A', reactor = 'R1', label = 'Reactor1' },
-    { integrator = 'VALVE-B', reactor = 'R2', label = 'Reactor2' },
+    { side = 'top', integrator = 'VALVE-A', reactor = 'R1', label = 'Reactor1' },
+    { side = 'bottom', integrator = 'VALVE-B', reactor = 'R2', label = 'Reactor2' },
   }
   local router = redstone_router.new({
     config = { logistics = { redstone_tree = tree } },
@@ -91,8 +96,8 @@ do
   assert_eq(router._state.transaction.state, 'WAIT_BLOCK_ACKS', 'should still be waiting on block ACKs')
 
   -- Beide Ventile bestaetigen "blockiert" (high=true).
-  ack(router, 'VALVE-A', true, true)
-  ack(router, 'VALVE-B', true, true)
+  ack(router, 'VALVE-A', 'top', true, true)
+  ack(router, 'VALVE-B', 'bottom', true, true)
   router:tick(clock)
   assert_eq(router._state.transaction.state, 'WAIT_OPEN_ACKS', 'should advance to WAIT_OPEN_ACKS once all blocks confirmed')
   assert_true(not export_called, 'export must not run before target path is confirmed open')
@@ -105,7 +110,7 @@ do
   end
   assert_true(not export_called, 'export must not run before the target valve ACK arrives, no matter how much time passes')
 
-  ack(router, 'VALVE-A', true, false)
+  ack(router, 'VALVE-A', 'top', true, false)
   router:tick(clock)
   assert_eq(router._state.transaction.state, 'WAIT_SETTLE', 'should advance to WAIT_SETTLE once target path confirmed open')
   assert_true(not export_called, 'export must not run before settle time elapses')
@@ -127,8 +132,8 @@ do
 
   -- Zielpfad-Nebenventil (VALVE-B, fuer R1 ein Nebenpfad) meldet explizit
   -- "nicht angewendet".
-  ack(router, 'VALVE-A', true, true)
-  ack(router, 'VALVE-B', false, true)
+  ack(router, 'VALVE-A', 'top', true, true)
+  ack(router, 'VALVE-B', 'bottom', false, true)
   router:tick(clock)
 
   assert_true(not export_called, 'export must never run when a side-path valve fails to confirm blocked')
@@ -143,7 +148,7 @@ do
   local router = make_router()
   local export_called = false
   router:begin_transaction('R1', function() export_called = true end, 500)
-  ack(router, 'VALVE-A', true, true)
+  ack(router, 'VALVE-A', 'top', true, true)
   -- VALVE-B bleibt absichtlich unbeantwortet.
 
   clock = clock + 20000
@@ -158,10 +163,10 @@ do
   local router = make_router()
   local export_called = false
   router:begin_transaction('R1', function() export_called = true end, 500)
-  ack(router, 'VALVE-A', true, true)
-  ack(router, 'VALVE-B', true, true)
+  ack(router, 'VALVE-A', 'top', true, true)
+  ack(router, 'VALVE-B', 'bottom', true, true)
   router:tick(clock)
-  ack(router, 'VALVE-A', true, false)
+  ack(router, 'VALVE-A', 'top', true, false)
   router:tick(clock)
   clock = clock + 500
   router:tick(clock)
@@ -172,8 +177,8 @@ do
   router:tick(clock)
   assert_eq(router._state.transaction.state, 'WAIT_FINAL_ACKS', 'should move to WAIT_FINAL_ACKS after hold time elapses')
 
-  ack(router, 'VALVE-A', true, true)
-  ack(router, 'VALVE-B', true, true)
+  ack(router, 'VALVE-A', 'top', true, true)
+  ack(router, 'VALVE-B', 'bottom', true, true)
   router:tick(clock)
   assert_eq(router._state.transaction, nil, 'transaction should be complete once the final block is confirmed')
 end

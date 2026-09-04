@@ -23,22 +23,17 @@ assert "ui_diagnostics_overlay.attach" not in monitor_ui
 assert 'require("nodes.fuel.ui_diagnostics_overlay")' not in monitor_ui
 assert "ERR%d" in ui_pages
 assert "NAECHSTER SCHRITT" in ui_completion
-assert "ROUTER > REAKTOR EINLERNEN" in ui_completion
-assert "ROUTER > EINLERNEN" in ui_completion
+assert "ROUTER > EDIT" in ui_completion
 assert "inset = 3" in ui_completion
 
-# 2026-09-04: das alte TREE/EDIT-Tabpaar ist einem einzelnen Hauptbildschirm
-# (u.mode: list/learn/edit/inlet_pick/path) gewichen -- kein manuell
-# getippter Reaktorname mehr, sondern EINLERNEN aus einer echten,
-# live-meldenden RT-Node.
 render_start = router.index("function M:render(")
 render_end = router.index("function M:handle_touch", render_start)
 render_body = router[render_start:render_end]
-assert "u.mode == \"learn\"" in render_body
-assert "u.mode == \"edit\"" in render_body
-assert "u.mode == \"path\"" in render_body
-assert "learn_btn" in router
-assert "REAKTOR EINLERNEN" in router
-assert "Keine Reaktoren konfiguriert" in router
+assert render_body.rfind("self:_render_mode_tabs") > render_body.rfind("self:_render_tree")
+assert "empty_edit_btn" in router
+assert "[ EDIT ROUTEN ]" in router
+assert "if hit(u.edit_btn) or hit(u.empty_edit_btn) then" in router
+assert "inset = 3" in render_body
+assert "Keine Reaktor-Ziele gefunden" in router
 assert "opts.inset" in mockup
 print("fuel_ui_visual_regression_test.py: ok")

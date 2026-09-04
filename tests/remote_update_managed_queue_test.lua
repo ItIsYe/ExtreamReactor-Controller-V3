@@ -7,9 +7,9 @@ local original_queue_event = os.queueEvent
 
 local arming = 'return { enabled = true, token = "secret", auto_update = true }'
 _G.fs = {
-  exists = function(path) return path == '/xreactor_config/remote_update.lua' end,
+  exists = function(path) return path == '/xreactor/config/remote_update.lua' end,
   open = function(path, mode)
-    if path ~= '/xreactor_config/remote_update.lua' or mode ~= 'r' then return nil end
+    if path ~= '/xreactor/config/remote_update.lua' or mode ~= 'r' then return nil end
     return { readAll = function() return arming end, close = function() end }
   end,
 }

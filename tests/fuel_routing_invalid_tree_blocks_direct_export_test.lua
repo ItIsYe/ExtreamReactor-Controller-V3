@@ -36,14 +36,7 @@ end
 
 local function make_logistics(rs_router, export_result_fn)
   local exported_calls = {}
-  local router = logistics_router.new({
-    config = {
-      logistics = { enabled = true },
-      -- Einzelne Fuel-Familie, damit die Auto-Auswahl (build_fuel_families()/
-      -- pick_fuel_family()) unveraendert 'bigreactors:yellorium_ingot' liefert.
-      reserve_items = { { item = 'bigreactors:yellorium_ingot', element = 'yellorium' } },
-    },
-  })
+  local router = logistics_router.new({ config = { logistics = { enabled = true } } })
   router._state.bridge = {
     name = 'me_bridge',
     wrapped = {
@@ -56,7 +49,7 @@ local function make_logistics(rs_router, export_result_fn)
   }
   router._state.reactors = {
     {
-      label = 'Reactor A', reactor_id = nil,
+      label = 'Reactor A', reactor_id = nil, item = 'bigreactors:yellorium_ingot',
       inlet = { name = 'transporter_1' },
       request_below = 0.25, fill_amount = 64, min_in_me = 32, cfg = {},
     },

@@ -24,6 +24,13 @@ local function normalize_mode_key(mode)
   return tostring(mode):upper()
 end
 
+local function sort_by_priority_then_id(a, b)
+  if (a.priority or 0) == (b.priority or 0) then
+    return (a.id or "") < (b.id or "")
+  end
+  return (a.priority or 0) > (b.priority or 0)
+end
+
 -- P2: node_capacity gibt 0 zurück wenn der Node noch einlernt (capacity_ready=false).
 -- Damit rechnet der Master nicht mit einem falschen Platzhalter-Wert.
 -- Der Node wird mit 0% angesteuert bis sein echter Wert vorliegt.
@@ -206,18 +213,7 @@ function M.build_node_setpoint_plan(ctx)
   end
 
   table.sort(plan, function(a, b) return (a.id or "") < (b.id or "") end)
-  -- Kapazitaets-Sortierung (groesste zuerst) muss VOR der needed_nodes-
-  -- Greedy-Zaehlung passieren, nicht danach: sonst wird "wie viele Nodes
-  -- sind noetig" gegen eine andere Reihenfolge gezaehlt (zuvor: aktueller
-  -- Output) als die, gegen die anschliessend tatsaechlich ausgewaehlt wird
-  -- (Kapazitaet) -- das konnte unnoetig einen zusaetzlichen Reaktor
-  -- aktivieren, wenn ein Node mit hohem aktuellem Output aber kleiner
-  -- Kapazitaet den Zaehler vor einem viel groesseren, aber gerade
-  -- untaetigen Node verbraucht hat.
-  table.sort(active, function(a, b)
-    if a.capacity ~= b.capacity then return a.capacity > b.capacity end
-    return (a.id or "") < (b.id or "")
-  end)
+  table.sort(active, sort_by_priority_then_id)
   table.sort(pending_startup, function(a, b) return (a.id or "") < (b.id or "") end)
 
   local remaining = global_target
@@ -256,9 +252,12 @@ function M.build_node_setpoint_plan(ctx)
   --   - Kein Yo-Yo-Effekt
   --   - Bei 1 Node: identisches Ergebnis wie vorher
   --   - Skaliert korrekt auf N Nodes mit unterschiedlichen Kapazitäten
-  --
-  -- (Die Kapazitäts-Sortierung selbst passiert bereits oben, vor der
-  -- needed_nodes-Zählung -- siehe Kommentar dort.)
+
+  -- Nodes nach Kapazität sortieren (grösste zuerst)
+  table.sort(active, function(a, b)
+    if a.capacity ~= b.capacity then return a.capacity > b.capacity end
+    return (a.id or "") < (b.id or "")
+  end)
 
   -- Summe der Kapazitäten der benötigten Nodes
   local needed_capacity = 0

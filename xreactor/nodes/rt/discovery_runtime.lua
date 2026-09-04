@@ -105,7 +105,7 @@ end
 
 local function log_zero_visible_diagnostics(ctx, names)
   ctx.log("WARN", string.format(
-    "RT discovery found zero reactor/turbine peripherals; peripheral_count=%d config_path=/xreactor_config/rt.lua",
+    "RT discovery found zero reactor/turbine peripherals; peripheral_count=%d config_path=/xreactor/config/rt.lua",
     #(names or {})
   ))
   ctx.log("WARN", "RT discovery note: empty reactors/turbines lists mean auto-discovery; zero visible means no supported peripheral signature was detected")

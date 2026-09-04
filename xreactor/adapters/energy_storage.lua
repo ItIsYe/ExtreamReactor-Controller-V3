@@ -65,14 +65,9 @@ function energy_storage.detect(name, log_prefix)
     return nil
   end
   local type_name = peripheral.getType(name) or "unknown"
-  -- capacity war bisher hart auf true gesetzt, obwohl das ER2-Passive-
-  -- Reaktorport-Profil (getEnergyStored + getEnergyProducedLastTick) keine
-  -- Kapazitaets-Methode hat (profile.capacity == nil, siehe resolve_profile
-  -- oben) -- getCapacity() liefert dort immer nil, aber features.capacity
-  -- behauptete faelschlich, das Feature sei vorhanden.
   local features = {
     stored = true,
-    capacity = profile.capacity ~= nil,
+    capacity = true,
     input = profile.input ~= nil,
     output = profile.output ~= nil
   }

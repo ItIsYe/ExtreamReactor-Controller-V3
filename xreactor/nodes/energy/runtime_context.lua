@@ -51,6 +51,7 @@ function M.new(opts)
       stores = {},
       total = { stored = 0, capacity = 0, input = 0, output = 0 }
     },
+    warned = {},
     last_heartbeat = 0,
     last_heartbeat_warn = 0,
     master_seen_ts = nil,
@@ -61,6 +62,12 @@ function M.new(opts)
     last_matrix_mode = nil,
     role = role
   }
+end
+
+function M.warn_once(runtime, log_fn, key, message)
+  if runtime.warned[key] then return end
+  runtime.warned[key] = true
+  log_fn(message, "WARN")
 end
 
 function M.heartbeat_interval_ms(config)

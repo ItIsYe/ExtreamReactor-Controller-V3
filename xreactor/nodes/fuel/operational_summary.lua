@@ -29,8 +29,9 @@ local function config_for(config, reactor)
   local lg = type(config) == "table" and config.logistics or nil
   for _, entry in ipairs(type(lg) == "table" and lg.reactors or {}) do
     local rid = entry.reactor_id or entry.reactor_port
+    local label = entry.name or entry.label
     if (rid ~= nil and reactor.reactor_id ~= nil and tostring(rid) == tostring(reactor.reactor_id))
-        or (entry.label ~= nil and reactor.label ~= nil and tostring(entry.label) == tostring(reactor.label)) then
+        or (label ~= nil and reactor.label ~= nil and tostring(label) == tostring(reactor.label)) then
       return entry
     end
   end
@@ -91,13 +92,12 @@ local function route_state(ctx, reactor)
 
   local route = find_route(ctx, reactor)
   if not route then return "ROUTE_MISSING" end
-  -- path[i] is a plain VALVE-Node id string (see redstone_router.lua) --
-  -- no {side=,integrator=} step tables since the 2026-09-03 flat-path
-  -- rewrite.
   for _, step in ipairs(route.path or {}) do
-    local valve = ctx.valves[tostring(step)]
-    if not valve or valve.online ~= true then return "VALVE_OFFLINE" end
-    if valve.stale == true then return "VALVE_STALE" end
+    if type(step) == "table" and step.integrator ~= nil then
+      local valve = ctx.valves[tostring(step.integrator)]
+      if not valve or valve.online ~= true then return "VALVE_OFFLINE" end
+      if valve.stale == true then return "VALVE_STALE" end
+    end
   end
   return "ROUTE_READY"
 end
@@ -157,6 +157,7 @@ function M.enrich(summary, opts)
       reactor.fuel_capacity = valid_entry and entry.fuel_capacity or nil
 
       reactor.configured_inlet = cfg.inlet
+      reactor.item = cfg.item
       reactor.request_below = tonumber(cfg.request_below)
       reactor.fill_amount = tonumber(cfg.fill_amount)
       reactor.min_in_me = tonumber(cfg.min_in_me)
@@ -175,14 +176,6 @@ function M.enrich(summary, opts)
       else
         reactor.operational_state = "READY"
         counts.ready = counts.ready + 1
-      end
-
-      local last = summary.last_delivery
-      if type(last) == "table" and last.reactor_id ~= nil and reactor.reactor_id ~= nil
-          and tostring(last.reactor_id) == tostring(reactor.reactor_id) then
-        reactor.last_item = last.item
-        reactor.last_element = last.element
-        reactor.last_delivery_ts = last.finished_ts
       end
 
       if request_matches(summary.current_request, reactor) then

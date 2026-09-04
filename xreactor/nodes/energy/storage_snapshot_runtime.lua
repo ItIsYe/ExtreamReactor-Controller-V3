@@ -137,13 +137,10 @@ function M.new(opts)
       total = { stored = 0, capacity = 0, input = 0, output = 0 }
     }
     local age = now - (snapshot.ts or 0)
-    -- Absichtlich KEIN synchrones sample_storage_stats() hier, wenn der
-    -- Snapshot zu alt ist: read_storage_stats() wird ausschliesslich aus dem
-    -- Heartbeat-Thread aufgerufen (TELEMETRY/UI via build_status_payload),
-    -- der laut Architektur (siehe main.lua) niemals blockierend auf
-    -- Peripherie zugreifen darf -- das erledigt exklusiv der STORAGE_SAMPLE-
-    -- Service im separaten Matrix-Thread. Ein zu alter Snapshot wird
-    -- stattdessen einfach als `stale=true` durchgereicht.
+    if max_age_ms > 0 and age > max_age_ms then
+      snapshot = sample_storage_stats(now)
+      age = now - (snapshot.ts or 0)
+    end
     return {
       stored = tonumber(snapshot.total and snapshot.total.stored) or 0,
       capacity = tonumber(snapshot.total and snapshot.total.capacity) or 0,
