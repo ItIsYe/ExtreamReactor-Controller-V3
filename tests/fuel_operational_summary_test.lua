@@ -13,10 +13,11 @@ local operational = require('nodes.fuel.operational_summary')
 local summary = {
   enabled = true,
   bridge = 'meBridge_0',
+  export_chest = 'transporter_0',
   reactors = {
-    { label = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', connected = true, fuel_pct = 60 },
-    { label = 'R2', reactor_id = 'rid-2', inlet = 'inlet_2', connected = true, fuel_pct = nil },
-    { label = 'R3', reactor_id = 'rid-3', inlet = 'inlet_3', connected = true, fuel_pct = nil },
+    { label = 'R1', reactor_id = 'rid-1', connected = true, fuel_pct = 60 },
+    { label = 'R2', reactor_id = 'rid-2', connected = true, fuel_pct = nil },
+    { label = 'R3', reactor_id = 'rid-3', connected = true, fuel_pct = nil },
   },
   last_delivery = { reactor_id = 'rid-1', item = 'bigreactors:blutonium_ingot', element = 'blutonium', finished_ts = 97000 },
 }
@@ -24,9 +25,9 @@ local summary = {
 local config = {
   logistics = {
     reactors = {
-      { label = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', request_below = 0.25, fill_amount = 64, min_in_me = 32 },
-      { label = 'R2', reactor_id = 'rid-2', inlet = 'inlet_2', request_below = 0.30, fill_amount = 32, min_in_me = 16 },
-      { label = 'R3', reactor_id = 'rid-3', inlet = 'inlet_3', request_below = 0.35, fill_amount = 16, min_in_me = 8 },
+      { label = 'R1', reactor_id = 'rid-1', request_below = 0.25, fill_amount = 64, min_in_me = 32 },
+      { label = 'R2', reactor_id = 'rid-2', request_below = 0.30, fill_amount = 32, min_in_me = 16 },
+      { label = 'R3', reactor_id = 'rid-3', request_below = 0.35, fill_amount = 16, min_in_me = 8 },
     },
   },
 }
@@ -63,7 +64,6 @@ local r1, r2, r3 = summary.reactors[1], summary.reactors[2], summary.reactors[3]
 assert(r1.fuel_data_state == 'FRESH', 'fuel_pct from logistics summary is the canonical fresh signal')
 assert(r1.fuel_age_s == 1 and r1.fuel_source == 'MASTER', 'newest source and data age must be exposed')
 assert(r1.route_state == 'ROUTE_READY' and r1.operational_state == 'READY')
-assert(r1.configured_inlet == 'inlet_1')
 assert(r1.request_below == 0.25 and r1.fill_amount == 64 and r1.min_in_me == 32)
 assert(r1.last_item == 'bigreactors:blutonium_ingot' and r1.last_element == 'blutonium',
   'last_delivery matching this reactor_id must be surfaced as last_item/last_element')
@@ -91,7 +91,8 @@ assert(summary.routing_state == 'ROUTING_VALID')
 local direct = {
   enabled = true,
   bridge = 'meBridge_0',
-  reactors = { { label = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', connected = true, fuel_pct = 60 } },
+  export_chest = 'transporter_0',
+  reactors = { { label = 'R1', reactor_id = 'rid-1', connected = true, fuel_pct = 60 } },
 }
 operational.enrich(direct, {
   config = config,
@@ -105,5 +106,26 @@ operational.enrich(direct, {
 })
 assert(direct.reactors[1].route_state == 'DIRECT')
 assert(direct.reactors[1].operational_state == 'READY')
+
+-- A missing export_chest is a global precondition (the ONE shared hand-off
+-- point every reactor's delivery exports into) -- it must block ALL
+-- reactors the same way a missing bridge does, even with valid routing.
+local no_chest = {
+  enabled = true,
+  bridge = 'meBridge_0',
+  export_chest = nil,
+  reactors = { { label = 'R1', reactor_id = 'rid-1', connected = true, fuel_pct = 60 } },
+}
+operational.enrich(no_chest, {
+  config = config,
+  fuel_status = cache,
+  rs_router = {
+    get_routing_state = function() return 'ROUTING_NOT_CONFIGURED' end,
+    get_tree = function() return {} end,
+    get_valve_status = function() return {} end,
+  },
+  now_ms = 100000,
+})
+assert(no_chest.reactors[1].operational_state == 'BLOCKED', 'missing export_chest must block every reactor')
 
 print('fuel_operational_summary_test.lua: ok')

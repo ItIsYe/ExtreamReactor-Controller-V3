@@ -54,10 +54,10 @@ local function make_logistics(rs_router, export_result_fn)
       end,
     },
   }
+  router._state.export_chest = { name = 'transporter_1' }
   router._state.reactors = {
     {
       label = 'Reactor A', reactor_id = nil,
-      inlet = { name = 'transporter_1' },
       request_below = 0.25, fill_amount = 64, min_in_me = 32, cfg = {},
     },
   }

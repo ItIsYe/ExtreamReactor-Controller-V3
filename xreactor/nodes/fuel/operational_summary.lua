@@ -156,14 +156,17 @@ function M.enrich(summary, opts)
       reactor.fuel_amount = valid_entry and entry.fuel_amount or nil
       reactor.fuel_capacity = valid_entry and entry.fuel_capacity or nil
 
-      reactor.configured_inlet = cfg.inlet
       reactor.request_below = tonumber(cfg.request_below)
       reactor.fill_amount = tonumber(cfg.fill_amount)
       reactor.min_in_me = tonumber(cfg.min_in_me)
 
       reactor.route_state = route_state(route_ctx, reactor)
 
-      if summary.enabled ~= true or summary.bridge == nil or reactor.connected ~= true or blocked_route(reactor.route_state) then
+      -- export_chest is the ONE shared hand-off point every reactor's
+      -- delivery exports into (see logistics_router.lua) -- a missing one
+      -- blocks ALL reactors, the same way a missing bridge does.
+      if summary.enabled ~= true or summary.bridge == nil or summary.export_chest == nil
+          or reactor.connected ~= true or blocked_route(reactor.route_state) then
         reactor.operational_state = "BLOCKED"
         counts.blocked = counts.blocked + 1
       elseif reactor.fuel_data_state == "STALE" then

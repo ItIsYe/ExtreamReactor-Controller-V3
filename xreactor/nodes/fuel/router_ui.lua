@@ -1,34 +1,46 @@
 -- nodes/fuel/router_ui.lua
 --
--- Single-screen FUEL reactor manager (2026-09-04 rewrite). Replaces the old
--- TREE/EDIT tab pair (a hand-maintained valve-route tree, loosely linked by
--- matching string labels to a separately hand-maintained reactor demand
--- list) with ONE reactor list, each entry carrying everything FUEL needs
--- for that reactor: reactor_id/label (learned from the owning RT node's
--- own broadcasts, never typed by hand), the valve path to it, its delivery
--- inlet, and its resupply thresholds. There is no `item` field anywhere --
--- logistics_router.lua decides Uranium vs Blutonium and Ingot vs Block
--- automatically on every delivery (see its build_fuel_families()/
--- pick_fuel_family()/pick_fuel_form()).
+-- Single-screen FUEL reactor manager (2026-09-04 rewrite, export_chest
+-- follow-up same day). Replaces the old TREE/EDIT tab pair (a hand-
+-- maintained valve-route tree, loosely linked by matching string labels to
+-- a separately hand-maintained reactor demand list) with ONE reactor list,
+-- each entry carrying everything FUEL needs for that reactor: reactor_id/
+-- label (learned from the owning RT node's own broadcasts, never typed by
+-- hand), the valve path to it, and its resupply thresholds. There is no
+-- `item` field anywhere -- logistics_router.lua decides Uranium vs
+-- Blutonium and Ingot vs Block automatically on every delivery (see its
+-- build_fuel_families()/pick_fuel_family()/pick_fuel_form()).
+--
+-- There is also no per-reactor delivery target: every reactor shares ONE
+-- export chest (u.export_chest / config.logistics.export_chest), the sole
+-- physical hand-off point FUEL exports fuel into. A Mekanism logistics
+-- network (sorters + VALVE-Nodes) carries everything downstream from that
+-- one chest; which reactor a delivery actually reaches is decided purely
+-- by which valves are open at export time (see redstone_router.lua's
+-- begin_transaction()). The export chest is therefore a page-level setting
+-- (EXPORT-KISTE row on the main screen), not a per-reactor field.
 --
 -- u.mode (this page's only internal state machine):
---   "list"       -- the main screen: every configured reactor, tap a row to
---                    edit it, or EINLERNEN to add one from a live RT
---                    broadcast.
+--   "list"       -- the main screen: EXPORT-KISTE setting, every configured
+--                    reactor (tap a row to edit it), EINLERNEN to add one
+--                    from a live RT broadcast.
 --   "learn"      -- picker: currently-broadcasting RT reactors not yet in
 --                    the list. Tapping one starts editing it directly.
---   "edit"       -- form for ONE reactor (u.editing): inlet + thresholds
---                    inline, path as a one-line summary (tap to open
---                    "path"). FERTIG commits the working copy into
---                    u.reactors (still only in memory -- SPEICHERN on the
---                    list screen is the only thing that writes to disk).
+--   "edit"       -- form for ONE reactor (u.editing): thresholds inline,
+--                    path as a one-line summary (tap to open "path").
+--                    FERTIG commits the working copy into u.reactors
+--                    (still only in memory -- SPEICHERN on the list screen
+--                    is the only thing that writes to disk).
 --   "path"       -- valve chain editor for u.editing, unchanged in spirit
 --                    from the previous implementation: tap known VALVE-Nodes
 --                    to append, tap a chain step to remove, or teach-in by
 --                    walking the pipe and toggling each valve's redstone
 --                    lever. Returns to "edit", not "list".
---   "inlet_pick" -- list of peripherals currently visible to this computer;
---                    tapping one sets u.editing.inlet. Returns to "edit".
+--   "chest_pick" -- list of peripherals currently visible to this computer;
+--                    tapping one sets u.export_chest. Returns to "list"
+--                    (unlike "path"/the old "inlet_pick", this is a
+--                    page-level setting, not part of one reactor's working
+--                    copy).
 
 local M = {}
 local mux = require("core.mockup_ui")
@@ -60,7 +72,6 @@ local function copy_reactor(entry)
   return {
     reactor_id = entry.reactor_id,
     label = entry.label,
-    inlet = entry.inlet,
     path = deep_copy_path(entry.path),
     request_below = entry.request_below or 0.25,
     fill_amount = entry.fill_amount or 64,
@@ -69,37 +80,49 @@ local function copy_reactor(entry)
 end
 
 -- ---- persistence ------------------------------------------------------------
+--
+-- Persisted shape: { export_chest = <peripheral name or nil>, reactors = {...} }
+-- -- export_chest is a page-level setting (the ONE shared hand-off point,
+-- see top-of-file comment), not a per-reactor field.
 
-local function load_reactors(path)
-  if type(fs) ~= "table" then return {} end
-  if not fs.exists(path) then return {} end
+local function load_state(path)
+  if type(fs) ~= "table" then return { export_chest = nil, reactors = {} } end
+  if not fs.exists(path) then return { export_chest = nil, reactors = {} } end
   local ok, result = pcall(dofile, path)
-  if ok and type(result) == "table" then return result end
-  return {}
+  if ok and type(result) == "table" then
+    return { export_chest = result.export_chest, reactors = type(result.reactors) == "table" and result.reactors or {} }
+  end
+  return { export_chest = nil, reactors = {} }
 end
 
-local function write_reactors_file(reactors, path)
+local function write_state_file(state, path)
   local dir = fs.getDir(path)
   if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
   local ok_open, f = pcall(fs.open, path, "w")
   if not ok_open or not f then return false end
   f.writeLine("-- Fuel reactor configuration -- auto-generated, do not edit manually")
   f.writeLine("return {")
-  for _, r in ipairs(reactors) do
-    f.writeLine("  {")
-    f.writeLine(string.format("    reactor_id = %q,", r.reactor_id or ""))
-    f.writeLine(string.format("    label = %q,", r.label or r.reactor_id or ""))
-    f.writeLine(string.format("    inlet = %q,", r.inlet or ""))
-    f.writeLine(string.format("    request_below = %s,", tostring(tonumber(r.request_below) or 0.25)))
-    f.writeLine(string.format("    fill_amount = %s,", tostring(tonumber(r.fill_amount) or 64)))
-    f.writeLine(string.format("    min_in_me = %s,", tostring(tonumber(r.min_in_me) or 32)))
-    f.writeLine("    path = {")
-    for _, id in ipairs(r.path or {}) do
-      f.writeLine(string.format("      %q,", id))
-    end
-    f.writeLine("    },")
-    f.writeLine("  },")
+  if nonempty_string(state.export_chest) then
+    f.writeLine(string.format("  export_chest = %q,", state.export_chest))
+  else
+    f.writeLine("  export_chest = nil,")
   end
+  f.writeLine("  reactors = {")
+  for _, r in ipairs(state.reactors or {}) do
+    f.writeLine("    {")
+    f.writeLine(string.format("      reactor_id = %q,", r.reactor_id or ""))
+    f.writeLine(string.format("      label = %q,", r.label or r.reactor_id or ""))
+    f.writeLine(string.format("      request_below = %s,", tostring(tonumber(r.request_below) or 0.25)))
+    f.writeLine(string.format("      fill_amount = %s,", tostring(tonumber(r.fill_amount) or 64)))
+    f.writeLine(string.format("      min_in_me = %s,", tostring(tonumber(r.min_in_me) or 32)))
+    f.writeLine("      path = {")
+    for _, id in ipairs(r.path or {}) do
+      f.writeLine(string.format("        %q,", id))
+    end
+    f.writeLine("      },")
+    f.writeLine("    },")
+  end
+  f.writeLine("  },")
   f.writeLine("}")
   f.close()
   return true
@@ -110,11 +133,11 @@ end
 -- sichern, .tmp an Zielposition verschieben, final erneut lesen+validieren,
 -- .prev erst nach vollem Erfolg loeschen; jeder Fehlschlag stellt die letzte
 -- bekannt gute Datei wieder her bzw. laesst sie unangetastet.
-local function save_reactors_atomic(reactors, path, validate_fn)
+local function save_state_atomic(state, path, validate_fn)
   local tmp_path = path .. ".tmp"
   local prev_path = path .. ".prev"
 
-  if not write_reactors_file(reactors, tmp_path) then
+  if not write_state_file(state, tmp_path) then
     pcall(fs.delete, tmp_path)
     return false, "TMP_WRITE_FAILED", "Konnte " .. tmp_path .. " nicht schreiben"
   end
@@ -174,9 +197,13 @@ local function save_reactors_atomic(reactors, path, validate_fn)
   return true
 end
 
-local function validate_reactors(reactors)
-  if type(reactors) ~= "table" then return false, "kein Tabellen-Ergebnis" end
-  for i, r in ipairs(reactors) do
+local function validate_state(state)
+  if type(state) ~= "table" then return false, "kein Tabellen-Ergebnis" end
+  if state.export_chest ~= nil and not nonempty_string(state.export_chest) then
+    return false, "export_chest ist gesetzt, aber leer/ungueltig"
+  end
+  if type(state.reactors) ~= "table" then return false, "reactors ist keine Tabelle" end
+  for i, r in ipairs(state.reactors) do
     if type(r) ~= "table" then return false, "Eintrag " .. i .. " ist keine Tabelle" end
     if not nonempty_string(r.reactor_id) then return false, "Eintrag " .. i .. " hat keine reactor_id" end
     if r.path ~= nil and type(r.path) ~= "table" then return false, "Eintrag " .. i .. " hat einen ungueltigen Pfad" end
@@ -239,14 +266,15 @@ local function learnable_reactors(self)
   return out
 end
 
--- Peripherals currently visible to this computer -- inlet picker source.
--- Monitors and modems are excluded: neither is ever a valid fuel inlet.
-local EXCLUDED_INLET_TYPES = { monitor = true, modem = true }
+-- Peripherals currently visible to this computer -- export chest picker
+-- source. Monitors and modems are excluded: neither is ever a valid export
+-- target.
+local EXCLUDED_CHEST_TYPES = { monitor = true, modem = true }
 local function known_peripheral_names()
   local out = {}
   for _, name in ipairs(peripheral.getNames() or {}) do
     local kind = peripheral.getType(name)
-    if not EXCLUDED_INLET_TYPES[kind] then
+    if not EXCLUDED_CHEST_TYPES[kind] then
       out[#out + 1] = name
     end
   end
@@ -299,22 +327,25 @@ function M.new(opts)
     _ui = {
       mode = "list",
       reactors = {},
+      export_chest = nil,
       dirty = false,
       list_scroll = 0, list_scroll_up = nil, list_scroll_down = nil,
       reactor_btns = {}, learn_btn = nil, save_btn = nil, reset_btn = nil,
+      export_chest_btn = nil,
       -- "learn" state
       learn_scroll = 0, learn_scroll_up = nil, learn_scroll_down = nil,
       learn_btns = {}, learn_cancel_btn = nil,
       -- "edit" state (u.editing is the working copy; nil <=> not editing)
       editing = nil, editing_is_new = false,
-      inlet_row = nil, path_row = nil,
+      path_row = nil,
       request_below_minus = nil, request_below_plus = nil,
       fill_amount_minus = nil, fill_amount_plus = nil,
       min_in_me_minus = nil, min_in_me_plus = nil,
       edit_done_btn = nil, edit_cancel_btn = nil, edit_delete_btn = nil,
-      -- "inlet_pick" state
-      inlet_scroll = 0, inlet_scroll_up = nil, inlet_scroll_down = nil,
-      inlet_btns = {}, inlet_cancel_btn = nil,
+      -- "chest_pick" state (sets u.export_chest, a page-level setting --
+      -- returns to "list", not "edit")
+      chest_scroll = 0, chest_scroll_up = nil, chest_scroll_down = nil,
+      chest_btns = {}, chest_cancel_btn = nil,
       -- "path" state (unveraendert aus der vorigen Implementierung)
       path_scroll = 0, path_scroll_up = nil, path_scroll_down = nil,
       picker_scroll = 0, picker_scroll_up = nil, picker_scroll_down = nil,
@@ -326,10 +357,10 @@ function M.new(opts)
   }
   setmetatable(self, { __index = M })
 
-  -- config.logistics.reactors ist die kanonische Quelle waehrend der
-  -- Laufzeit (main.lua laedt die persistierte Datei dort schon vor dem
-  -- ersten config_normalizer.normalize()-Durchlauf hinein). Faellt kein
-  -- config vor, wird als naechstes die Config des uebergebenen
+  -- config.logistics.reactors/.export_chest ist die kanonische Quelle
+  -- waehrend der Laufzeit (main.lua laedt die persistierte Datei dort schon
+  -- vor dem ersten config_normalizer.normalize()-Durchlauf hinein). Faellt
+  -- kein config vor, wird als naechstes die Config des uebergebenen
   -- redstone_router probiert (gleiches Muster wie vorher) -- die Datei
   -- selbst wird nur gelesen, wenn wirklich keine der beiden vorliegt
   -- (z.B. minimal aufgebaute Tests ohne fs-Umgebung).
@@ -337,8 +368,18 @@ function M.new(opts)
   local lg = cfg and (cfg.logistics or cfg) or nil
   local rr_cfg = self.redstone_router and self.redstone_router.config
   local rr_lg = rr_cfg and (rr_cfg.logistics or rr_cfg) or nil
-  local source = (lg and lg.reactors) or (rr_lg and rr_lg.reactors) or load_reactors(self.config_path)
-  for _, entry in ipairs(source) do
+  local file_state = nil
+  local source, export_chest
+  if lg and lg.reactors then
+    source, export_chest = lg.reactors, lg.export_chest
+  elseif rr_lg and rr_lg.reactors then
+    source, export_chest = rr_lg.reactors, rr_lg.export_chest
+  else
+    file_state = load_state(self.config_path)
+    source, export_chest = file_state.reactors, file_state.export_chest
+  end
+  self._ui.export_chest = export_chest
+  for _, entry in ipairs(source or {}) do
     self._ui.reactors[#self._ui.reactors + 1] = copy_reactor(entry)
   end
   return self
@@ -356,7 +397,7 @@ function M:_render_list(target, w, h)
   local u = self._ui
   local configured, incomplete = 0, 0
   for _, r in ipairs(u.reactors) do
-    if r.inlet and r.path and #r.path > 0 then configured = configured + 1 else incomplete = incomplete + 1 end
+    if r.path and #r.path > 0 then configured = configured + 1 else incomplete = incomplete + 1 end
   end
   mux.status_dot(target, 2, 3, string.format("REAKTOREN %d/%d BEREIT", configured, #u.reactors),
     incomplete == 0 and #u.reactors > 0 and "OK" or "LIMITED", math.max(8, math.floor(w * 0.4)))
@@ -377,11 +418,18 @@ function M:_render_list(target, w, h)
     mux.status_dot(target, math.floor(w * 0.42), 3, save_label, save_key, math.max(1, w - math.floor(w * 0.42) - 2))
   end
 
+  -- EXPORT-KISTE: the ONE shared hand-off point every reactor's delivery
+  -- exports into (see top-of-file comment) -- a page-level setting, tapped
+  -- to open "chest_pick", not part of any one reactor's working copy.
+  local chest_lbl = "EXPORT-KISTE: " .. (nonempty_string(u.export_chest) and mux.fit(u.export_chest, math.max(1, w - 22)) or "NICHT GESETZT")
+  if w < 40 then chest_lbl = "KISTE: " .. (nonempty_string(u.export_chest) and mux.fit(u.export_chest, math.max(1, w - 14)) or "?") end
+  u.export_chest_btn = mux.button(target, 2, 4, w - 3, chest_lbl, nonempty_string(u.export_chest) and "OK" or "WARNING", 1)
+
   local learn_lbl = "REAKTOR EINLERNEN"
   if w < 34 then learn_lbl = "EINLERNEN" end
-  u.learn_btn = mux.button(target, 2, 4, w - 3, learn_lbl, "LIMITED", 1)
+  u.learn_btn = mux.button(target, 2, 5, w - 3, learn_lbl, "LIMITED", 1)
 
-  local body_top = 6
+  local body_top = 7
   local button_y = math.max(body_top + 3, h - 2)
   local body_bottom = math.max(body_top + 2, button_y - 1)
   local body_h = body_bottom - body_top + 1
@@ -397,11 +445,12 @@ function M:_render_list(target, w, h)
   local y = first_y
   for i = u.list_scroll + 1, math.min(#u.reactors, u.list_scroll + visible) do
     local r = u.reactors[i]
-    local status = (r.inlet and r.path and #r.path > 0) and "OK" or "LIMITED"
-    local summary = string.format("%s | %s%%/%d/%d",
-      r.inlet and mux.fit(r.inlet, 14) or "KEIN INLET",
+    local has_path = r.path and #r.path > 0
+    local status = has_path and "OK" or "LIMITED"
+    local summary = string.format("%s%%/%d/%d | %s",
       tostring(math.floor((r.request_below or 0.25) * 100)),
-      math.floor(r.fill_amount or 64), math.floor(r.min_in_me or 32))
+      math.floor(r.fill_amount or 64), math.floor(r.min_in_me or 32),
+      has_path and (#r.path .. " VENTIL(E)") or "KEIN VENTIL")
     mux.data_row(target, 4, y, w - 6, { label = tostring(r.label or r.reactor_id), value = mux.fit(summary, math.max(1, w - 6 - #tostring(r.label or r.reactor_id) - 2)), status = status, icon = "reactor" })
     reactor_btns[#reactor_btns + 1] = { x1 = 4, x2 = w - 3, y = y, reactor_id = r.reactor_id }
     y = y + 1
@@ -477,15 +526,11 @@ function M:_render_edit(target, w, h)
   mux.banner(target, 2, 3, w - 3, "REAKTOR: " .. tostring(editing.label or editing.reactor_id), "LIMITED", "reactor")
 
   local body_top = 5
-  local button_y = math.max(body_top + 6, h - 2)
+  local button_y = math.max(body_top + 5, h - 2)
   local rows_bottom = button_y - 1
   mux.card(target, 2, body_top, w - 3, rows_bottom - body_top + 1, { title = "EINSTELLUNGEN", status = "LIMITED", icon = "config" })
 
   local y = body_top + 1
-  mux.data_row(target, 4, y, w - 6, { label = "INLET", value = editing.inlet and mux.fit(editing.inlet, w - 6 - 10) or "NICHT GESETZT", status = editing.inlet and "OK" or "WARNING", icon = "output" })
-  u.inlet_row = { x1 = 4, x2 = w - 3, y = y }
-  y = y + 1
-
   mux.data_row(target, 4, y, w - 6, { label = "PFAD", value = mux.fit(path_text(self.redstone_router, editing.path), w - 6 - 10), status = (#editing.path > 0) and "OK" or "WARNING", icon = "network" })
   u.path_row = { x1 = 4, x2 = w - 3, y = y }
   y = y + 1
@@ -512,12 +557,12 @@ function M:_render_edit(target, w, h)
   u.edit_cancel_btn = mux.button(target, 2 + done_w + delete_w + 2, button_y - 1, cancel_w, cancel_lbl, "OFFLINE", 2)
 end
 
--- ---- render: inlet picker ------------------------------------------------------
+-- ---- render: export chest picker ------------------------------------------------
 
-function M:_render_inlet_pick(target, w, h)
+function M:_render_chest_pick(target, w, h)
   local u = self._ui
   local names = known_peripheral_names()
-  mux.banner(target, 2, 3, w - 3, "INLET WAEHLEN", "LIMITED", "output")
+  mux.banner(target, 2, 3, w - 3, "EXPORT-KISTE WAEHLEN", "LIMITED", "output")
 
   local body_top = 5
   local button_y = math.max(body_top + 3, h - 2)
@@ -527,24 +572,24 @@ function M:_render_inlet_pick(target, w, h)
   local first_y = body_top + 1
   local visible = math.max(1, body_h - 1)
   local max_scroll
-  u.inlet_scroll, max_scroll = clamp_scroll(u.inlet_scroll, #names, visible)
-  u.inlet_scroll_up, u.inlet_scroll_down = paging_badges(target, w - 2, body_top, u.inlet_scroll, max_scroll)
+  u.chest_scroll, max_scroll = clamp_scroll(u.chest_scroll, #names, visible)
+  u.chest_scroll_up, u.chest_scroll_down = paging_badges(target, w - 2, body_top, u.chest_scroll, max_scroll)
 
-  local inlet_btns = {}
+  local chest_btns = {}
   local y = first_y
-  for i = u.inlet_scroll + 1, math.min(#names, u.inlet_scroll + visible) do
+  for i = u.chest_scroll + 1, math.min(#names, u.chest_scroll + visible) do
     local name = names[i]
     mux.data_row(target, 4, y, w - 6, { label = name, value = "WAEHLEN", status = "OK", icon = "output" })
-    inlet_btns[#inlet_btns + 1] = { x1 = 4, x2 = w - 3, y = y, name = name }
+    chest_btns[#chest_btns + 1] = { x1 = 4, x2 = w - 3, y = y, name = name }
     y = y + 1
   end
-  u.inlet_btns = inlet_btns
+  u.chest_btns = chest_btns
 
   if #names == 0 and first_y <= button_y - 1 then
     mux.text(target, 4, first_y, mux.fit("(keine Peripherals erkannt)", math.max(1, w - 7)), colorset.get("muted"), colorset.get("background"))
   end
 
-  u.inlet_cancel_btn = mux.button(target, 2, button_y - 1, w - 3, "ABBRECHEN", "WARNING", 2)
+  u.chest_cancel_btn = mux.button(target, 2, button_y - 1, w - 3, "ABBRECHEN", "WARNING", 2)
 end
 
 -- ---- render: path editor (unveraendert aus der vorigen Implementierung) ------
@@ -643,8 +688,8 @@ function M:render(target, ui, colors, should_clear)
     self:_render_learn(target, w, h); footer_center = "REAKTOR EINLERNEN"
   elseif u.mode == "edit" then
     self:_render_edit(target, w, h); footer_center = "REAKTOR BEARBEITEN"
-  elseif u.mode == "inlet_pick" then
-    self:_render_inlet_pick(target, w, h); footer_center = "INLET WAEHLEN"
+  elseif u.mode == "chest_pick" then
+    self:_render_chest_pick(target, w, h); footer_center = "EXPORT-KISTE WAEHLEN"
   elseif u.mode == "path" then
     self:_render_path(target, w, h); footer_center = "VENTILKETTE"
   else
@@ -663,6 +708,11 @@ function M:_handle_list_touch(x, y)
   local u = self._ui
   if hit(u.list_scroll_up, x, y) then u.list_scroll = math.max(0, u.list_scroll - 1); return true end
   if hit(u.list_scroll_down, x, y) then u.list_scroll = u.list_scroll + 1; return true end
+  if hit(u.export_chest_btn, x, y) then
+    u.mode = "chest_pick"
+    u.chest_scroll = 0
+    return true
+  end
   if hit(u.learn_btn, x, y) then
     u.mode = "learn"
     u.learn_scroll = 0
@@ -676,6 +726,7 @@ function M:_handle_list_touch(x, y)
     for _, entry in ipairs((lg and lg.reactors) or {}) do
       u.reactors[#u.reactors + 1] = copy_reactor(entry)
     end
+    u.export_chest = lg and lg.export_chest or nil
     u.dirty = false
     u.save.state = "IDLE"
     u.save.error = nil
@@ -705,7 +756,7 @@ function M:_handle_learn_touch(x, y)
   end
   for _, btn in ipairs(u.learn_btns or {}) do
     if hit(btn, x, y) then
-      u.editing = { reactor_id = btn.id, label = btn.label, inlet = nil, path = {},
+      u.editing = { reactor_id = btn.id, label = btn.label, path = {},
         request_below = 0.25, fill_amount = 64, min_in_me = 32 }
       u.editing_is_new = true
       u.mode = "edit"
@@ -720,11 +771,6 @@ function M:_handle_edit_touch(x, y)
   local editing = u.editing
   if not editing then u.mode = "list"; return false end
 
-  if hit(u.inlet_row, x, y) then
-    u.mode = "inlet_pick"
-    u.inlet_scroll = 0
-    return true
-  end
   if hit(u.path_row, x, y) then
     u.mode = "path"
     u.path_scroll, u.picker_scroll = 0, 0
@@ -768,18 +814,19 @@ function M:_handle_edit_touch(x, y)
   return false
 end
 
-function M:_handle_inlet_pick_touch(x, y)
+function M:_handle_chest_pick_touch(x, y)
   local u = self._ui
-  if hit(u.inlet_scroll_up, x, y) then u.inlet_scroll = math.max(0, u.inlet_scroll - 1); return true end
-  if hit(u.inlet_scroll_down, x, y) then u.inlet_scroll = u.inlet_scroll + 1; return true end
-  if hit(u.inlet_cancel_btn, x, y) then
-    u.mode = "edit"
+  if hit(u.chest_scroll_up, x, y) then u.chest_scroll = math.max(0, u.chest_scroll - 1); return true end
+  if hit(u.chest_scroll_down, x, y) then u.chest_scroll = u.chest_scroll + 1; return true end
+  if hit(u.chest_cancel_btn, x, y) then
+    u.mode = "list"
     return true
   end
-  for _, btn in ipairs(u.inlet_btns or {}) do
+  for _, btn in ipairs(u.chest_btns or {}) do
     if hit(btn, x, y) then
-      if u.editing then u.editing.inlet = btn.name end
-      u.mode = "edit"
+      u.export_chest = btn.name
+      u.dirty = true
+      u.mode = "list"
       return true
     end
   end
@@ -831,7 +878,7 @@ function M:handle_touch(x, y)
   local u = self._ui
   if u.mode == "learn" then return self:_handle_learn_touch(x, y) end
   if u.mode == "edit" then return self:_handle_edit_touch(x, y) end
-  if u.mode == "inlet_pick" then return self:_handle_inlet_pick_touch(x, y) end
+  if u.mode == "chest_pick" then return self:_handle_chest_pick_touch(x, y) end
   if u.mode == "path" then return self:_handle_path_touch(x, y) end
   return self:_handle_list_touch(x, y)
 end
@@ -839,17 +886,17 @@ end
 -- ---- persistence + valve teach-in --------------------------------------------
 
 -- Speichert 1) atomar in die persistierte Datei, 2) uebernimmt bei Erfolg
--- die Arbeitskopie in config.logistics.reactors und stoesst
--- logistics_router:refresh_peripherals() an, damit Inlet-Bindung und die
--- daraus abgeleitete redstone_tree sofort aktuell sind.
+-- die Arbeitskopie in config.logistics.export_chest/.reactors und stoesst
+-- logistics_router:refresh_peripherals() an, damit die Export-Kisten-
+-- Bindung und die daraus abgeleitete redstone_tree sofort aktuell sind.
 function M:_do_save()
   local u = self._ui
   u.save.state = "SAVING"
 
-  local snapshot = {}
-  for _, r in ipairs(u.reactors) do snapshot[#snapshot + 1] = copy_reactor(r) end
+  local snapshot = { export_chest = u.export_chest, reactors = {} }
+  for _, r in ipairs(u.reactors) do snapshot.reactors[#snapshot.reactors + 1] = copy_reactor(r) end
 
-  local ok_valid, verr = validate_reactors(snapshot)
+  local ok_valid, verr = validate_state(snapshot)
   if not ok_valid then
     u.save.state = "FAILED"
     u.save.error = tostring(verr or "unbekannter Validierungsfehler")
@@ -858,8 +905,8 @@ function M:_do_save()
     return false
   end
 
-  local ok, err_code, err_msg = save_reactors_atomic(snapshot, self.config_path, function(content)
-    return validate_reactors(content)
+  local ok, err_code, err_msg = save_state_atomic(snapshot, self.config_path, function(content)
+    return validate_state(content)
   end)
   if not ok then
     u.save.state = "FAILED"
@@ -871,7 +918,8 @@ function M:_do_save()
   local cfg = self.config
   if cfg then
     local lg = cfg.logistics or cfg
-    lg.reactors = snapshot
+    lg.export_chest = snapshot.export_chest
+    lg.reactors = snapshot.reactors
     if self.logistics_router then self.logistics_router:refresh_peripherals() end
   end
 
@@ -879,7 +927,7 @@ function M:_do_save()
   u.save.state = "SAVED"
   u.save.error = nil
   u.save.saved_at = os.epoch and os.epoch("utc") or nil
-  self.log("INFO", "RouterUI: saved " .. #snapshot .. " reactors to " .. tostring(self.config_path))
+  self.log("INFO", "RouterUI: saved " .. #snapshot.reactors .. " reactors to " .. tostring(self.config_path))
   return true
 end
 

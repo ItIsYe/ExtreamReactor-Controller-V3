@@ -33,7 +33,7 @@ local CONFIG = {
   -- simultaneously.
   --
   -- Hardware (FUEL computer must have):
-  --   Wired Modem → ME Bridge + each reactor's dedicated inlet transporter/chest
+  --   Wired Modem → ME Bridge + the ONE shared export_chest (see below)
   --   Wireless Modem → MASTER communication + reactor fuel-level relay
   --   (Redstone valve control, if used: see nodes/valve/main.lua — those
   --   are separate standalone computers on their own dedicated channel,
@@ -45,6 +45,17 @@ local CONFIG = {
     discovery_interval = 60,
     me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
     --
+    -- export_chest: the ONE physical hand-off point every delivery, for
+    -- every reactor, exports into -- e.g. "mekanism:ultimate_logistical_
+    -- transporter_0". There is no per-reactor delivery target. A Mekanism
+    -- logistics network (sorters + VALVE-Nodes) carries everything
+    -- downstream from this single chest; which reactor a given delivery
+    -- actually reaches is decided purely by which valves are open at
+    -- export time (redstone_router.lua blocks every other route before
+    -- opening the target reactor's own `path`, see below, and only then
+    -- runs the export).
+    export_chest       = nil,
+    --
     -- reactors: one entry per reactor. reactor_id and label are learned
     -- from the owning RT node's own broadcasts (router_ui.lua's reactor-
     -- teach flow), never typed by hand -- the FUEL router page lists every
@@ -54,8 +65,6 @@ local CONFIG = {
     --                   (fuel level comes via network relay from Master, see
     --                   master/fuel_relay.lua, not a local peripheral read.)
     --   label         = the reactor's real display name, as reported by RT.
-    --   inlet         = where to deliver fuel (transporter or chest — must be dedicated
-    --                   to THIS reactor; no shared pipes for targeted delivery)
     --   path          = ordered list of VALVE-Node ids to open for this
     --                   reactor's delivery (see redstone_tree note below —
     --                   this is the only place a route is configured; FUEL
@@ -70,21 +79,22 @@ local CONFIG = {
     -- more ME stock (see logistics_router.lua's build_fuel_families()/
     -- pick_fuel_family()/pick_fuel_form(), fed by config.reserve_items).
     --
-    -- Example (two reactors, RT-reported fuel level, ME-connected delivery):
+    -- Example (export_chest + two reactors, RT-reported fuel level):
+    -- export_chest = "mekanism:ultimate_logistical_transporter_0",
+    -- reactors = {
     -- { reactor_id    = "node-52-reactor-0",
     --   label         = "Reaktor A",
-    --   inlet         = "mekanism:ultimate_logistical_transporter_0",
     --   path          = { "VALVE-1" },
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
     -- { reactor_id    = "node-52-reactor-1",
     --   label         = "Reaktor B",
-    --   inlet         = "mekanism:ultimate_logistical_transporter_1",
     --   path          = { "VALVE-2" },
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
+    -- }
     reactors           = {},
     --
     -- waste: peripheral(s) where reactor waste arrives — CC drains into ME.

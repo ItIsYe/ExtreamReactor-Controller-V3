@@ -161,6 +161,7 @@ function M.attach(instance, opts)
 
     local y = 7
     y = data_row(mon, w, h, y, { label = "ME BRIDGE", value = tostring(logistics.bridge or "MISSING"), status = logistics.bridge and "OK" or "WARNING", icon = "storage" })
+    y = data_row(mon, w, h, y, { label = "EXPORT-KISTE", value = tostring(logistics.export_chest or "NICHT GESETZT"), status = logistics.export_chest and "OK" or "WARNING", icon = "output" })
     y = data_row(mon, w, h, y, { label = "RESERVE STORAGE", value = tostring(devices.storage_name or "MISSING"), status = devices.storage_name and "OK" or "WARNING", icon = "storage" })
     y = data_row(mon, w, h, y, { label = "MASTER", value = tostring(model.master_state or (payload.master_connected == false and "OFFLINE" or "ONLINE")), status = payload.master_connected == false and "WARNING" or "OK", icon = "master" })
     y = data_row(mon, w, h, y, {
@@ -229,9 +230,9 @@ function M.attach(instance, opts)
       if h >= 14 then
         mux.warning_box(mon, 2, 7, math.max(1, w - 3), {
           "Noch keine Reaktoren konfiguriert",
-          "RT-Nodes online bringen, dann Seite 4 ROUTER oeffnen",
-          "REAKTOR EINLERNEN antippen, gewuenschten Reaktor waehlen",
-          "Danach Inlet, Pfad und Schwellwerte einstellen",
+          "Seite 4 ROUTER oeffnen, EXPORT-KISTE einmalig setzen",
+          "RT-Nodes online bringen, REAKTOR EINLERNEN antippen",
+          "Danach je Reaktor Pfad und Schwellwerte einstellen",
         }, "WARNING")
       elseif h >= 8 then
         mux.data_row(mon, 2, 7, math.max(1, w - 3), {
@@ -267,7 +268,8 @@ function M.attach(instance, opts)
 
     local pct = type(reactor.fuel_pct) == "number" and (tostring(reactor.fuel_pct) .. "%") or "--"
     local age = reactor.fuel_age_s ~= nil and (tostring(reactor.fuel_age_s) .. "s") or "--"
-    local inlet = tostring(reactor.inlet or reactor.configured_inlet or "MISSING")
+    local path_len = type(reactor.path) == "table" and #reactor.path or 0
+    local path_info = path_len > 0 and (path_len .. " VENTIL(E)") or "KEIN VENTIL"
     local last_item = last_delivery_text(reactor)
     local request = reactor.request_below and (tostring(math.floor(reactor.request_below * 100 + 0.5)) .. "%") or "?"
     local fill = reactor.fill_amount and tostring(reactor.fill_amount) or "?"
@@ -280,14 +282,14 @@ function M.attach(instance, opts)
       y = data_row(mon, w, h, y, { label = "ID", value = tostring(reactor.reactor_id or "MISSING"), status = reactor.reactor_id and "text" or "WARNING", icon = "reactor" })
       y = data_row(mon, w, h, y, { label = "FUEL/DATA", value = pct .. " " .. tostring(reactor.fuel_data_state or "MISSING") .. " " .. age, status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "fuel" })
       y = data_row(mon, w, h, y, { label = "STATE/ROUTE", value = delivery .. " / " .. routing, status = severity_for_reactor(reactor), icon = "network" })
-      y = data_row(mon, w, h, y, { label = "IN/LETZTES", value = mux.fit(inlet .. " / " .. last_item, math.max(1, w - 12)), status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
+      y = data_row(mon, w, h, y, { label = "PFAD/LETZTES", value = mux.fit(path_info .. " / " .. last_item, math.max(1, w - 12)), status = path_len > 0 and "text" or "WARNING", icon = "network" })
       data_row(mon, w, h, y, { label = "POLICY", value = "REQ<" .. request .. " F" .. fill .. " ME" .. min_me, status = "text", icon = "config" })
     elseif h < 19 then
       y = data_row(mon, w, h, y, { label = "ID", value = tostring(reactor.reactor_id or "MISSING"), status = reactor.reactor_id and "text" or "WARNING", icon = "reactor" })
       y = data_row(mon, w, h, y, { label = "FUEL", value = pct, status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "fuel" })
       y = data_row(mon, w, h, y, { label = "DATA", value = tostring(reactor.fuel_data_state or "MISSING") .. " · " .. age .. " · " .. tostring(reactor.fuel_source or "-"), status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "network" })
       y = data_row(mon, w, h, y, { label = "STATE/ROUTE", value = delivery .. " / " .. routing, status = severity_for_reactor(reactor), icon = "network" })
-      y = data_row(mon, w, h, y, { label = "INLET", value = inlet, status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
+      y = data_row(mon, w, h, y, { label = "PFAD", value = path_info, status = path_len > 0 and "text" or "WARNING", icon = "network" })
       y = data_row(mon, w, h, y, { label = "LETZTE LIEFERUNG", value = last_item, status = "text", icon = "fuel" })
       data_row(mon, w, h, y, { label = "POLICY", value = "REQ<" .. request .. " FILL " .. fill .. " ME " .. min_me, status = "text", icon = "config" })
     else
@@ -297,7 +299,7 @@ function M.attach(instance, opts)
       y = data_row(mon, w, h, y, { label = "DATA AGE", value = age .. " / " .. tostring(reactor.fuel_source or "-"), status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "network" })
       y = data_row(mon, w, h, y, { label = "STATE", value = delivery, status = severity_for_reactor(reactor), icon = "reactor" })
       y = data_row(mon, w, h, y, { label = "ROUTING", value = routing, status = route_severity(routing), icon = "network" })
-      y = data_row(mon, w, h, y, { label = "INLET", value = inlet, status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
+      y = data_row(mon, w, h, y, { label = "PFAD", value = path_info, status = path_len > 0 and "text" or "WARNING", icon = "network" })
       y = data_row(mon, w, h, y, { label = "LETZTE LIEFERUNG", value = last_item, status = "text", icon = "fuel" })
       y = data_row(mon, w, h, y, { label = "REQUEST BELOW", value = request, status = "text", icon = "config" })
       y = data_row(mon, w, h, y, { label = "FILL AMOUNT", value = fill, status = "text", icon = "config" })

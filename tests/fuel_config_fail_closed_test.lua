@@ -10,7 +10,7 @@ local defaults = {
   storage_bus = 'meBridge_0', minimum_reserve = 32, target = 32,
   logistics = {
     enabled = false, interval = 5, discovery_interval = 60, max_per_cycle = 64,
-    me_bridge = 'me_bridge', reactors = {}, waste = {}, redstone_tree = {},
+    me_bridge = 'me_bridge', export_chest = 'chest_0', reactors = {}, waste = {}, redstone_tree = {},
     valve_open_ms = 2000, sources = {}, destinations = {}, routes = {}
   }
 }
@@ -19,7 +19,7 @@ local warnings = {}
 local cfg = utils.deep_copy(defaults)
 cfg.logistics.enabled = true
 cfg.logistics.reactors = {
-  { name = 'A', inlet = 'chest_0', item = 'bigreactors:yellorium_ingot', fill_amount = 64, min_in_me = 32 }
+  { name = 'A', fill_amount = 64, min_in_me = 32 }
 }
 normalizer.normalize(cfg, defaults, function(w) warnings[#warnings + 1] = w end, utils)
 assert_true(cfg.logistics.enabled == false,
@@ -35,7 +35,7 @@ warnings = {}
 cfg = utils.deep_copy(defaults)
 cfg.logistics.enabled = true
 cfg.logistics.reactors = {
-  { reactor_id = 'node-1:REACTOR-abcd', inlet = 'chest_0', item = 'bigreactors:yellorium_ingot',
+  { reactor_id = 'node-1:REACTOR-abcd',
     request_below = 1.2, fill_amount = -5, min_in_me = -1 }
 }
 normalizer.normalize(cfg, defaults, function(w) warnings[#warnings + 1] = w end, utils)
@@ -45,8 +45,20 @@ assert_true(cfg.logistics.enabled == false,
 warnings = {}
 cfg = utils.deep_copy(defaults)
 cfg.logistics.enabled = true
+cfg.logistics.export_chest = nil
 cfg.logistics.reactors = {
-  { reactor_id = 'node-1:REACTOR-abcd', inlet = 'chest_0', item = 'bigreactors:yellorium_ingot',
+  { reactor_id = 'node-1:REACTOR-abcd',
+    request_below = 0.25, fill_amount = 64, min_in_me = 32 }
+}
+normalizer.normalize(cfg, defaults, function(w) warnings[#warnings + 1] = w end, utils)
+assert_true(cfg.logistics.enabled == false,
+  'missing export_chest must disable active logistics (shared hand-off point missing)')
+
+warnings = {}
+cfg = utils.deep_copy(defaults)
+cfg.logistics.enabled = true
+cfg.logistics.reactors = {
+  { reactor_id = 'node-1:REACTOR-abcd',
     request_below = 0.25, fill_amount = 64, min_in_me = 32 }
 }
 normalizer.normalize(cfg, defaults, function(w) warnings[#warnings + 1] = w end, utils)
