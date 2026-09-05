@@ -73,6 +73,10 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.me_bridge) ~= "string" then
     lg.me_bridge = (defaults.logistics and defaults.logistics.me_bridge) or "me_bridge"
   end
+  if lg.export_chest ~= nil and not nonempty_string(lg.export_chest) then
+    lg.export_chest = nil
+    add_warning("logistics.export_chest invalid; ignoring")
+  end
 
   -- A configured reactor is an actuator route. Invalid demand identity or
   -- amounts must disable logistics as a whole instead of falling into the
@@ -80,6 +84,13 @@ function M.normalize(config_values, defaults, add_warning, utils)
   -- UI/config editors can still show and repair them; only runtime activation
   -- is fail-closed.
   local unsafe_reactor_config = false
+  -- export_chest is the ONE shared hand-off point every reactor's delivery
+  -- exports into (see logistics_router.lua) -- a global precondition, not
+  -- a per-reactor one, so it's required once here instead of per entry.
+  if #lg.reactors > 0 and not nonempty_string(lg.export_chest) then
+    add_warning("logistics.export_chest missing; unsafe/unconfigured export target, logistics will be disabled until set")
+    unsafe_reactor_config = true
+  end
   for i, r in ipairs(lg.reactors) do
     if type(r) ~= "table" then
       add_warning(string.format("logistics.reactors[%d] invalid entry", i))
@@ -88,10 +99,6 @@ function M.normalize(config_values, defaults, add_warning, utils)
       local reactor_id = r.reactor_id or r.reactor_port -- legacy alias
       if not nonempty_string(reactor_id) then
         add_warning(string.format("logistics.reactors[%d] missing reactor_id; unsafe always-supply fallback is disabled", i))
-        unsafe_reactor_config = true
-      end
-      if not nonempty_string(r.inlet) then
-        add_warning(string.format("logistics.reactors[%d] missing inlet peripheral", i))
         unsafe_reactor_config = true
       end
       if r.path ~= nil and type(r.path) ~= "table" then

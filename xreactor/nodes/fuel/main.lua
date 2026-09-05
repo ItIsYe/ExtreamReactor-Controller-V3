@@ -117,14 +117,17 @@ local function add_config_warning(message) table.insert(config_warnings, message
 
 -- /xreactor_config/fuel_routes.lua (vom Router atomar geschrieben, siehe
 -- router_ui.lua) wird VOR config_normalizer.normalize() geladen und nach
--- config.logistics.reactors uebernommen -- normalize() validiert danach
--- jeden Reaktor-Eintrag (reactor_id/inlet/path/Schwellwerte) im selben
--- Durchlauf wie den Rest der Config. redstone_tree wird nie aus dieser
--- Datei uebernommen: logistics_router.lua baut es bei jedem refresh()
--- automatisch aus reactors[*].path (siehe dessen
--- build_redstone_tree_from_reactors()). Bei fehlender/nicht ladbarer Datei
--- bleibt logistics.reactors leer und routing_load_status haelt den Fehler
--- fest.
+-- config.logistics.export_chest/.reactors uebernommen -- normalize()
+-- validiert danach export_chest und jeden Reaktor-Eintrag (reactor_id/
+-- path/Schwellwerte) im selben Durchlauf wie den Rest der Config. Die
+-- Datei speichert { export_chest = <peripheral name>, reactors = {...} }
+-- -- export_chest ist der EINE geteilte Uebergabepunkt fuer alle
+-- Reaktoren (siehe logistics_router.lua), kein Feld pro Reaktor mehr.
+-- redstone_tree wird nie aus dieser Datei uebernommen: logistics_router.lua
+-- baut es bei jedem refresh() automatisch aus reactors[*].path (siehe
+-- dessen build_redstone_tree_from_reactors()). Bei fehlender/nicht
+-- ladbarer Datei bleiben logistics.export_chest/.reactors leer und
+-- routing_load_status haelt den Fehler fest.
 local routing_load_status = { ok = true, source = "config" }
 do
   local routes_path = "/xreactor_config/fuel_routes.lua"
@@ -135,7 +138,8 @@ do
       add_config_warning("fuel_routes.lua konnte nicht geladen werden, Reaktor-Konfiguration bleibt leer: " .. tostring(content))
     else
       config.logistics = config.logistics or {}
-      config.logistics.reactors = content
+      config.logistics.export_chest = content.export_chest
+      config.logistics.reactors = type(content.reactors) == "table" and content.reactors or {}
       routing_load_status = { ok = true, source = routes_path }
     end
   end

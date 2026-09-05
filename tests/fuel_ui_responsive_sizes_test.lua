@@ -58,14 +58,14 @@ local mon = { getSize = function() return width, height end }
 
 local reactors = {
   {
-    label = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', configured_inlet = 'inlet_1', connected = true,
+    label = 'R1', reactor_id = 'rid-1', path = { 'VALVE-1' }, connected = true,
     last_item = 'bigreactors:yellorium_ingot', last_element = 'yellorium',
     request_below = 0.25, fill_amount = 64, min_in_me = 32,
     fuel_pct = 60, fuel_data_state = 'FRESH', fuel_age_s = 2, fuel_source = 'MASTER',
     route_state = 'ROUTE_READY', operational_state = 'READY', delivery_state = 'READY',
   },
   {
-    label = 'R2', reactor_id = 'rid-2', inlet = 'inlet_2', configured_inlet = 'inlet_2', connected = true,
+    label = 'R2', reactor_id = 'rid-2', path = { 'VALVE-2' }, connected = true,
     last_item = 'bigreactors:yellorium_ingot', last_element = 'yellorium',
     request_below = 0.30, fill_amount = 32, min_in_me = 16,
     fuel_pct = 20, fuel_data_state = 'FRESH', fuel_age_s = 3, fuel_source = 'DIRECT',
@@ -82,6 +82,7 @@ local payload = {
   logistics = {
     enabled = true,
     bridge = 'meBridge_0',
+    export_chest = 'transporter_0',
     reactors = reactors,
     fuel_data_summary = { fresh = 2, stale = 0, missing = 0 },
     operational_counts = { configured = 2, ready = 2, blocked = 0, stale = 0, missing = 0 },
@@ -128,6 +129,7 @@ assert(overview_text:find('R1', 1, true), '20-line overview must show reactor ro
 assert(overview_text:find('R2', 1, true), '20-line overview must show requesting reactor')
 assert(overview_text:find('REQUESTING', 1, true), 'overview must show current reactor demand')
 assert(overview_text:find('ME BRIDGE', 1, true), 'overview must show ME Bridge')
+assert(overview_text:find('EXPORT%-KISTE', 1, false), 'overview must show the shared export chest')
 assert(overview_text:find('RESERVE STORAGE', 1, true), 'overview must show reserve storage separately')
 assert(overview_text:find('MASTER', 1, true) and overview_text:find('RT DATA', 1, true), 'overview must show MASTER and RT data separately')
 assert(overview_text:find('VALVES', 1, true) and overview_text:find('LOGISTICS', 1, true), 'overview must show VALVES and logistics state')
@@ -140,9 +142,10 @@ local detail_text = {}
 for _, row in ipairs(rows) do detail_text[#detail_text + 1] = row.label .. ' ' .. row.value end
 detail_text = table.concat(detail_text, '\n')
 assert(detail_text:find('rid-1', 1, true), 'details must include reactor_id')
+assert(detail_text:find('VENTIL', 1, true), 'details must include the reactor path (valve count)')
 assert(detail_text:find('DATA AGE', 1, true) and detail_text:find('2s', 1, true), 'details must include fuel data age')
 assert(detail_text:find('ROUTING', 1, true) and detail_text:find('ROUTE_READY', 1, true), 'details must include routing state')
-assert(detail_text:find('inlet_1', 1, true), 'details must include inlet')
+assert(detail_text:find('yellorium_ingot', 1, true), 'details must include the last delivered item')
 assert(detail_text:find('yellorium_ingot', 1, true), 'details must include fuel item')
 assert(detail_text:find('25%', 1, true), 'details must include request threshold')
 assert(detail_text:find('64', 1, true) and detail_text:find('32', 1, true), 'details must include fill/min-ME policy')

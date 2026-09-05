@@ -88,10 +88,21 @@ local ui = router_ui.new({
 
 assert_eq(#ui._ui.reactors, 0, 'must start with no reactors configured')
 assert_eq(ui._ui.mode, 'list', 'must start on the single main screen')
+assert_eq(ui._ui.export_chest, nil, 'must start with no export chest configured')
+
+-- ── EXPORT-KISTE antippen -> Picker mit erkannten Peripherals ──────────────
+ui._ui.export_chest_btn = { x1 = 2, x2 = 20, y = 4 }
+assert_true(ui:handle_touch(5, 4), 'tapping EXPORT-KISTE must be consumed')
+assert_eq(ui._ui.mode, 'chest_pick')
+ui._ui.chest_btns = { { x1 = 4, x2 = 40, y = 8, name = 'transporter_0' } }
+assert_true(ui:handle_touch(10, 8), 'tapping a peripheral must be consumed')
+assert_eq(ui._ui.mode, 'list', 'picking a chest returns straight to the main screen, not "edit"')
+assert_eq(ui._ui.export_chest, 'transporter_0')
+assert_true(ui._ui.dirty, 'setting the export chest must mark the page dirty')
 
 -- ── EINLERNEN antippen -> Picker mit den live meldenden Reaktoren ──────────
-ui._ui.learn_btn = { x1 = 2, x2 = 20, y = 4 }
-assert_true(ui:handle_touch(5, 4), 'tapping EINLERNEN must be consumed')
+ui._ui.learn_btn = { x1 = 2, x2 = 20, y = 5 }
+assert_true(ui:handle_touch(5, 5), 'tapping EINLERNEN must be consumed')
 assert_eq(ui._ui.mode, 'learn')
 
 -- ── Reactor2 antippen -> Bearbeitung startet mit dem echten gelernten Namen ─
@@ -147,8 +158,8 @@ assert_true(ui._ui.dirty)
 
 -- ── Reactor1 bekommt bewusst KEINE Ventilkette (direkter Export ohne ───────
 --    Ventil-Gating ist weiterhin ein gueltiger Anwendungsfall). ────────────
-ui._ui.learn_btn = { x1 = 2, x2 = 20, y = 4 }
-ui:handle_touch(5, 4)
+ui._ui.learn_btn = { x1 = 2, x2 = 20, y = 5 }
+ui:handle_touch(5, 5)
 ui._ui.learn_btns = { { x1 = 4, x2 = 40, y = 8, id = 'R1', label = 'Reactor1' } }
 assert_true(ui:handle_touch(10, 8))
 assert_eq(ui._ui.editing.reactor_id, 'R1')
@@ -180,13 +191,15 @@ assert_eq(ui._ui.save.state, 'SAVED', 'save must succeed: ' .. tostring(ui._ui.s
 assert_true(not ui._ui.dirty)
 assert_eq(refresh_calls, 1, 'a successful save must refresh the logistics router once')
 assert_eq(#config.logistics.reactors, 2, 'the live config must be updated with the saved snapshot')
+assert_eq(config.logistics.export_chest, 'transporter_0', 'the live config must be updated with the saved export chest')
 
--- Die gespeicherte Datei ist mit dofile ladbar und traegt beide Reaktoren
--- mit ihren gelernten Namen und dem konfigurierten Pfad.
+-- Die gespeicherte Datei ist mit dofile ladbar und traegt die Export-Kiste
+-- sowie beide Reaktoren mit ihren gelernten Namen und dem konfigurierten Pfad.
 local persisted = dofile('/xreactor_config/fuel_routes.lua')
-assert_eq(#persisted, 2)
+assert_eq(persisted.export_chest, 'transporter_0')
+assert_eq(#persisted.reactors, 2)
 local by_id = {}
-for _, r in ipairs(persisted) do by_id[r.reactor_id] = r end
+for _, r in ipairs(persisted.reactors) do by_id[r.reactor_id] = r end
 assert_true(by_id.R1 ~= nil and by_id.R2 ~= nil)
 assert_eq(#by_id.R2.path, 1)
 assert_eq(by_id.R2.path[1], 'VALVE-1')
@@ -197,6 +210,7 @@ assert_eq(#by_id.R1.path, 0)
 ui._ui.reset_btn = { x1 = 41, x2 = 50, y = 24 }
 assert_true(ui:handle_touch(45, 24))
 assert_eq(#ui._ui.reactors, 2, 'RESET must reload the last-saved reactor list, not clear it')
+assert_eq(ui._ui.export_chest, 'transporter_0', 'RESET must reload the last-saved export chest too')
 assert_true(not ui._ui.dirty)
 
 print("fuel_router_ui_multi_valve_chain_builder_test.lua: ok")

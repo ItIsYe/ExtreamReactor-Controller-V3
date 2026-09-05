@@ -17,19 +17,31 @@
 --      to directly overhearing RT's status broadcasts if Master hasn't
 --      relayed recently.
 --   3. If fuel_level / capacity < request_below → that reactor requests fuel.
---   4. ME Bridge exports exactly the calculated amount to that reactor's
---      dedicated inlet peripheral (transporter or chest).
+--   4. ME Bridge exports exactly the calculated amount into the ONE shared
+--      export chest (config.logistics.export_chest) -- there is no
+--      per-reactor delivery target. A Mekanism logistics network (sorters +
+--      VALVE-Nodes) carries everything downstream from that single chest;
+--      which physical reactor actually receives it is decided purely by
+--      which valves are open at export time (see redstone_router.lua's
+--      begin_transaction(), which blocks every other route before opening
+--      this reactor's path and only then runs the export).
 --   5. No other reactor is affected.
 --
 -- Hardware requirements:
---   - Wired Modem on the FUEL computer, connected to:
---       • Each reactor's dedicated inlet transporter/chest (for delivery)
+--   - Wired Modem on the FUEL computer, connected to the shared export
+--     chest/transporter (config.logistics.export_chest)
 --   - Wireless Modem on the FUEL computer  (for MASTER communication)
 --   - ME Bridge accessible (wired or by name)
 --
 -- Config model (in config.logistics):
 --
 --   me_bridge = "me_bridge",
+--
+--   -- The ONE physical hand-off point for every reactor: FUEL always
+--   -- exports here, never to a per-reactor target. Which reactor the item
+--   -- actually reaches is entirely a function of the valve path opened for
+--   -- that delivery (see redstone_tree synthesis below).
+--   export_chest = "mekanism:ultimate_logistical_transporter_0",
 --
 --   reactors = {
 --     { -- FUEL has no wired access to the reactor itself (only the ME
@@ -39,7 +51,6 @@
 --       -- (see router_ui.lua's reactor-teach flow), never typed by hand.
 --       reactor_id        = "node-52-reactor-0",
 --       label             = "Reactor A",
---       inlet             = "mekanism:ultimate_logistical_transporter_0",
 --       path              = { "VALVE-1", "VALVE-3" },  -- see redstone_tree note below
 --       request_below     = 0.25,  -- request when fuel_level < 25% of capacity
 --       fill_amount       = 64,    -- how many ingot-equivalent items to export per request
@@ -221,7 +232,8 @@ function M.new(opts)
     fuel_status = opts.fuel_status or { master_relay = {}, direct_heard = {} },
     _state = {
       bridge        = nil,
-      reactors      = {},   -- { label, reactor_id, inlet, path, cfg }
+      reactors      = {},   -- { label, reactor_id, path, cfg }
+      export_chest  = nil,  -- { name, wrapped, is_transporter } -- shared by all reactors
       waste_outlets = {},   -- { name, label, outlet }
       rs_router     = nil,  -- redstone_router instance (if configured)
       total_exported= 0,
@@ -338,6 +350,25 @@ function M:refresh_peripherals()
     self.warn_once("bridge_absent", "Logistics: ME Bridge absent: " .. bridge_name)
   end
 
+  -- Shared export chest: the ONE physical hand-off point every delivery
+  -- exports into, regardless of which reactor it's destined for. Which
+  -- reactor actually receives it is decided by the valve path opened for
+  -- that delivery (see redstone_router.lua's begin_transaction()), not by
+  -- picking a different peripheral here.
+  self._state.export_chest = nil
+  if cfg.export_chest and peripheral.isPresent(cfg.export_chest) then
+    local ok, w = pcall(peripheral.wrap, cfg.export_chest)
+    if ok and w then
+      self._state.export_chest = { name = cfg.export_chest, wrapped = w,
+        is_transporter = is_transporter_name(cfg.export_chest) }
+    else
+      self.warn_once("export_chest_wrap", "Logistics: export_chest wrap failed: " .. cfg.export_chest)
+    end
+  elseif cfg.export_chest then
+    self.warn_once("export_chest_absent", "Logistics: export_chest absent: " .. cfg.export_chest
+      .. " (needs Wired Modem connection)")
+  end
+
   -- Per-reactor entries
   local reactors = {}
   for i, entry in ipairs(cfg.reactors or {}) do
@@ -346,24 +377,6 @@ function M:refresh_peripherals()
     -- accepted as a legacy alias for reactor_id only.
     local reactor_id = entry.reactor_id or entry.reactor_port
     local label = entry.label or reactor_id or ("Reactor " .. i)
-
-    -- Inlet: dedicated transporter or chest for THIS reactor
-    local inlet = nil
-    if entry.inlet and peripheral.isPresent(entry.inlet) then
-      local ok, w = pcall(peripheral.wrap, entry.inlet)
-      if ok and w then
-        inlet = { name = entry.inlet, wrapped = w,
-                  is_transporter = is_transporter_name(entry.inlet)
-                                or (entry.transporter == true) }
-      else
-        self.warn_once("inlet_wrap_" .. i,
-          "Logistics: inlet wrap failed: " .. entry.inlet)
-      end
-    elseif entry.inlet then
-      self.warn_once("inlet_absent_" .. i,
-        "Logistics: inlet absent: " .. entry.inlet
-        .. " (needs Wired Modem connection)")
-    end
 
     local path = {}
     if type(entry.path) == "table" then
@@ -375,7 +388,6 @@ function M:refresh_peripherals()
     reactors[#reactors + 1] = {
       label        = label,
       reactor_id   = reactor_id,
-      inlet        = inlet,
       path         = path,
       request_below = tonumber(entry.request_below) or 0.25,
       fill_amount  = tonumber(entry.fill_amount)   or 64,
@@ -447,6 +459,15 @@ function M:_run_supply(cycle_log)
   if self._state.current_request then return 0, 0 end
   local exported, errors = 0, 0
 
+  -- The shared export chest is a global precondition, not a per-reactor one
+  -- -- without it, nothing can be delivered to ANY reactor regardless of
+  -- routing/ME stock, so this is checked once up front.
+  local export_chest = self._state.export_chest
+  if not export_chest then
+    self.warn_once("no_export_chest", "Logistics: no export_chest configured — cannot supply any reactor")
+    return 0, 0
+  end
+
   -- Phase 1: ermitteln, WELCHE Reaktoren gerade Fuel anfordern, ohne sie
   -- schon zu beliefern. Alle anfordernden Reaktoren sammeln, dann nach
   -- Prioritaet sortieren (niedrigster Fuellstand zuerst). Reaktoren ohne
@@ -454,33 +475,28 @@ function M:_run_supply(cycle_log)
   -- Fuellstaenden eingeplant, da ihre Dringlichkeit nicht vergleichbar ist.
   local candidates = {}
   for _, r in ipairs(self._state.reactors) do
-    if not r.inlet then
-      self.warn_once("no_inlet:" .. r.label,
-        "Logistics: no inlet configured for " .. r.label)
-    else
-      local requesting, fuel_pct = false, nil
-      if r.reactor_id then
-        local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
-        if fuel_amt and capacity and capacity > 0 then
-          fuel_pct = fuel_amt / capacity
-          requesting = fuel_pct < r.request_below
-          self.log("DEBUG", string.format(
-            "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
-            r.label, fuel_pct * 100, fuel_amt, capacity,
-            requesting and "YES" or "no"))
-        else
-          self.warn_once("fuel_read_fail:" .. r.label,
-            "Logistics: no fresh network fuel data for " .. r.label
-            .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
-        end
+    local requesting, fuel_pct = false, nil
+    if r.reactor_id then
+      local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
+      if fuel_amt and capacity and capacity > 0 then
+        fuel_pct = fuel_amt / capacity
+        requesting = fuel_pct < r.request_below
+        self.log("DEBUG", string.format(
+          "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
+          r.label, fuel_pct * 100, fuel_amt, capacity,
+          requesting and "YES" or "no"))
       else
-        requesting = true
-        self.log("DEBUG", "Logistics: " .. r.label
-          .. " has no reactor_id — using always-supply mode")
+        self.warn_once("fuel_read_fail:" .. r.label,
+          "Logistics: no fresh network fuel data for " .. r.label
+          .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
       end
-      if requesting then
-        candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
-      end
+    else
+      requesting = true
+      self.log("DEBUG", "Logistics: " .. r.label
+        .. " has no reactor_id — using always-supply mode")
+    end
+    if requesting then
+      candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
     end
   end
 
@@ -569,11 +585,11 @@ function M:_run_supply(cycle_log)
           request.phase = "EXPORTING"
           request.state = "delivering"
           local ok, result = me_bridge_compat.export_to(bridge.wrapped,
-            { name = deliver_item, count = deliver_count }, r.inlet.name)
+            { name = deliver_item, count = deliver_count }, export_chest.name)
           if not ok then
             local err = tostring(result)
-            self.warn_once("exp_err:" .. r.inlet.name,
-              "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
+            self.warn_once("exp_err:" .. export_chest.name,
+              "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
             account_async_error(self, request)
             request.error = err
             return false, err
@@ -583,10 +599,10 @@ function M:_run_supply(cycle_log)
           request.exported_at = os.epoch and os.epoch("utc") or 0
           if moved > 0 then
             local move_line = string.format(
-              "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, r.inlet.name)
+              "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
             account_async_export(self, request, moved, move_line)
             self.log("INFO", string.format("ME→[%s]%s %s x%d via %s [tx=%s]",
-              r.label, pct_str, deliver_item, moved, r.inlet.name, tostring(request.transaction_id)))
+              r.label, pct_str, deliver_item, moved, export_chest.name, tostring(request.transaction_id)))
           end
           return true, moved
         end
@@ -639,11 +655,11 @@ function M:_run_supply(cycle_log)
       request.state = "delivering"
       request.phase = "EXPORTING"
       local ok, result = me_bridge_compat.export_to(bridge.wrapped,
-        { name = deliver_item, count = deliver_count }, r.inlet.name)
+        { name = deliver_item, count = deliver_count }, export_chest.name)
       if not ok then
         local err = tostring(result)
-        self.warn_once("exp_err:" .. r.inlet.name,
-          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
+        self.warn_once("exp_err:" .. export_chest.name,
+          "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
         errors = errors + 1
         request.error_counted = true
         finish_delivery(self, request, "ERROR", "EXPORT_FAILED", err)
@@ -653,7 +669,7 @@ function M:_run_supply(cycle_log)
         if moved > 0 then
           exported = exported + moved
           cycle_log[#cycle_log + 1] = string.format(
-            "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, r.inlet.name)
+            "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
         end
         finish_delivery(self, request, "COMPLETE", "COMPLETE_SAFE", nil)
       end
@@ -778,10 +794,12 @@ function M:get_summary()
     reactor_status[#reactor_status + 1] = {
       label         = r.label,
       fuel_pct      = fuel_pct,
-      inlet         = r.inlet and r.inlet.name or nil,
       reactor_id    = r.reactor_id,
       path          = r.path,
-      connected     = r.reactor_id ~= nil and r.inlet ~= nil,
+      -- Delivery to a reactor no longer depends on a peripheral dedicated
+      -- to it (see export_chest below) -- only on having learned its
+      -- identity from the owning RT node.
+      connected     = r.reactor_id ~= nil,
     }
   end
   local active_tx = s.rs_router and type(s.rs_router.get_active_transaction) == "function"
@@ -833,6 +851,7 @@ function M:get_summary()
   return {
     enabled        = cfg.enabled == true,
     bridge         = s.bridge and s.bridge.name or nil,
+    export_chest   = s.export_chest and s.export_chest.name or nil,
     reactors       = reactor_status,
     fuel_families  = fuel_families,
     waste_outlets  = #s.waste_outlets,
