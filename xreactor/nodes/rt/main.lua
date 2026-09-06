@@ -180,7 +180,7 @@ local RT_BUILD_INFO = (function()
   return { manifest_id = "unknown", release_id = "unknown" }
 end)()
 
-local comms, services
+local comms, services, slow_services
 local node_state_machine
 local current_state_value = "INIT"
 local states_table
@@ -932,6 +932,7 @@ local function init()
 
   -- Services
   services = service_manager.new({ log_prefix = "RT" })
+  slow_services = service_manager.new({ log_prefix = "RT-BG" })
 
   handle_command = command_handler_lib.new(build_command_ctx())
 
@@ -958,7 +959,7 @@ local function init()
   })
   services:add(comms)
 
-  services:add(discovery_service.new({
+  slow_services:add(discovery_service.new({
     registry = registry,
     discover = discover_with_stability_tracking,
     should_discover = should_discover,
@@ -967,13 +968,15 @@ local function init()
     update_health = function(ok) devices.discovery_failed = not ok end,
   }))
 
-  -- Control-Service: läuft auf eigenem Intervall (nicht am Comms-Timeout gebunden)
+  -- Control-Service (Reaktor-/Turbinenregelung) bleibt in der "fast"-
+  -- Coroutine (siehe run_fast_loop/run_slow_loop unten): zeitkritisch, darf
+  -- nicht hinter Discovery/Telemetry in derselben Liste warten muessen.
   services:add({
     name = "control",
     tick = function() control_tick() end,
   })
 
-  services:add(telemetry_service.new({
+  slow_services:add(telemetry_service.new({
     comms = comms,
     status_interval  = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
@@ -992,6 +995,7 @@ local function init()
   }))
 
   services:init()
+  slow_services:init()
 
   configure_lifecycle_context()
   configure_state_machine()
@@ -1109,8 +1113,27 @@ local function update_quiesce_safe()
   return true
 end
 
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() end,
-  quiesce_handshake and {
-    handshake = quiesce_handshake,
-    on_quiesce = update_quiesce_safe,
-  } or nil)
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop()): "fast" traegt UI/Touch/Comms UND die
+-- zeitkritische Reaktor-/Turbinenregelung ("control"-Service), "slow"
+-- traegt Discovery/Telemetry -- ein langsamer Discovery-Scan soll die
+-- Regelung/UI nicht mehr blockieren.
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        quiesce_opts = quiesce_handshake and {
+          handshake = quiesce_handshake,
+          on_quiesce = update_quiesce_safe,
+        } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({ interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

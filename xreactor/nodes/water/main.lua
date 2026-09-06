@@ -92,6 +92,7 @@ local node_id = support_runtime.init_logging({
 
 local comms
 local services
+local slow_services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local water_health = health.new({})
 local tanks = {}
@@ -456,6 +457,7 @@ end
 
 local function init()
   services = service_manager.new({ log_prefix = "WATER" })
+  slow_services = service_manager.new({ log_prefix = "WATER-BG" })
   comms = comms_service.new({
     config = config, log_prefix = "WATER", on_command = handle_command,
     on_message = function(message)
@@ -468,14 +470,14 @@ local function init()
   })
   services:add(comms)
   local discovery_stability_cache = discovery_stability.new({})
-  services:add(discovery_service.new({
+  slow_services:add(discovery_service.new({
     registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
     should_discover = function(service, ts, event, due)
       return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
     end,
     managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
   }))
-  services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { tanks = #config.loop_tanks } end }))
+  slow_services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { tanks = #config.loop_tanks } end }))
   services:add(ui_service.new({
     interval = 1,
     snapshot = function()
@@ -487,6 +489,7 @@ local function init()
     handle_input = function(event) handle_monitor_touch(event) end
   }))
   services:init()
+  slow_services:init()
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")
   if ok_report_mod then
@@ -524,6 +527,27 @@ local function quiesce_all_clusters()
 end
 
 init()
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop()): balance_loop()/manage_clusters() sind die
+-- eigentliche Fuellstand-Sicherheitsregelung (Redstone-Fill/Drain je
+-- Cluster) -- bleiben bewusst in der "fast"-Gruppe neben UI/Touch, analog
+-- zu VALVE's failsafe, statt hinter Discovery/Telemetry ("slow"-Gruppe) auf
+-- ihren Zyklus warten zu muessen.
 local quiesce_handshake = _G.__xreactor_update_handshake
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() balance_loop(); manage_clusters() end,
-  quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = quiesce_all_clusters } or nil)
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        after_cycle = function() balance_loop(); manage_clusters() end,
+        quiesce_opts = quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = quiesce_all_clusters } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({ interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

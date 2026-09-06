@@ -116,6 +116,7 @@ local node_id = support_runtime.init_logging({
 
 local comms
 local services
+local slow_services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local reproc_health = health.new({})
 local buffers = {}
@@ -446,6 +447,7 @@ end
 
 local function init()
   services = service_manager.new({ log_prefix = "REPROC" })
+  slow_services = service_manager.new({ log_prefix = "REPROC-BG" })
   comms = comms_service.new({
     config = config, log_prefix = "REPROC", on_command = handle_command,
     on_message = function(message)
@@ -488,14 +490,14 @@ local function init()
     end
   end })
   local discovery_stability_cache = discovery_stability.new({})
-  services:add(discovery_service.new({
+  slow_services:add(discovery_service.new({
     registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
     should_discover = function(service, ts, event, due)
       return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
     end,
     managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
   }))
-  services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { standby = standby } end }))
+  slow_services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { standby = standby } end }))
   services:add(ui_service.new({
     interval = 1,
     snapshot = function()
@@ -507,6 +509,7 @@ local function init()
     handle_input = function(event) handle_monitor_touch(event) end
   }))
   services:init()
+  slow_services:init()
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")
   if ok_report_mod then
@@ -521,22 +524,48 @@ local function init()
 end
 
 init()
--- Expliziter Quiesce-Handler, nutzt die bereits vorhandene, idempotente
--- enter_standby()-Funktion -- kein neuer Aktor-Code.
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop()): "fast" traegt UI/Touch/Ventil-ACKs/Teach-in UND
+-- die Stale-Pruefung + get_rs_router():tick() (guenstig, muss unbedingt
+-- jeden Zyklus laufen). "slow" traegt Discovery/Telemetry UND process_
+-- buffers()/get_feed_router():tick() (die eigentliche Feed-/Export-Arbeit,
+-- kann laut Feldberichten lange blockierende Peripherie-Calls machen) --
+-- damit blockiert ein langsamer Feed-Zyklus nicht mehr UI/Touch/Ventil-
+-- Sicherheit.
 local quiesce_handshake = _G.__xreactor_update_handshake
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-  -- Stale-Pruefung VOR process_buffers()/feed-Arbeit, damit ein gerade
-  -- abgelaufenes MASTER-Timeout sofort wirkt statt erst ab dem naechsten Zyklus.
-  if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then enter_standby("MASTER_STALE") end
-  process_buffers()
-  if not standby then get_feed_router():tick() end
-  -- Treibt die asynchrone Ventil-Transaktion voran -- laeuft unbedingt jeden
-  -- Zyklus; im Standby ist es dank enter_standby()'s sofortigem shutdown_now()
-  -- nur noch ein billiger No-Op (keine Transaktion mehr vorhanden).
-  get_rs_router():tick()
-end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
-  enter_standby("UPDATE_QUIESCE")
-  local rs_router = get_rs_router()
-  rs_router:begin_quiesce("UPDATE_QUIESCE")
-  return standby == true and rs_router:poll_quiesce()
-end } or nil)
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        after_cycle = function()
+          -- Stale-Pruefung VOR process_buffers()/feed-Arbeit, damit ein gerade
+          -- abgelaufenes MASTER-Timeout sofort wirkt statt erst ab dem naechsten Zyklus.
+          if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then enter_standby("MASTER_STALE") end
+          -- Treibt die asynchrone Ventil-Transaktion voran -- laeuft unbedingt
+          -- jeden Zyklus; im Standby ist es dank enter_standby()'s sofortigem
+          -- shutdown_now() nur noch ein billiger No-Op (keine Transaktion mehr vorhanden).
+          get_rs_router():tick()
+        end,
+        quiesce_opts = quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
+          enter_standby("UPDATE_QUIESCE")
+          local rs_router = get_rs_router()
+          rs_router:begin_quiesce("UPDATE_QUIESCE")
+          return standby == true and rs_router:poll_quiesce()
+        end } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({
+        interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services,
+        after_cycle = function()
+          process_buffers()
+          if not standby then get_feed_router():tick() end
+        end,
+      })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

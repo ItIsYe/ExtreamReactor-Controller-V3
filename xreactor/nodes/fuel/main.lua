@@ -154,6 +154,12 @@ local node_id = support_runtime.init_logging({
 
 local comms
 local services
+-- Eigene Service-Gruppe fuer Discovery/Telemetry (siehe init() unten):
+-- laeuft in ihrer eigenen Coroutine (support_runtime.run_slow_loop(), siehe
+-- Zeile ~478), damit ein langsamer Peripherie-Scan/Export nicht UI-Touch
+-- oder die Ventil-Transaktion (redstone_router:tick(), bleibt in der
+-- "fast"-Gruppe) blockiert.
+local slow_services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local fuel_health = health.new({})
 local router
@@ -381,6 +387,7 @@ local function init()
     .. (devices.monitor and "" or " (KEIN Monitor gefunden!)"), devices.monitor and "INFO" or "WARN")
 
   services = service_manager.new({ log_prefix = "FUEL" })
+  slow_services = service_manager.new({ log_prefix = "FUEL-BG" })
   comms = comms_service.new({
     config = config, log_prefix = "FUEL", on_command = handle_command,
     on_message = function(message)
@@ -423,14 +430,14 @@ local function init()
     end
   end })
   local discovery_stability_cache = discovery_stability.new({})
-  services:add(discovery_service.new({
+  slow_services:add(discovery_service.new({
     registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
     should_discover = function(service, ts, event, due)
       return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
     end,
     managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
   }))
-  services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
+  slow_services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
   services:add(ui_service.new({
     interval = 1,
     build_model = build_fuel_model,
@@ -456,6 +463,7 @@ local function init()
   -- Toggle-Buttons: setzt den Zustand, zweiter Aufruf hebt ihn sofort auf).
   services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
   services:init()
+  slow_services:init()
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")
   if ok_report_mod then
@@ -471,15 +479,36 @@ local function init()
 end
 
 init()
--- get_rs_router():tick() treibt die asynchrone Ventil-Transaktion voran --
--- muss unabhaengig vom 5s-Logistics-Zyklus regelmaessig laufen, sonst
--- kaeme eine laufende Transaktion nie ueber WAIT_SETTLE/HOLD_OPEN hinaus.
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop() fuer die Begruendung): "fast" traegt UI/Touch/
+-- Ventil-ACKs/Teach-in UND get_rs_router():tick() (treibt eine laufende
+-- Ventil-Transaktion voran -- guenstige State-Machine-Pruefungen, kein
+-- blockierender Peripherie-Call), "slow" traegt Discovery/Telemetry UND
+-- get_router():tick() (macht den eigentlichen ME-Bridge-Export-Call, der
+-- laut Feldberichten spuerbar lange dauern kann) -- ein langsamer Export
+-- soll UI/Touch/Ventil-Sicherheit nicht mehr blockieren.
 local quiesce_handshake = _G.__xreactor_update_handshake
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-  get_router():tick()
-  get_rs_router():tick()
-end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
-  local rs_router = get_rs_router()
-  rs_router:begin_quiesce("UPDATE_QUIESCE")
-  return rs_router:poll_quiesce()
-end } or nil)
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        after_cycle = function() get_rs_router():tick() end,
+        quiesce_opts = quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
+          local rs_router = get_rs_router()
+          rs_router:begin_quiesce("UPDATE_QUIESCE")
+          return rs_router:poll_quiesce()
+        end } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({
+        interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services,
+        after_cycle = function() get_router():tick() end,
+      })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

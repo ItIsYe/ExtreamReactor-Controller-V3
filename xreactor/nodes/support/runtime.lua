@@ -239,5 +239,123 @@ end
 -- Exportiert, damit ENERGY und MASTER (eigene Crash-Handling-Einstiegspunkte,
 -- nicht ueber M.run_event_loop()) dieselbe Logik wiederverwenden koennen.
 M.crash_screen = crash_screen
+M.is_terminate = is_terminate
+
+-- run_fast_loop()/run_slow_loop(): entkoppelte Zwei-Coroutinen-Variante von
+-- run_event_loop(), fuer FUEL/WATER/REPROCESSOR/RT/VALVE (siehe deren
+-- main.lua, per parallel.waitForAny(fast, slow) verdrahtet). Hintergrund:
+-- run_event_loop() tickt ALLE Services (UI eingeschlossen) streng
+-- nacheinander in EINER Coroutine -- ein einzelner langsamer/blockierender
+-- Service (Discovery-Scan, ME-Bridge-Export) friert dadurch bis zu seiner
+-- eigenen Laufzeit lang auch Touch-Eingabe und Ventil-Sicherheitslogik ein.
+-- CC:Tweaked hat keine echten Threads: parallel.waitForAny/All wechselt nur
+-- an os.pullEvent()/os.sleep()-Punkten -- ein synchroner Peripherie-Call
+-- gibt die Kontrolle waehrend seiner Laufzeit trotzdem NICHT ab und blockiert
+-- dann beide Coroutinen gemeinsam (die gesamte Lua-VM ist einsträngig). Diese
+-- Aufteilung verhindert also nicht jede Blockade, sondern nur, dass ein
+-- langsamer Service in der "slow"-Gruppe VOR jedem UI-/Touch-/Sicherheits-
+-- Tick in derselben sequentiellen Liste stehen muss -- exakt das Muster, das
+-- nodes/energy/matrix.lua + heartbeat.lua bereits fuer ENERGY nutzen.
+--
+-- run_fast_loop(opts): opts = { receive_timeout, services, comms,
+--   after_cycle (optional, rollenspezifische guenstige/zeitkritische Arbeit,
+--   z.B. redstone_router:tick() -- treibt eine laufende Ventil-Transaktion
+--   voran, macht aber selbst keine blockierenden Peripherie-Calls),
+--   quiesce_opts (optional, wie bei run_event_loop) }. Bekommt jedes Event
+--   (modem_message/Touch/Taste/Resize) UND tickt periodisch alle
+--   opts.services -- identisch zum bisherigen run_event_loop(), nur ohne die
+--   "slow"-Services in derselben Liste.
+function M.run_fast_loop(opts)
+  local receive_timeout = opts.receive_timeout
+  local services = opts.services
+  local comms = opts.comms
+  local after_cycle = opts.after_cycle
+  local quiesce_opts = opts.quiesce_opts
+  local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
+  local debug_quiesce_seen = false -- TEMP DIAGNOSTIC, see run_event_loop() above
+  while true do
+    local timer = os.startTimer(receive_timeout)
+    while true do
+      local event = { os.pullEvent() }
+      if event[1] == "modem_message" then
+        comms:handle_event(event)
+        services:tick(nil, event)
+      elseif event[1] == "timer" and event[2] == timer then
+        break
+      elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key"
+          or event[1] == "monitor_resize" or event[1] == "term_resize" then
+        services:tick(nil, event)
+      end
+    end
+    services:tick()
+    if type(after_cycle) == "function" then
+      local ok2, err2 = pcall(after_cycle)
+      if not ok2 then
+        pcall(function()
+          require("core.utils").log("RUNTIME", "fast-loop after_cycle error: " .. tostring(err2), "ERROR")
+        end)
+      end
+    end
+    if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
+      if not debug_quiesce_seen then
+        debug_quiesce_seen = true
+        pcall(function()
+          require("core.utils").log("RUNTIME", "quiesce request erkannt (Diagnose)", "INFO")
+        end)
+      end
+      handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
+      local confirmed = false
+      if type(quiesce_opts.on_quiesce) == "function" then
+        local ok3, result3 = pcall(quiesce_opts.on_quiesce)
+        if ok3 then
+          confirmed = result3 == true
+        else
+          confirmed = false
+          pcall(function()
+            require("core.utils").log("RUNTIME", "on_quiesce error: " .. tostring(result3), "ERROR")
+          end)
+        end
+      end
+      if confirmed then
+        handshake_lib.mark_safe_outputs_applied(quiesce_opts.handshake)
+        handshake_lib.mark_runtime_stopped(quiesce_opts.handshake)
+        return
+      end
+    else
+      debug_quiesce_seen = false
+    end
+  end
+end
+
+-- run_slow_loop(opts): opts = { interval, services, after_cycle (optional,
+--   rollenspezifische Hintergrundarbeit, die tatsaechlich lange/blockierende
+--   Peripherie-Calls machen darf, z.B. logistics_router:export). Kein
+--   Event-Empfang, keine Quiesce-Pruefung (die lebt in run_fast_loop) --
+--   rein periodisches Ticken auf eigenem Takt, damit ein langsamer Aufruf
+--   hier UI/Touch/Ventil-Sicherheit in run_fast_loop nur so lange blockiert,
+--   wie der Aufruf selbst dauert, statt zusaetzlich hinter allen anderen
+--   Services in einer gemeinsamen Liste anstehen zu muessen.
+function M.run_slow_loop(opts)
+  local interval = opts.interval
+  local services = opts.services
+  local after_cycle = opts.after_cycle
+  while true do
+    os.sleep(interval)
+    local ok, err = pcall(function() services:tick() end)
+    if not ok then
+      pcall(function()
+        require("core.utils").log("RUNTIME", "slow-loop tick error: " .. tostring(err), "ERROR")
+      end)
+    end
+    if type(after_cycle) == "function" then
+      local ok2, err2 = pcall(after_cycle)
+      if not ok2 then
+        pcall(function()
+          require("core.utils").log("RUNTIME", "slow-loop after_cycle error: " .. tostring(err2), "ERROR")
+        end)
+      end
+    end
+  end
+end
 
 return M
