@@ -207,6 +207,21 @@ local function get_router()
   return router
 end
 
+-- logistics.enabled ist ein reiner Sicherheits-Schalter (Default false,
+-- siehe config.lua) -- wird NIE automatisch aus fuel_routes.lua/router_ui
+-- gesetzt, nur ueber diesen Touch-Button oder von Hand in der Config.
+-- Persistiert sofort in die Live-Config-Datei (nicht fuel_routes.lua).
+local function set_logistics_enabled(value)
+  config.logistics = config.logistics or {}
+  config.logistics.enabled = value == true
+  local persisted, persist_err = utils.write_config(CONFIG.CONFIG_PATH, config)
+  if not persisted then
+    utils.log("FUEL", "LOGISTIK-Schalter angewendet, aber Persistierung fehlgeschlagen: "
+      .. tostring(persist_err), "WARN")
+  end
+  utils.log("FUEL", "Logistik " .. (value and "aktiviert" or "deaktiviert") .. " (Touch)", "INFO")
+end
+
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
@@ -219,6 +234,7 @@ local function get_router_ui()
       get_reactors = function()
         return reactor_targets.collect(config, fuel_status_cache)
       end,
+      set_logistics_enabled = set_logistics_enabled,
     })
   end
   return router_ui_instance

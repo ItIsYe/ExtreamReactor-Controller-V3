@@ -324,14 +324,21 @@ function M.new(opts)
     get_reactors = opts.get_reactors or function() return {} end,
     config_path = opts.config_path or DEFAULT_REACTORS_CONFIG_PATH,
     routing_load_status = opts.routing_load_status,
+    -- Persistiert logistics.enabled sofort in die Live-Config (nicht die
+    -- fuel_routes.lua-Datei, die nur export_chest/reactors haelt) -- der
+    -- Schalter wirkt sich unmittelbar aus, kein SPEICHERN/dirty-Batching
+    -- wie bei Reaktoren/Export-Kiste, da es ein reiner Sicherheits-Toggle
+    -- ist ("Nur aktivieren, wenn Hardware bereit ist", siehe config.lua).
+    set_logistics_enabled = opts.set_logistics_enabled or function() end,
     _ui = {
       mode = "list",
       reactors = {},
       export_chest = nil,
+      logistics_enabled = false,
       dirty = false,
       list_scroll = 0, list_scroll_up = nil, list_scroll_down = nil,
       reactor_btns = {}, learn_btn = nil, save_btn = nil, reset_btn = nil,
-      export_chest_btn = nil,
+      export_chest_btn = nil, logistics_btn = nil,
       -- "learn" state
       learn_scroll = 0, learn_scroll_up = nil, learn_scroll_down = nil,
       learn_btns = {}, learn_cancel_btn = nil,
@@ -379,6 +386,7 @@ function M.new(opts)
     source, export_chest = file_state.reactors, file_state.export_chest
   end
   self._ui.export_chest = export_chest
+  self._ui.logistics_enabled = (lg and lg.enabled) == true
   for _, entry in ipairs(source or {}) do
     self._ui.reactors[#self._ui.reactors + 1] = copy_reactor(entry)
   end
@@ -425,11 +433,19 @@ function M:_render_list(target, w, h)
   if w < 40 then chest_lbl = "KISTE: " .. (nonempty_string(u.export_chest) and mux.fit(u.export_chest, math.max(1, w - 14)) or "?") end
   u.export_chest_btn = mux.button(target, 2, 4, w - 3, chest_lbl, nonempty_string(u.export_chest) and "OK" or "WARNING", 1)
 
+  -- Sicherheits-Schalter: logistics.enabled bleibt standardmaessig false
+  -- (siehe config.lua), damit ein halb eingerichteter Node nicht sofort
+  -- exportiert -- wirkt sofort, kein SPEICHERN noetig (siehe konstructor-
+  -- Kommentar bei set_logistics_enabled).
+  local logistics_lbl = "LOGISTIK: " .. (u.logistics_enabled and "AN" or "AUS")
+  if w < 34 then logistics_lbl = u.logistics_enabled and "LOG: AN" or "LOG: AUS" end
+  u.logistics_btn = mux.button(target, 2, 5, w - 3, logistics_lbl, u.logistics_enabled and "OK" or "WARNING", 1)
+
   local learn_lbl = "REAKTOR EINLERNEN"
   if w < 34 then learn_lbl = "EINLERNEN" end
-  u.learn_btn = mux.button(target, 2, 5, w - 3, learn_lbl, "LIMITED", 1)
+  u.learn_btn = mux.button(target, 2, 6, w - 3, learn_lbl, "LIMITED", 1)
 
-  local body_top = 7
+  local body_top = 8
   local button_y = math.max(body_top + 3, h - 2)
   local body_bottom = math.max(body_top + 2, button_y - 1)
   local body_h = body_bottom - body_top + 1
@@ -711,6 +727,11 @@ function M:_handle_list_touch(x, y)
   if hit(u.export_chest_btn, x, y) then
     u.mode = "chest_pick"
     u.chest_scroll = 0
+    return true
+  end
+  if hit(u.logistics_btn, x, y) then
+    u.logistics_enabled = not u.logistics_enabled
+    self.set_logistics_enabled(u.logistics_enabled)
     return true
   end
   if hit(u.learn_btn, x, y) then
