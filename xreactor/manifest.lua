@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 622,
-  manifest_id = "manifest-v622",
+  manifest_version = 623,
+  manifest_id = "manifest-v623",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "0be603a0", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "eac35c27", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -214,7 +214,7 @@ return {
     { path = "nodes/support/command_handler.lua", size_bytes = 4134, hash = "dbb9d0c1", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER","FUEL","REPROCESSING"} },
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY","WATER","FUEL","REPROCESSING","RT"} },
-    { path = "nodes/support/runtime.lua", size_bytes = 8299, hash = "ddf0d160", required_for={"WATER","FUEL","REPROCESSING","RT","ENERGY","MASTER","VALVE"} },
+    { path = "nodes/support/runtime.lua", size_bytes = 9017, hash = "3edd71f6", required_for={"WATER","FUEL","REPROCESSING","RT","ENERGY","MASTER","VALVE"} },
     { path = "nodes/support/ui_pages.lua", size_bytes = 4666, hash = "75acfee4", required_for={"WATER","FUEL","REPROCESSING","ENERGY","RT"} },
     },
   },

@@ -166,6 +166,7 @@ end
 -- Verhalten.
 function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce_opts)
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
+  local debug_quiesce_seen = false -- TEMP DIAGNOSTIC, see below
   local ok, err = xpcall(function()
     while true do
       local timer = os.startTimer(receive_timeout)
@@ -192,6 +193,17 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
       end
       services:tick()
       if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
+        -- TEMP DIAGNOSTIC (2026-09-06): einmalig pro Request loggen, ob dieser
+        -- Zweig ueberhaupt erreicht wird -- Feld-Reports zeigen "Quiesce-
+        -- Timeout -- Rolle bleibt aktiv" nach voller 60s-Wartezeit bei
+        -- mehreren Rollen, was bedeuten wuerde, dass mark_quiesce_attempted()
+        -- nie lief. Diese Zeile beweist/widerlegt das direkt im Rollen-Log.
+        if not debug_quiesce_seen then
+          debug_quiesce_seen = true
+          pcall(function()
+            require("core.utils").log("RUNTIME", "quiesce request erkannt (Diagnose)", "INFO")
+          end)
+        end
         handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
         -- Fail-closed default: ohne echtes on_quiesce-Ergebnis gilt der
         -- Quiesce-Vorgang nicht als bestaetigt.
@@ -214,6 +226,8 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
           handshake_lib.mark_runtime_stopped(quiesce_opts.handshake)
           return
         end
+      else
+        debug_quiesce_seen = false
       end
     end
   end, function(e) return e end)
