@@ -217,6 +217,7 @@ assert_eq(#persisted.reactors, 2)
 local by_id = {}
 for _, r in ipairs(persisted.reactors) do by_id[r.reactor_id] = r end
 assert_true(by_id.R1 ~= nil and by_id.R2 ~= nil)
+assert_eq(by_id.R2.resupply_cooldown_s, 30, 'resupply_cooldown_s must persist with its default (30s)')
 assert_eq(#by_id.R2.path, 1)
 assert_eq(by_id.R2.path[1], 'VALVE-1')
 assert_eq(#by_id.R1.path, 0)
