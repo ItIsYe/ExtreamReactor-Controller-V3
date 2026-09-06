@@ -73,6 +73,17 @@ local CONFIG = {
     --   request_below = fuel ratio below which reactor requests resupply (0.0–1.0)
     --   fill_amount   = how many ingot-equivalent items to export per resupply event
     --   min_in_me     = minimum ME stock to maintain (never export below this)
+    --   resupply_cooldown_s = minimum seconds between deliveries to this
+    --                   reactor (default 30). FUEL has no Wired Modem to the
+    --                   last chest before the reactor, so it cannot see
+    --                   whether a previous delivery has physically arrived
+    --                   yet -- the reactor's own reported fuel level only
+    --                   rises AFTER it consumes what's already there. Without
+    --                   this cooldown, FUEL would re-export every supply
+    --                   cycle while fuel_pct stays below request_below, even
+    --                   though the last batch is still in transit, and fuel
+    --                   piles up in the chest before the reactor. Tune per
+    --                   reactor to roughly match its transport distance.
     --
     -- No `item` field: FUEL decides Uranium vs Blutonium, and Ingot vs
     -- Block, automatically on every delivery, based on which currently has

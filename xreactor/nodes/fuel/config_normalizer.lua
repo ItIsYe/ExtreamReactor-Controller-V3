@@ -128,6 +128,13 @@ function M.normalize(config_values, defaults, add_warning, utils)
           unsafe_reactor_config = true
         end
       end
+      if r.resupply_cooldown_s ~= nil then
+        local cooldown = tonumber(r.resupply_cooldown_s)
+        if cooldown == nil or cooldown < 0 then
+          add_warning(string.format("logistics.reactors[%d].resupply_cooldown_s=%s invalid; must be >= 0", i, tostring(r.resupply_cooldown_s)))
+          unsafe_reactor_config = true
+        end
+      end
     end
   end
   if unsafe_reactor_config and lg.enabled then

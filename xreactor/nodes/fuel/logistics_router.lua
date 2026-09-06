@@ -248,6 +248,10 @@ function M.new(opts)
       current_request = nil,  -- { transaction_id, reactor_id, label, state, phase }
       last_delivery = nil,
       delivery_seq = 0,
+      -- Ueberlebt refresh_peripherals() (das self._state.reactors komplett
+      -- neu aufbaut) -- Grundlage fuer die Abklingzeit unten: wann eine
+      -- Lieferung an diesen Reaktor zuletzt tatsaechlich exportiert wurde.
+      last_export_ts = {},  -- [reactor_id] = os.epoch("utc")
     },
   }
   return setmetatable(self, { __index = M })
@@ -288,6 +292,20 @@ local function account_async_error(self, request)
   if request.cycle_result then
     request.cycle_result.errors = (request.cycle_result.errors or 0) + 1
   end
+end
+
+-- Merkt sich, WANN zuletzt tatsaechlich etwas an diesen Reaktor exportiert
+-- wurde -- Grundlage fuer resupply_cooldown_s in _run_supply()'s Phase 1
+-- (siehe dortiger Kommentar): FUEL hat kein Wired-Modem-Sichtfeld auf die
+-- letzte Kiste vor dem Reaktor, kann also physisch nicht pruefen, ob eine
+-- vorige Lieferung schon angekommen/verbraucht wurde. Der vom Reaktor
+-- gemeldete Fuellstand (fuel_pct) aktualisiert sich erst NACH Verbrauch --
+-- ohne diese Abklingzeit wuerde FUEL bei jedem ~5s-Zyklus erneut nachlegen,
+-- solange fuel_pct unter der Schwelle bleibt, und Fuel staut sich in der
+-- Kiste vor dem Reaktor an (Feldbericht 2026-09-06).
+local function record_export(self, reactor_id, moved)
+  if not reactor_id or (tonumber(moved) or 0) <= 0 then return end
+  self._state.last_export_ts[reactor_id] = os.epoch and os.epoch("utc") or 0
 end
 
 local function account_async_export(self, request, moved, move_line)
@@ -392,6 +410,11 @@ function M:refresh_peripherals()
       request_below = tonumber(entry.request_below) or 0.25,
       fill_amount  = tonumber(entry.fill_amount)   or 64,
       min_in_me    = tonumber(entry.min_in_me)     or 32,
+      -- Mindestwartezeit nach einer Lieferung an diesen Reaktor, bevor
+      -- erneut nachgelegt wird -- siehe record_export()-Kommentar oben.
+      -- Je nach physischer Entfernung des Reaktors vom Transportnetz
+      -- unterschiedlich lang, daher pro Reaktor einstellbar (Router-UI).
+      resupply_cooldown_s = math.max(0, tonumber(entry.resupply_cooldown_s) or 30),
       cfg          = entry,
     }
   end
@@ -473,6 +496,7 @@ function M:_run_supply(cycle_log)
   -- Prioritaet sortieren (niedrigster Fuellstand zuerst). Reaktoren ohne
   -- reactor_id (Always-Supply-Fallback) werden nach allen bekannten
   -- Fuellstaenden eingeplant, da ihre Dringlichkeit nicht vergleichbar ist.
+  local now_ts = os.epoch and os.epoch("utc") or 0
   local candidates = {}
   for _, r in ipairs(self._state.reactors) do
     local requesting, fuel_pct = false, nil
@@ -494,6 +518,22 @@ function M:_run_supply(cycle_log)
       requesting = true
       self.log("DEBUG", "Logistics: " .. r.label
         .. " has no reactor_id — using always-supply mode")
+    end
+    -- Abklingzeit seit der letzten tatsaechlichen Lieferung: fuel_pct
+    -- aktualisiert sich erst, NACHDEM der Reaktor eine vorige Lieferung
+    -- verbraucht hat -- ohne diese Sperre wuerde hier jeden Zyklus erneut
+    -- nachgelegt, solange fuel_pct noch unter der Schwelle liegt, obwohl
+    -- die letzte Ladung physisch noch unterwegs/nicht verbraucht ist (siehe
+    -- record_export()-Kommentar oben).
+    if requesting and r.reactor_id then
+      local last_ts = self._state.last_export_ts[r.reactor_id]
+      local cooldown_ms = (r.resupply_cooldown_s or 0) * 1000
+      if last_ts and (now_ts - last_ts) < cooldown_ms then
+        requesting = false
+        self.log("DEBUG", string.format(
+          "Logistics: %s: resupply_cooldown aktiv (%.0fs verbleibend) — kein Nachlegen diesen Zyklus",
+          r.label, (cooldown_ms - (now_ts - last_ts)) / 1000))
+      end
     end
     if requesting then
       candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
@@ -598,6 +638,7 @@ function M:_run_supply(cycle_log)
           request.moved = moved
           request.exported_at = os.epoch and os.epoch("utc") or 0
           if moved > 0 then
+            record_export(self, request.reactor_id, moved)
             local move_line = string.format(
               "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
             account_async_export(self, request, moved, move_line)
@@ -667,6 +708,7 @@ function M:_run_supply(cycle_log)
         local moved = type(result) == "number" and result or 0
         request.moved = moved
         if moved > 0 then
+          record_export(self, request.reactor_id, moved)
           exported = exported + moved
           cycle_log[#cycle_log + 1] = string.format(
             "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)

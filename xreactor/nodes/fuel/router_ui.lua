@@ -52,6 +52,7 @@ local DEFAULT_REACTORS_CONFIG_PATH = "/xreactor_config/fuel_routes.lua"
 
 local STEP_RATIO = 0.05
 local STEP_AMOUNT = 8
+local STEP_COOLDOWN_S = 5
 local VALVE_LABEL_MAX = 18
 
 local function nonempty_string(v) return type(v) == "string" and v ~= "" end
@@ -76,6 +77,10 @@ local function copy_reactor(entry)
     request_below = entry.request_below or 0.25,
     fill_amount = entry.fill_amount or 64,
     min_in_me = entry.min_in_me or 32,
+    -- Abklingzeit nach einer Lieferung an diesen Reaktor, bevor erneut
+    -- nachgelegt wird -- je nach physischer Entfernung vom Transportnetz
+    -- unterschiedlich lang, siehe logistics_router.lua's record_export().
+    resupply_cooldown_s = entry.resupply_cooldown_s or 30,
   }
 end
 
@@ -115,6 +120,7 @@ local function write_state_file(state, path)
     f.writeLine(string.format("      request_below = %s,", tostring(tonumber(r.request_below) or 0.25)))
     f.writeLine(string.format("      fill_amount = %s,", tostring(tonumber(r.fill_amount) or 64)))
     f.writeLine(string.format("      min_in_me = %s,", tostring(tonumber(r.min_in_me) or 32)))
+    f.writeLine(string.format("      resupply_cooldown_s = %s,", tostring(tonumber(r.resupply_cooldown_s) or 30)))
     f.writeLine("      path = {")
     for _, id in ipairs(r.path or {}) do
       f.writeLine(string.format("        %q,", id))
@@ -348,6 +354,7 @@ function M.new(opts)
       request_below_minus = nil, request_below_plus = nil,
       fill_amount_minus = nil, fill_amount_plus = nil,
       min_in_me_minus = nil, min_in_me_plus = nil,
+      cooldown_minus = nil, cooldown_plus = nil,
       edit_done_btn = nil, edit_cancel_btn = nil, edit_delete_btn = nil,
       -- "chest_pick" state (sets u.export_chest, a page-level setting --
       -- returns to "list", not "edit")
@@ -542,7 +549,7 @@ function M:_render_edit(target, w, h)
   mux.banner(target, 2, 3, w - 3, "REAKTOR: " .. tostring(editing.label or editing.reactor_id), "LIMITED", "reactor")
 
   local body_top = 5
-  local button_y = math.max(body_top + 5, h - 2)
+  local button_y = math.max(body_top + 6, h - 2)
   local rows_bottom = button_y - 1
   mux.card(target, 2, body_top, w - 3, rows_bottom - body_top + 1, { title = "EINSTELLUNGEN", status = "LIMITED", icon = "config" })
 
@@ -561,6 +568,15 @@ function M:_render_edit(target, w, h)
 
   u.min_in_me_minus, u.min_in_me_plus = stepper_row(target, 4, y, w - 6,
     "MIN-ME", tostring(math.floor(editing.min_in_me or 32)))
+  y = y + 1
+
+  -- Abklingzeit nach einer Lieferung, bevor erneut nachgelegt wird -- siehe
+  -- logistics_router.lua's record_export()-Kommentar (FUEL kann die letzte
+  -- Kiste vor dem Reaktor physisch nicht einsehen; ohne diese Sperre staut
+  -- sich Fuel dort an, solange der gemeldete Fuellstand noch nicht
+  -- nachgezogen hat).
+  u.cooldown_minus, u.cooldown_plus = stepper_row(target, 4, y, w - 6,
+    "ABKLINGZEIT", string.format("%ds", math.floor(editing.resupply_cooldown_s or 30)))
 
   local done_lbl, delete_lbl, cancel_lbl = "FERTIG", "LOESCHEN", "ABBRECHEN"
   if w < 50 then done_lbl, delete_lbl, cancel_lbl = "OK", "DEL", "X" end
@@ -778,7 +794,7 @@ function M:_handle_learn_touch(x, y)
   for _, btn in ipairs(u.learn_btns or {}) do
     if hit(btn, x, y) then
       u.editing = { reactor_id = btn.id, label = btn.label, path = {},
-        request_below = 0.25, fill_amount = 64, min_in_me = 32 }
+        request_below = 0.25, fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 30 }
       u.editing_is_new = true
       u.mode = "edit"
       return true
@@ -803,6 +819,8 @@ function M:_handle_edit_touch(x, y)
   if hit(u.fill_amount_plus, x, y) then editing.fill_amount = (editing.fill_amount or 64) + STEP_AMOUNT; return true end
   if hit(u.min_in_me_minus, x, y) then editing.min_in_me = math.max(0, (editing.min_in_me or 32) - STEP_AMOUNT); return true end
   if hit(u.min_in_me_plus, x, y) then editing.min_in_me = (editing.min_in_me or 32) + STEP_AMOUNT; return true end
+  if hit(u.cooldown_minus, x, y) then editing.resupply_cooldown_s = math.max(0, (editing.resupply_cooldown_s or 30) - STEP_COOLDOWN_S); return true end
+  if hit(u.cooldown_plus, x, y) then editing.resupply_cooldown_s = (editing.resupply_cooldown_s or 30) + STEP_COOLDOWN_S; return true end
 
   if hit(u.edit_done_btn, x, y) then
     local new_reactors = {}
