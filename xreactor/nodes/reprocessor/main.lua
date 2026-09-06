@@ -250,19 +250,23 @@ local function build_status_payload_uncached()
   return payload
 end
 
--- Kurzes TTL-Caching (wie bei FUEL): innerhalb von 300ms wird derselbe
--- bereits gebaute Payload fuer render_monitor()/ui_service-Snapshot/
--- Telemetrie wiederverwendet, statt ihn pro Konsument neu aufzubauen.
-local payload_cache, payload_cache_ts = nil, 0
-local PAYLOAD_CACHE_TTL_MS = 300
-local function build_status_payload()
-  local now = os.epoch("utc")
-  if payload_cache and (now - payload_cache_ts) < PAYLOAD_CACHE_TTL_MS then
-    return payload_cache
-  end
+-- build_status_payload_uncached() liest jeden Puffer per list()/getWaste()/
+-- getItemCount() ab (read_buffers() oben) -- ein echter Peripherie-Call pro
+-- konfiguriertem Puffer. Dieser Aufbau darf NICHT aus der "fast"-Coroutine
+-- (ui_service, siehe run_fast_loop weiter unten) laufen, sonst blockiert er
+-- Touch-Eingabe fuer seine eigene Laufzeit -- dasselbe Problem wie FUELs
+-- ME-Bridge-Read in build_status_payload() (siehe dortiger Fix, 2026-09-06).
+-- refresh_status_payload() macht die eigentliche Arbeit und wird nur aus
+-- der "slow"-Coroutine aufgerufen; build_status_payload() (ui_service/
+-- Telemetrie) liest nur noch den zuletzt berechneten Cache.
+local payload_cache = nil
+local function refresh_status_payload()
   payload_cache = build_status_payload_uncached()
-  payload_cache_ts = now
   return payload_cache
+end
+local function build_status_payload()
+  if payload_cache then return payload_cache end
+  return refresh_status_payload()
 end
 
 local function render_monitor()
@@ -559,6 +563,7 @@ local ok, result = xpcall(function()
       support_runtime.run_slow_loop({
         interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services,
         after_cycle = function()
+          refresh_status_payload()
           process_buffers()
           if not standby then get_feed_router():tick() end
         end,
