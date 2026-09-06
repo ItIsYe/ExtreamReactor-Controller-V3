@@ -285,18 +285,24 @@ local function hello() comms:send_hello({ reserve = reserve }) end
 local is_master_connected
 local master_peer_state
 
--- Kurzlebiger Cache (300ms, unter dem 1s-Renderintervall) haelt render_
--- monitor() und render_ampel() (die beide etwa im selben Rhythmus laufen)
--- innerhalb desselben Zyklus zusammen, statt build_status_payload()'s
--- Peripherie-/Registry-Arbeit doppelt auszufuehren.
-local payload_cache, payload_cache_ts = nil, 0
-local PAYLOAD_CACHE_TTL_MS = 300
+-- build_status_payload()'s eigentliche Arbeit (status_snapshot_lib, darunter
+-- fuel_storage.read_fuel() -- bis zu vier synchrone ME-Bridge-getItem()-
+-- Aufrufe) darf NICHT aus der "fast"-Coroutine (ui_service/ampel_render,
+-- siehe run_fast_loop weiter unten) laufen: sie wuerde Touch-Eingabe fuer
+-- ihre eigene Laufzeit blockieren, exakt das Problem, das die fast/slow-
+-- Trennung eigentlich verhindern soll (Feldbericht 2026-09-06: FUEL blieb
+-- traege, obwohl RT durch dieselbe Trennung spuerbar reagierte -- RT hat
+-- keinen aequivalenten Peripherie-Read in seinem UI-Modellaufbau).
+-- refresh_status_payload() macht die eigentliche Arbeit und wird nur aus
+-- der "slow"-Coroutine aufgerufen (nach jedem run_slow_loop-Zyklus, siehe
+-- unten); build_status_payload() (von ui_service/ampel_render UND
+-- telemetry_service genutzt) liest nur noch den zuletzt berechneten Cache,
+-- ohne selbst jemals die ME-Bridge zu befragen. Vor dem ersten slow-loop-
+-- Zyklus (kurzes Startfenster) baut sie einmalig synchron auf, damit die
+-- erste Anzeige nicht auf einen leeren Payload trifft.
+local payload_cache = nil
 
-local function build_status_payload()
-  local now = os.epoch("utc")
-  if payload_cache and (now - payload_cache_ts) < PAYLOAD_CACHE_TTL_MS then
-    return payload_cache
-  end
+local function refresh_status_payload()
   payload_cache = status_snapshot_lib.build_status_payload({
     config = config, devices = devices, fuel_health = fuel_health,
     comms = comms, registry = registry, health = health,
@@ -307,8 +313,12 @@ local function build_status_payload()
     is_master_connected = is_master_connected, get_router = get_router,
     routing_load_status = routing_load_status, get_rs_router = get_rs_router,
   })
-  payload_cache_ts = now
   return payload_cache
+end
+
+local function build_status_payload()
+  if payload_cache then return payload_cache end
+  return refresh_status_payload()
 end
 
 -- Zentraler ctx-Aufbau fuer sowohl Model-Bau als auch Zeichnung --
@@ -504,7 +514,10 @@ local ok, result = xpcall(function()
     function()
       support_runtime.run_slow_loop({
         interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services,
-        after_cycle = function() get_router():tick() end,
+        after_cycle = function()
+          refresh_status_payload()
+          get_router():tick()
+        end,
       })
     end
   )
