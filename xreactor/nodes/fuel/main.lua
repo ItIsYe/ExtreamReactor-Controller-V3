@@ -40,6 +40,7 @@ local config_normalizer = require("nodes.fuel.config_normalizer")
 local logistics_router = require("nodes.fuel.logistics_router")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 local router_ui_lib = require("nodes.fuel.router_ui")
+local hop_timing_lib = require("nodes.fuel.hop_timing")
 local reactor_targets = require("nodes.fuel.reactor_targets")
 local fuel_ui_pages = require("nodes.fuel.ui_pages")
 
@@ -166,6 +167,14 @@ local router
 local rs_router_instance
 local router_ui_instance
 local fuel_status_cache = fuel_status_network.new()
+-- Passiver Beobachter fuer HOP_SCAN-Meldungen der VALVE-Nodes -- lernt
+-- distanzabhaengige Liefer-Timeouts, siehe nodes/fuel/hop_timing.lua. Immer
+-- erzeugt (billig ohne HOP_SCAN-Traffic); ohne modemausgestattete VALVE-
+-- Nodes bleibt es einfach ungenutzt und valve_open_ms faellt wie zuvor auf
+-- den festen Default zurueck.
+local hop_timing_instance = hop_timing_lib.new({
+  log = function(level, msg) utils.log("FUEL", msg, level) end,
+})
 local devices = {
   monitor = nil, monitor_name = nil, storage_name = nil, discovery_failed = false,
   registry_summary = nil, registry_load_error = nil, proto_mismatch = false,
@@ -189,6 +198,7 @@ local function get_rs_router()
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
       comms = comms,
+      hop_timing = hop_timing_instance,
     })
   end
   return rs_router_instance
@@ -202,6 +212,7 @@ local function get_router()
       warn_once = function(key, msg) warn_once(key, msg) end,
       rs_router = get_rs_router(),
       fuel_status = fuel_status_cache,
+      hop_timing = hop_timing_instance,
     })
   end
   return router
@@ -434,6 +445,16 @@ local function init()
     if channel ~= constants.channels.VALVE then return end
     if type(message) == "table" and message.type == "VALVE_ACK" then
       get_rs_router():handle_valve_ack(message)
+    end
+  end })
+  -- HOP_SCAN teilt sich denselben Kanal/rohen Listener-Ansatz wie VALVE_ACK
+  -- oben -- passive Fuellstandsmeldung, siehe hop_timing.lua/handle_hop_scan().
+  services:add({ name = "hop_scan_listener", wants_events = true, tick = function(_self, dt, event)
+    if not event or event[1] ~= "modem_message" then return end
+    local channel, message = event[3], event[5]
+    if channel ~= constants.channels.VALVE then return end
+    if type(message) == "table" and message.type == "HOP_SCAN" then
+      get_rs_router():handle_hop_scan(message)
     end
   end })
   local last_valve_retry_check_ms = 0

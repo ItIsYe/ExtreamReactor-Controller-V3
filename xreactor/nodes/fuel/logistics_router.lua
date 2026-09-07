@@ -230,6 +230,10 @@ function M.new(opts)
     external_rs_router = opts.rs_router or nil,  -- shared rs_router injected from main.lua
     -- Netzwerkbasierter Fuellstand-Cache (siehe read_reactor_fuel_from_network()).
     fuel_status = opts.fuel_status or { master_relay = {}, direct_heard = {} },
+    -- Optional: nodes/fuel/hop_timing.lua-Instanz, siehe finish_delivery()
+    -- und _run_supply() unten. nil-fähig -- ohne hop_timing bleibt
+    -- valve_open_ms wie zuvor ein fester, globaler Wert.
+    hop_timing = opts.hop_timing or nil,
     _state = {
       bridge        = nil,
       reactors      = {},   -- { label, reactor_id, path, cfg }
@@ -269,6 +273,10 @@ local function finish_delivery(self, request, phase, terminal_state, err)
   request.terminal_state = terminal_state
   request.error = err or request.error
   request.finished_ts = os.epoch and os.epoch("utc") or 0
+  -- Jeder Ausgang (Erfolg wie Fehlschlag) liefert reale Transitdaten fuer
+  -- die bereits erreichten Hops -- hop_timing lernt daraus unabhaengig vom
+  -- Ergebnis dieser Lieferung.
+  if self.hop_timing then self.hop_timing:finish_delivery(request.reactor_id) end
   self._state.last_delivery = {
     transaction_id = request.transaction_id,
     reactor_id = request.reactor_id,
@@ -613,7 +621,13 @@ function M:_run_supply(cycle_log)
     if not deliver_item or deliver_count <= 0 then goto continue end
 
     do
-      local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+      local default_valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+      -- Distanzabhaengiger Timeout statt eines festen Werts fuer alle
+      -- Reaktoren -- siehe hop_timing.lua. Faellt pro Etappe auf
+      -- default_valve_ms zurueck, solange diese noch nicht kalibriert ist.
+      local valve_ms = (routed and self.hop_timing)
+        and self.hop_timing:compute_timeout_ms(r.path, default_valve_ms)
+        or default_valve_ms
       local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
       local request = self._state.current_request
       request.transaction_id = request.transaction_id or next_delivery_id(self, r.label)
@@ -621,6 +635,9 @@ function M:_run_supply(cycle_log)
       request.element = family.element
 
       if routed then
+        if self.hop_timing then
+          self.hop_timing:begin_delivery(r.reactor_id, r.path, deliver_item, request.started_ts)
+        end
         local function do_export()
           request.phase = "EXPORTING"
           request.state = "delivering"
@@ -672,6 +689,12 @@ function M:_run_supply(cycle_log)
           transaction_id = request.transaction_id,
         })
         if not started then
+          -- begin_delivery() above already primed hop_timing's baseline for
+          -- this reactor; the transaction never opened a path, so there is
+          -- nothing to learn from -- clear it the same way a terminal
+          -- outcome would (finish_delivery() is a no-op learning-wise when
+          -- no hop ever recorded an arrival).
+          if self.hop_timing then self.hop_timing:finish_delivery(r.reactor_id) end
           self._state.current_request = nil
           if reason == "busy" then
             self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
