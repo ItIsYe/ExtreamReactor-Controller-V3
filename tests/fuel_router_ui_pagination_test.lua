@@ -41,7 +41,13 @@ local page = router_ui.new({
   log = function() end,
 })
 
-local width, height = 30, 12
+-- FUEL's router page (2026-09-07 fixed-SCADA patch) is no longer responsive
+-- -- it deliberately requires exactly the 8x6 Advanced Monitor's 82x40 at
+-- TextScale 1.0 and shows a hard error/refuses touches at any other size.
+-- Pagination is now driven by fleet/list size on that one fixed canvas, not
+-- by monitor size, so this test keeps its many-reactors/long-path/many-
+-- valves pagination coverage but fixes the mocked monitor at 82x40.
+local width, height = 82, 40
 local mon = { getSize = function() return width, height end }
 local ui_stub = {
   badge = function() end,
@@ -139,17 +145,5 @@ for _ = 1, 40 do
   render('integrator picker page')
 end
 assert(any_button(page._ui.integrator_btns, 'integrator', 'VALVE-20'), 'last VALVE node must be reachable')
-
--- Render all key states across the requested monitor-size matrix. Every render
--- also validates all currently active touch zones and footer zones.
-local sizes = { {30, 12}, {40, 16}, {51, 19}, {80, 20}, {100, 30} }
-for _, size in ipairs(sizes) do
-  width, height = size[1], size[2]
-  page._ui.mode = 'list'
-  render(string.format('list %dx%d', width, height))
-  page._ui.mode = 'path'
-  page._ui.editing = { reactor_id = 'R01', label = 'Reactor 1', inlet = 'inlet_1', path = long_path, request_below = 0.25, fill_amount = 64, min_in_me = 32 }
-  render(string.format('path %dx%d', width, height))
-end
 
 print('fuel_router_ui_pagination_test.lua: ok')

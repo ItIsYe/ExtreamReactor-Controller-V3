@@ -29,11 +29,15 @@ local cursor_x, cursor_y = 1, 1
 local cells = {}
 local function row_text(y)
   local out = {}
-  for x = 1, 80 do out[x] = (cells[y] and cells[y][x]) or ' ' end
+  for x = 1, 82 do out[x] = (cells[y] and cells[y][x]) or ' ' end
   return table.concat(out)
 end
+-- FUEL's router page (2026-09-07 fixed-SCADA patch) is no longer responsive
+-- -- it deliberately requires exactly the 8x6 Advanced Monitor's 82x40 at
+-- TextScale 1.0 and shows a hard error/refuses touches otherwise. This test
+-- exercises real touch flows, so it must use that exact contract size.
 local mon = {
-  getSize = function() return 80, 20 end,
+  getSize = function() return 82, 40 end,
   setCursorPos = function(x, y) cursor_x, cursor_y = x, y end,
   setTextColor = function() end,
   setBackgroundColor = function() end,
