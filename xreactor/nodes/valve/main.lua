@@ -26,6 +26,7 @@ local support_runtime = require("nodes.support.runtime")
 local role_descriptor = require("nodes.valve.role_descriptor")
 local valve_controller = require("nodes.valve.controller")
 local hop_reporter_lib = require("nodes.valve.hop_reporter")
+local valve_local_ui = require("nodes.valve.local_ui")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.VALVE_NODE,
@@ -165,6 +166,11 @@ elseif config.hop_chest ~= nil then
     .. "), aber nicht erreichbar -- keine HOP_SCAN-Meldungen", "WARN")
 end
 
+-- Vorgezogen (statt erst unten bei hop_scan_report deklariert) -- die lokale
+-- Terminal-UI liest diesen Wert bereits in ihrem get_hop_status()-Closure,
+-- das VOR der hop_scan_report-Deklaration erzeugt wird.
+local last_hop_scan_ms = 0
+
 local teach_input_state = false
 local function check_teach_input()
   local any_high = false
@@ -184,6 +190,28 @@ local function check_teach_input()
 end
 
 local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label })
+-- Lokale 51x19-Terminal-UI am Ventil-Computer selbst -- rein lesend plus
+-- EINE Sicherheitsaktion (SAFE BLOCKIEREN, siehe local_ui.lua-Kopfkommentar).
+-- Alle Closures liefern nur bereits vorhandenen Zustand, kein neuer Zugriff
+-- auf Peripherie/Netzwerk.
+local valve_ui = valve_local_ui.new({
+  controller = controller,
+  node_id = node_id,
+  label = valve_label,
+  modem_name = valve_modem_name,
+  is_master_reachable = function() return comms:is_master_reachable() end,
+  get_comms_diagnostics = function() return comms:get_diagnostics() end,
+  get_hop_status = function()
+    return {
+      configured = config.hop_chest ~= nil,
+      enabled = hop_reporter:is_enabled(),
+      chest = config.hop_chest,
+      interval_s = tonumber(config.hop_scan_interval) or 4,
+      last_scan_ms = last_hop_scan_ms,
+      modem_ready = valve_modem ~= nil,
+    }
+  end,
+})
 local services = service_manager.new()
 -- Eigene, langsamere Service-Gruppe fuer Telemetry (siehe run_slow_loop
 -- weiter unten): comms/valve_channel/valve_failsafe/teach_input_poll/
@@ -191,6 +219,13 @@ local services = service_manager.new()
 -- "services" (der "fast"-Gruppe), damit ein Telemetry-Tick sie nie verzoegert.
 local slow_services = service_manager.new()
 services:add(comms)
+-- Touch-Input der lokalen UI ist leichtgewichtig (nur eine Zustandsabfrage +
+-- ggf. EIN apply_valve(true,true)-Schreibvorgang, derselbe Aktorpfad wie
+-- valve_failsafe) -- bleibt deshalb in der "fast"-Gruppe. Das Rendering
+-- selbst (teurer) liegt in slow_services, siehe dortiger Eintrag unten.
+services:add({ name = "valve_local_ui_input", wants_events = true, tick = function(_self, _dt, event)
+  if event then valve_ui:handle_event(event) end
+end })
 services:add({ name = "valve_channel", wants_events = true, tick = function(_self, dt, event)
   if event then controller:handle_event(event) end
 end })
@@ -203,6 +238,15 @@ end })
 
 services:add({ name = "teach_input_poll", tick = function() check_teach_input() end })
 services:add({ name = "status_monitor_render", tick = function() controller:render_status_monitor() end })
+
+-- Lokales Terminal-Rendering bleibt in slow_services, damit ein teures
+-- Zeichnen valve_channel/valve_failsafe/den physischen Aktorpfad nie
+-- verzoegern kann (siehe Kommentar bei "slow"-Gruppe oben).
+slow_services:add({
+  name = "valve_local_ui_render",
+  init = function() valve_ui:render(true) end,
+  tick = function() valve_ui:render(false) end,
+})
 
 local function build_status_payload()
   local master_reachable = comms:is_master_reachable()
@@ -233,7 +277,6 @@ end
 -- Kommentar oben): eine verzoegerte Kisten-Lesung darf den Ventil-
 -- Failsafe/die Kommandoverarbeitung nie beeintraechtigen. No-Op solange
 -- hop_reporter:is_enabled() false ist (keine/keine erreichbare hop_chest).
-local last_hop_scan_ms = 0
 slow_services:add({ name = "hop_scan_report", tick = function()
   if not hop_reporter:is_enabled() or not valve_modem then return end
   local now = os.epoch and os.epoch("utc") or 0
