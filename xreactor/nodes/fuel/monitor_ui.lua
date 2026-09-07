@@ -12,6 +12,7 @@ local ui_completion = require("nodes.fuel.ui_completion")
 local window_buffer = require("core.window_buffer")
 local mux = require("core.mockup_ui")
 local utils = require("core.utils")
+local monitor_scada = require("nodes.fuel.monitor_scada")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
@@ -19,6 +20,7 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 local monitor_router = nil
 local current_mon = nil
 local bound_monitor_name = nil
+local scada_ready = false
 local render_surface = window_buffer.new()
 
 -- Diagnose fuer "Touch reagiert nicht" (2026-09-03 Nutzerbericht): loggt
@@ -41,56 +43,9 @@ local function log_touch_diag(event, consumed_by)
     tostring(w), tostring(h), tostring(consumed_by)), "INFO")
 end
 
--- FUEL is primarily operated from the local touch monitor, so readability
--- wins over maximum information density. CC:Tweaked only supports 0.5 scale
--- steps: prefer 1.0 on sufficiently large monitors, but fall back to the old
--- 0.5 layout when 1.0 would leave too little logical screen space.
-local PREFERRED_UI_SCALE = 1.0
-local FALLBACK_UI_SCALE = 0.5
-local MIN_LARGE_WIDTH = 40
-local MIN_LARGE_HEIGHT = 18
-local scale_state = setmetatable({}, { __mode = "k" })
-
-local function normalized_scale(value)
-  local n = tonumber(value) or PREFERRED_UI_SCALE
-  n = math.floor(n * 2 + 0.5) / 2
-  if n < 0.5 then n = 0.5 end
-  if n > 5 then n = 5 end
-  return n
-end
-
-local function ensure_readable_scale(ctx, mon)
-  if not mon or (ctx and ctx.devices and ctx.devices.monitor_is_term) then return end
-  if type(mon.setTextScale) ~= "function" or type(mon.getSize) ~= "function" then return end
-
-  local requested = normalized_scale(ctx and ctx.config and ctx.config.fuel_ui_scale)
-  local cached = scale_state[mon]
-  if cached and cached.requested == requested then
-    -- Discovery still applies the historical 0.5 scale in nodes/fuel/main.lua.
-    -- Detect that external scale drift instead of trusting our cache forever.
-    local ok_current, current = pcall(mon.getTextScale)
-    if ok_current and tonumber(current) == cached.applied then return end
-  end
-
-  local applied = requested
-  local ok_set = pcall(mon.setTextScale, requested)
-  if not ok_set then
-    scale_state[mon] = { requested = requested, applied = nil }
-    return
-  end
-
-  local ok_size, w, h = pcall(mon.getSize)
-  if ok_size and requested > FALLBACK_UI_SCALE
-      and ((tonumber(w) or 0) < MIN_LARGE_WIDTH
-        or (tonumber(h) or 0) < MIN_LARGE_HEIGHT) then
-    if pcall(mon.setTextScale, FALLBACK_UI_SCALE) then
-      applied = FALLBACK_UI_SCALE
-    end
-  end
-
-  scale_state[mon] = { requested = requested, applied = applied }
-end
-
+-- Fixed SCADA monitor contract: 8x6 Advanced Monitor at TextScale 1.0
+-- must resolve to exactly 82x40 terminal cells. There is deliberately no
+-- responsive/legacy fallback.
 local function ensure_completion(ctx)
   if ctx and ctx.fuel_ui then
     ui_completion.attach(ctx.fuel_ui, { devices = ctx.devices })
@@ -156,16 +111,7 @@ end
 -- Longer, bracketed labels make the controls visually obvious and enlarge
 -- the physical touch target without consuming an additional content row.
 local function large_footer(target, center)
-  local ok, w, h = pcall(function() return target.getSize() end)
-  if not ok or not w or not h then return nil end
-  local left = w >= 42 and "[ << ZURUECK ]" or "[ < ZUR ]"
-  local right = w >= 42 and "[ WEITER >> ]" or "[ WEITER ]"
-  return mux.footer_nav(target, h, w, {
-    left = left,
-    center = center,
-    right = right,
-    inset = 2,
-  })
+  return monitor_scada.footer(target, center)
 end
 
 local function page_with_large_footer(render_fn, center)
@@ -178,6 +124,7 @@ end
 function M.render_monitor(ctx, model)
   local devices = ctx.devices
   if not devices.monitor then
+    scada_ready = false
     current_mon = nil
     bound_monitor_name = nil
     render_surface:bind(nil, nil)
@@ -189,7 +136,14 @@ function M.render_monitor(ctx, model)
   end
   ensure_completion(ctx)
   local mon = devices.monitor
-  ensure_readable_scale(ctx, mon)
+  local ready, detected_w, detected_h = monitor_scada.ensure(mon)
+  scada_ready = ready
+  if not ready then
+    current_mon = mon
+    bound_monitor_name = devices.monitor_name
+    monitor_scada.render_size_error(mon, detected_w, detected_h)
+    return true
+  end
   current_mon = mon
   bound_monitor_name = devices.monitor_name
   if not monitor_router then
@@ -198,7 +152,8 @@ function M.render_monitor(ctx, model)
       error_title = "FUEL UI ERROR",
       on_render_error = ctx.on_render_error,
       pages = {
-        { name = "Overview", render = page_with_large_footer(fuel_ui.render_overview, "FUEL OVERVIEW") },
+        { name = "Overview", render = page_with_large_footer(fuel_ui.render_overview, "FUEL OVERVIEW"),
+          handle_touch = function(x, y) return fuel_ui.handle_overview_touch and fuel_ui.handle_overview_touch(x, y) or false end },
         { name = "Details", render = page_with_large_footer(fuel_ui.render_details, "FUEL DETAILS"),
           handle_touch = function(x, y) return fuel_ui.handle_details_touch and fuel_ui.handle_details_touch(x, y) or false end },
         { name = "Diagnostics", render = page_with_large_footer(fuel_ui.render_diagnostics, "FUEL DIAGNOSTICS"),
@@ -234,6 +189,7 @@ function M.render_monitor(ctx, model)
 end
 
 function M.handle_input(event)
+  if not scada_ready then return false end
   local kind = event and event[1]
   if kind == "monitor_touch" or kind == "mouse_click" or kind == "key" or kind == "char" then
     ui_diag_extra.pointer_events_received = ui_diag_extra.pointer_events_received + 1
@@ -273,6 +229,7 @@ function M.handle_input(event)
 end
 
 function M.handle_touch(x, y)
+  if not scada_ready then return false end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
     local consumed = page.handle_touch(x, y) == true
