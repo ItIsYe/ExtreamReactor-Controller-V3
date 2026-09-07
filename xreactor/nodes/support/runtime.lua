@@ -164,9 +164,25 @@ end
 -- sauber, statt (wie vor diesem Parameter) nur durch Absturz oder
 -- "terminate"-Event beendbar zu sein. Ohne quiesce_opts unveraendertes
 -- Verhalten.
+-- TEMP DIAGNOSTIC (2026-09-06): einmalig pro Quiesce-Request loggen, ob
+-- dieser Zweig ueberhaupt erreicht wird -- Feld-Reports zeigen "Quiesce-
+-- Timeout -- Rolle bleibt aktiv" nach voller 60s-Wartezeit bei mehreren
+-- Rollen, was bedeuten wuerde, dass mark_quiesce_attempted() nie lief.
+-- Diese Zeile beweist/widerlegt das direkt im Rollen-Log. Geteilt zwischen
+-- run_event_loop() und run_fast_loop() statt dort dupliziert -- flag ist ein
+-- Tabellen-Wrapper (nicht ein einfacher Bool-Rueckgabewert), damit die
+-- aufrufende Schleife ihn wie einen lokalen Zustand mutieren kann.
+local function log_quiesce_seen_once(flag)
+  if flag.seen then return end
+  flag.seen = true
+  pcall(function()
+    require("core.utils").log("RUNTIME", "quiesce request erkannt (Diagnose)", "INFO")
+  end)
+end
+
 function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce_opts)
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
-  local debug_quiesce_seen = false -- TEMP DIAGNOSTIC, see below
+  local quiesce_seen = { seen = false } -- TEMP DIAGNOSTIC, see log_quiesce_seen_once() above
   local ok, err = xpcall(function()
     while true do
       local timer = os.startTimer(receive_timeout)
@@ -193,17 +209,7 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
       end
       services:tick()
       if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
-        -- TEMP DIAGNOSTIC (2026-09-06): einmalig pro Request loggen, ob dieser
-        -- Zweig ueberhaupt erreicht wird -- Feld-Reports zeigen "Quiesce-
-        -- Timeout -- Rolle bleibt aktiv" nach voller 60s-Wartezeit bei
-        -- mehreren Rollen, was bedeuten wuerde, dass mark_quiesce_attempted()
-        -- nie lief. Diese Zeile beweist/widerlegt das direkt im Rollen-Log.
-        if not debug_quiesce_seen then
-          debug_quiesce_seen = true
-          pcall(function()
-            require("core.utils").log("RUNTIME", "quiesce request erkannt (Diagnose)", "INFO")
-          end)
-        end
+        log_quiesce_seen_once(quiesce_seen)
         handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
         -- Fail-closed default: ohne echtes on_quiesce-Ergebnis gilt der
         -- Quiesce-Vorgang nicht als bestaetigt.
@@ -227,7 +233,7 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
           return
         end
       else
-        debug_quiesce_seen = false
+        quiesce_seen.seen = false
       end
     end
   end, function(e) return e end)
@@ -272,7 +278,7 @@ function M.run_fast_loop(opts)
   local after_cycle = opts.after_cycle
   local quiesce_opts = opts.quiesce_opts
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
-  local debug_quiesce_seen = false -- TEMP DIAGNOSTIC, see run_event_loop() above
+  local quiesce_seen = { seen = false } -- TEMP DIAGNOSTIC, see log_quiesce_seen_once() above
   while true do
     local timer = os.startTimer(receive_timeout)
     while true do
@@ -297,12 +303,7 @@ function M.run_fast_loop(opts)
       end
     end
     if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
-      if not debug_quiesce_seen then
-        debug_quiesce_seen = true
-        pcall(function()
-          require("core.utils").log("RUNTIME", "quiesce request erkannt (Diagnose)", "INFO")
-        end)
-      end
+      log_quiesce_seen_once(quiesce_seen)
       handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
       local confirmed = false
       if type(quiesce_opts.on_quiesce) == "function" then
@@ -322,7 +323,7 @@ function M.run_fast_loop(opts)
         return
       end
     else
-      debug_quiesce_seen = false
+      quiesce_seen.seen = false
     end
   end
 end
