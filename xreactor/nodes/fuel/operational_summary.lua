@@ -159,6 +159,7 @@ function M.enrich(summary, opts)
       reactor.request_below = tonumber(cfg.request_below)
       reactor.fill_amount = tonumber(cfg.fill_amount)
       reactor.min_in_me = tonumber(cfg.min_in_me)
+      reactor.resupply_cooldown_s = tonumber(cfg.resupply_cooldown_s)
 
       reactor.route_state = route_state(route_ctx, reactor)
 
