@@ -275,6 +275,10 @@ function M.new(opts)
     -- Fuer Auto-Discovery erreichbarer VALVE-Nodes (siehe refresh()).
     comms = opts.comms or nil,
     valve_modem = valve_modem,
+    -- Optional: nodes/fuel/hop_timing.lua-Instanz, siehe handle_hop_scan()
+    -- unten. nil-fähig -- ohne hop_timing werden HOP_SCAN-Nachrichten
+    -- einfach ignoriert (kein Verhalten aendert sich).
+    hop_timing = opts.hop_timing or nil,
     _state = {
       all_valves = {},
       integrators = {},
@@ -983,6 +987,19 @@ function M:handle_valve_ack(message)
       return
     end
   end
+end
+
+-- Verarbeitet eine eingehende HOP_SCAN-Nachricht (siehe nodes/valve/hop_
+-- reporter.lua) -- optionale, passive Fuellstandsmeldung einer VALVE-Node
+-- ueber ihre lokal angeschlossene Kreuzungskiste. Reine Weiterleitung an
+-- hop_timing (falls konfiguriert); ohne hop_timing ein No-Op. Muss von der
+-- aufrufenden Rolle aus ihrem comms-Message-Handler aufgerufen werden, wie
+-- handle_valve_ack() oben.
+function M:handle_hop_scan(message)
+  if not self.hop_timing then return end
+  if type(message) ~= "table" or message.type ~= "HOP_SCAN" then return end
+  if type(message.src) ~= "string" or message.src == "" or type(message.items) ~= "table" then return end
+  self.hop_timing:record_scan(message.src, message.items, message.ts)
 end
 
 -- Periodisch von der aufrufenden Rolle aufzurufen -- prueft unbestaetigte

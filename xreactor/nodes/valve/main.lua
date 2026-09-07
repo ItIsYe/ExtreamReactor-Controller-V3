@@ -25,6 +25,7 @@ local telemetry_service = require("services.telemetry_service")
 local support_runtime = require("nodes.support.runtime")
 local role_descriptor = require("nodes.valve.role_descriptor")
 local valve_controller = require("nodes.valve.controller")
+local hop_reporter_lib = require("nodes.valve.hop_reporter")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.VALVE_NODE,
@@ -37,6 +38,8 @@ local DEFAULT_CONFIG = {
   -- kann (siehe nodes/valve/controller.lua). nil = kein Fallback konfiguriert
   -- -> Ventil bleibt ohne Sorter unsteuerbar, wie zuvor.
   redstone_side = nil,
+  hop_chest = nil,
+  hop_scan_interval = 4,
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval = 5,
@@ -78,6 +81,14 @@ local VALID_REDSTONE_SIDES = { top = true, bottom = true, left = true, right = t
 if config.redstone_side ~= nil and (type(config.redstone_side) ~= "string" or not VALID_REDSTONE_SIDES[config.redstone_side]) then
   add_config_warning("redstone_side ungueltig, wird ignoriert (top/bottom/left/right/front/back erlaubt)")
   config.redstone_side = nil
+end
+if config.hop_chest ~= nil and (type(config.hop_chest) ~= "string" or config.hop_chest == "") then
+  add_config_warning("hop_chest ungueltig, wird ignoriert (keine HOP_SCAN-Meldungen)")
+  config.hop_chest = nil
+end
+if type(tonumber(config.hop_scan_interval)) ~= "number" or tonumber(config.hop_scan_interval) <= 0 then
+  add_config_warning("hop_scan_interval ungueltig, verwende Default 4")
+  config.hop_scan_interval = 4
 end
 
 local node_id = support_runtime.init_logging({
@@ -146,6 +157,14 @@ else
     .. tostring(valve_modem_error or "kein Wireless Modem"), "ERROR")
 end
 
+local hop_reporter = hop_reporter_lib.new({ hop_chest = config.hop_chest })
+if hop_reporter:is_enabled() then
+  utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste erkannt: " .. tostring(config.hop_chest), "INFO")
+elseif config.hop_chest ~= nil then
+  utils.log(CONFIG.LOG_PREFIX, "hop_chest konfiguriert (" .. tostring(config.hop_chest)
+    .. "), aber nicht erreichbar -- keine HOP_SCAN-Meldungen", "WARN")
+end
+
 local teach_input_state = false
 local function check_teach_input()
   local any_high = false
@@ -208,6 +227,25 @@ local function build_status_payload()
   payload.write_error = state.last_write_error
   return payload
 end
+
+-- Passive Fuellstandsmeldung fuer nodes/fuel/hop_timing.lua -- rein
+-- lesend, kein Aktor-Zugriff, deshalb in der "slow"-Gruppe (siehe
+-- Kommentar oben): eine verzoegerte Kisten-Lesung darf den Ventil-
+-- Failsafe/die Kommandoverarbeitung nie beeintraechtigen. No-Op solange
+-- hop_reporter:is_enabled() false ist (keine/keine erreichbare hop_chest).
+local last_hop_scan_ms = 0
+slow_services:add({ name = "hop_scan_report", tick = function()
+  if not hop_reporter:is_enabled() or not valve_modem then return end
+  local now = os.epoch and os.epoch("utc") or 0
+  local interval_ms = (tonumber(config.hop_scan_interval) or 4) * 1000
+  if now - last_hop_scan_ms < interval_ms then return end
+  local items = hop_reporter:scan()
+  if not items then return end
+  last_hop_scan_ms = now
+  pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    type = "HOP_SCAN", src = node_id, items = items, ts = now,
+  })
+end })
 
 slow_services:add(telemetry_service.new({
   comms = comms,

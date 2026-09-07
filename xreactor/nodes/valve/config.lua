@@ -26,6 +26,17 @@ return {
   wireless_modem  = nil,   -- nil = automatisch erkennen
   sorter_name     = nil,   -- nil = automatisch erkennen
   redstone_side   = nil,   -- nil = kein Redstone-Fallback (nur bei fehlendem Sorter relevant)
+  -- hop_chest: optionaler Peripherie-Name einer Kreuzungskiste, die dieser
+  -- VALVE-Node per eigenem Wired Modem sehen kann (siehe nodes/valve/hop_
+  -- reporter.lua) -- rein lesend, dient nur der Fuellstandsmeldung an FUEL
+  -- fuer distanzabhaengige Liefer-Timeouts (nodes/fuel/hop_timing.lua).
+  -- nil (Default) = keine Kiste konfiguriert, kein HOP_SCAN wird gesendet,
+  -- keine Verhaltensaenderung. MUSS explizit gesetzt werden -- keine
+  -- Auto-Erkennung, um nie versehentlich die falsche Kiste zu erfassen.
+  hop_chest       = nil,
+  -- hop_scan_interval: Sekunden zwischen zwei Kisten-Scans/-Meldungen
+  -- (nur relevant wenn hop_chest gesetzt ist).
+  hop_scan_interval = 4,
   -- Fail-Safe-Grundzustand beim Boot/bei Verbindungsverlust: Ventil
   -- geschlossen (high=true -> Sorter-Auto-Modus AUS, siehe main.lua
   -- write_actuator()).

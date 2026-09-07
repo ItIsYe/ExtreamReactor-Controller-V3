@@ -128,7 +128,16 @@ local CONFIG = {
     --   valves, then opens ONLY the target reactor's own path. Repeating
     --   the same VALVE id in more than one reactor's path expresses a
     --   shared trunk valve -- no nesting needed.
-    -- valve_open_ms: how long to keep valve open after export (default 2000ms)
+    -- valve_open_ms: how long to keep valve open after export (default
+    -- 2000ms). This is the TOTAL budget for a delivery's whole path, not
+    -- per hop -- with no learned hop timing yet (fresh install, or an
+    -- uncalibrated path), a reactor of any distance gets exactly this
+    -- value. Once nodes/fuel/hop_timing.lua has calibrated real per-hop
+    -- transit times from a few real deliveries (see nodes/valve/hop_
+    -- reporter.lua's optional hop_chest), the actual HOLD_OPEN window for
+    -- a given reactor shifts away from this value in proportion to how
+    -- much longer/shorter its specific path turns out to be -- this stays
+    -- the floor/no-data fallback, never an unannounced multiple of it.
     redstone_tree      = {},
     valve_open_ms      = 2000,
   },
