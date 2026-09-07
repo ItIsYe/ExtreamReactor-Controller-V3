@@ -54,13 +54,16 @@ local function new_hop_timing(overrides)
   })
 end
 
--- 1) No persisted data at all: compute_timeout_ms falls back entirely to
---    default_edge_ms for a 2-hop path (2 hop edges + 1 final unsensored leg).
+-- 1) No persisted data at all: compute_timeout_ms must return EXACTLY
+--    default_total_ms, identical to the old flat-valve_open_ms behavior --
+--    NOT default_total_ms multiplied by the number of legs. A fresh
+--    install/uncalibrated path must never silently inflate the configured
+--    timeout just because a reactor happens to be many hops away.
 do
   files = {}
   local ht = new_hop_timing()
   local ms = ht:compute_timeout_ms({ "VALVE-1", "VALVE-2" }, 1000)
-  assert(ms == 3000, "expected pure fallback 3x1000, got " .. tostring(ms))
+  assert(ms == 1000, "uncalibrated path must equal the configured default exactly, got " .. tostring(ms))
 end
 
 -- 2) A single delivery: fuel appears at VALVE-1 then VALVE-2, in order.
@@ -79,7 +82,7 @@ do
 
   assert(ht:get_edge_ms("EXPORT", "VALVE-1") == nil, "must not trust a single sample yet")
   local ms = ht:compute_timeout_ms({ "VALVE-1", "VALVE-2" }, 1000)
-  assert(ms == 3000, "still pure fallback below min_samples, got " .. tostring(ms))
+  assert(ms == 1000, "still equal to the configured default below min_samples, got " .. tostring(ms))
 end
 
 -- 3) Pre-existing stock at a hop before a delivery starts (baseline) must
@@ -113,9 +116,39 @@ do
   assert(edge_ms == 1200, "expected learned+margin 1200, got " .. tostring(edge_ms))
 end
 
+-- 3b) A single anomalously slow scan (delayed tick/lag) must NOT lock in a
+--     permanently inflated edge -- subsequent faster, more representative
+--     samples must be able to pull the estimate back down over time (at
+--     most 15% per sample, never instantly, so it stays cautious).
+do
+  files = {}
+  local ht = new_hop_timing()
+  now = 1000
+  ht:begin_delivery("R01", { "VALVE-1" }, "minecraft:uranium_ingot", now)
+  now = 9000
+  ht:record_scan("VALVE-1", { ["minecraft:uranium_ingot"] = 8 }, now) -- anomalous 8000ms outlier
+  ht:finish_delivery("R01")
+  assert(ht._edges["EXPORT->VALVE-1"].ms == 8000)
+
+  -- Many subsequent normal (500ms) deliveries must decay the outlier down,
+  -- never instantly but steadily.
+  local last_ms
+  for i = 1, 40 do
+    now = now + 10000
+    ht:begin_delivery("R01", { "VALVE-1" }, "minecraft:uranium_ingot", now)
+    now = now + 500
+    ht:record_scan("VALVE-1", { ["minecraft:uranium_ingot"] = 8 + i }, now)
+    ht:finish_delivery("R01")
+    last_ms = ht._edges["EXPORT->VALVE-1"].ms
+  end
+  assert(last_ms < 8000, "outlier must decay downward over repeated normal samples, got " .. tostring(last_ms))
+  assert(last_ms >= 500, "must never decay below the real observed floor, got " .. tostring(last_ms))
+end
+
 -- 4) Learned edges feed into compute_timeout_ms; an uncalibrated trailing
---    edge (VALVE-1 -> VALVE-2, never observed) still falls back to default,
---    plus the always-default final leg into the reactor.
+--    edge (VALVE-1 -> VALVE-2, never observed) and the always-uncalibrated
+--    final leg both fall back to their EVEN SHARE of default_total_ms (not
+--    a full default_total_ms each -- see fix note above).
 do
   files = {}
   local ht = new_hop_timing()
@@ -127,8 +160,9 @@ do
     ht:finish_delivery("R01")
   end
   -- learned EXPORT->VALVE-1 = 900 * 1.5 = 1350
+  -- + 2 uncalibrated legs at 1000/3 each = 1350 + 666.67 -> rounds to 2017
   local ms = ht:compute_timeout_ms({ "VALVE-1", "VALVE-2" }, 1000)
-  assert(ms == 1350 + 1000 + 1000, "expected learned+2 defaults, got " .. tostring(ms))
+  assert(ms == 2017, "expected learned edge + even share of remaining legs, got " .. tostring(ms))
 end
 
 -- 5) Aborted/failed delivery (finish_delivery called with zero arrivals

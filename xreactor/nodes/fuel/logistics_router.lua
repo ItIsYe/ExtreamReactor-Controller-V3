@@ -623,8 +623,10 @@ function M:_run_supply(cycle_log)
     do
       local default_valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
       -- Distanzabhaengiger Timeout statt eines festen Werts fuer alle
-      -- Reaktoren -- siehe hop_timing.lua. Faellt pro Etappe auf
-      -- default_valve_ms zurueck, solange diese noch nicht kalibriert ist.
+      -- Reaktoren -- siehe hop_timing.lua. compute_timeout_ms() liefert
+      -- exakt default_valve_ms zurueck, solange kein Pfad-Hop kalibriert
+      -- ist (unabhaengig von dessen Laenge); erst gelernte Kanten
+      -- verschieben das Ergebnis nach oben/unten davon weg.
       local valve_ms = (routed and self.hop_timing)
         and self.hop_timing:compute_timeout_ms(r.path, default_valve_ms)
         or default_valve_ms
