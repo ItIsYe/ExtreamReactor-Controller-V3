@@ -113,48 +113,40 @@ def validate_entries(entries, errors, seen):
     return checked
 
 
-def format_entry(entry):
-    extras = []
-    flags = entry.get("flags", {})
-    if flags.get("always"):
-        extras.append("always = true")
-    req = flags.get("required_for")
-    if req:
-        joined = ", ".join(f'"{value}"' for value in req)
-        extras.append(f"required_for = {{ {joined} }}")
-    suffix = ""
-    if extras:
-        suffix = ", " + ", ".join(extras)
-    return f'      {{ path = "{entry["path"]}", size_bytes = {entry["size_bytes"]}, hash = "{entry["hash"]}"{suffix} }},'
+SIZE_BYTES_RE = re.compile(r'size_bytes\s*=\s*\d+')
+HASH_RE = re.compile(r'hash\s*=\s*"[0-9a-f]+"')
 
 
-def write_manifest(top, base_files, dev_files, roles):
-    manifest_version = top.get("manifest_version", "6")
-    manifest_id = top.get("manifest_id", '"manifest-v6"')
-    source_ref = top.get("source_ref", '"beta"')
-    hash_algo = top.get("hash_algo", '"crc32"')
-    lines = ["return {"]
-    lines.append(f"  manifest_version = {manifest_version},")
-    lines.append(f"  manifest_id = {manifest_id},")
-    lines.append(f"  source_ref = {source_ref},")
-    lines.append(f"  hash_algo = {hash_algo},")
-    lines.append("  base_files = {")
-    for e in base_files:
-        lines.append(format_entry(e))
-    lines.append("  },")
-    lines.append("  dev_files = {")
-    for e in dev_files:
-        lines.append(format_entry(e))
-    lines.append("  },")
-    lines.append("  roles = {")
-    for role, entries in roles.items():
-        lines.append(f"    {role} = {{")
-        for e in entries:
-            lines.append(format_entry(e))
-        lines.append("    },")
-    lines.append("  }")
-    lines.append("}")
-    MANIFEST_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def write_manifest_inplace(path: pathlib.Path, entries):
+    # Frueher hat write_manifest() die komplette Datei aus den geparsten
+    # Feldern neu zusammengesetzt (siehe format_entry()) -- geparst wurden
+    # dabei nur "always" und "required_for" (parse_flags()), sodass jedes
+    # "optional=true"/"feature=\"...\""-Flag beim Neuaufbau stillschweigend
+    # verloren ging, und JEDER Kommentar in der Datei (Zeilen wie die
+    # Erklaerung ueber optional/pocket_client.lua) mit weggeworfen wurde,
+    # weil die Regeneration nur strukturierte Eintraege kennt, keinen
+    # Freitext. Ersetzt jetzt stattdessen NUR size_bytes/hash direkt in der
+    # jeweiligen Original-Zeile (Regex-Substitution), der Rest der Datei --
+    # Kommentare, Flags, Formatierung, Reihenfolge -- bleibt byteidentisch
+    # zum Original erhalten.
+    text = path.read_text(encoding="utf-8")
+    by_path = {e["path"]: e for e in entries}
+    had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    out_lines = []
+    for raw in lines:
+        entry_match = ENTRY_RE.match(raw.strip())
+        entry = entry_match and by_path.get(entry_match.group("path"))
+        if entry:
+            new_line = SIZE_BYTES_RE.sub(f'size_bytes = {entry["size_bytes"]}', raw, count=1)
+            new_line = HASH_RE.sub(f'hash = "{entry["hash"]}"', new_line, count=1)
+            out_lines.append(new_line)
+        else:
+            out_lines.append(raw)
+    new_text = "\n".join(out_lines)
+    if had_trailing_newline:
+        new_text += "\n"
+    path.write_text(new_text, encoding="utf-8")
 
 
 def all_entries(base_files, dev_files, roles):
@@ -164,6 +156,49 @@ def all_entries(base_files, dev_files, roles):
     for role in roles.values():
         entries.extend(role)
     return entries
+
+
+MANIFEST_VERSION_RE = re.compile(r'(manifest_version\s*=\s*)(\d+)(,)')
+MANIFEST_ID_RE = re.compile(r'(manifest_id\s*=\s*")manifest-v(\d+)(",)')
+RELEASE_PATH = REPO_ROOT / "xreactor" / "release.lua"
+RELEASE_VERSION_RE = re.compile(r'(manifest_version\s*=\s*)(\d+)(,)')
+RELEASE_ID_RE = re.compile(r'(manifest_id\s*=\s*")manifest-v(\d+)(",)')
+RELEASE_FILE_COUNT_RE = re.compile(r'(manifest_file_count\s*=\s*)(\d+)(,)')
+RELEASE_ID_FIELD_RE = re.compile(r'(release_id\s*=\s*")beta-v(\d+)(",)')
+
+
+def bump_version(file_count: int) -> int:
+    """Bumps manifest_version/manifest_id in manifest.lua and mirrors
+    manifest_version/manifest_id/manifest_file_count/release_id into
+    release.lua. Returns the new version.
+
+    Without this, a content-only change (same file count, different hash)
+    left manifest_version unchanged: installer/auto_update.lua's periodic
+    check compares remote_version > local_version, so an already-deployed
+    node would see "no update" and never pull a real fix -- exactly what
+    happened across several merged beta commits before this was added.
+    """
+    text = MANIFEST_PATH.read_text(encoding="utf-8")
+    version_match = MANIFEST_VERSION_RE.search(text)
+    if not version_match:
+        raise RuntimeError("could not find manifest_version in manifest.lua")
+    old_version = int(version_match.group(2))
+    new_version = old_version + 1
+
+    bumped = MANIFEST_VERSION_RE.sub(rf'\g<1>{new_version}\3', text, count=1)
+    bumped = MANIFEST_ID_RE.sub(rf'\g<1>manifest-v{new_version}\3', bumped, count=1)
+    MANIFEST_PATH.write_text(bumped, encoding="utf-8")
+
+    if RELEASE_PATH.exists():
+        release_text = RELEASE_PATH.read_text(encoding="utf-8")
+        release_text = RELEASE_VERSION_RE.sub(rf'\g<1>{new_version}\3', release_text, count=1)
+        release_text = RELEASE_ID_RE.sub(rf'\g<1>manifest-v{new_version}\3', release_text, count=1)
+        release_text = RELEASE_FILE_COUNT_RE.sub(rf'\g<1>{file_count}\3', release_text, count=1)
+        release_text = RELEASE_ID_FIELD_RE.sub(rf'\g<1>beta-v{new_version}\3', release_text, count=1)
+        RELEASE_PATH.write_text(release_text, encoding="utf-8")
+
+    print(f"Version bump: {old_version} -> {new_version} (manifest.lua + release.lua)")
+    return new_version
 
 
 def main():
@@ -176,9 +211,25 @@ def main():
     entries = all_entries(base_files, dev_files, roles)
 
     if args.write:
+        # release.lua is itself a manifest-tracked entry. It carries the
+        # version fields, so bumping the version below inherently changes
+        # release.lua's own bytes too -- excluded here so that natural,
+        # self-referential drift is never mistaken for a "real" content
+        # change and does not cause the bump to (re-)trigger itself.
+        changed_paths = []
         for entry in entries:
+            old_hash = entry["hash"]
             update_entry(entry)
-        write_manifest(top, base_files, dev_files, roles)
+            if entry["hash"] != old_hash and entry["path"] != "release.lua":
+                changed_paths.append(entry["path"])
+        write_manifest_inplace(MANIFEST_PATH, entries)
+
+        if changed_paths:
+            bump_version(len(entries))
+            release_entry = next((e for e in entries if e["path"] == "release.lua"), None)
+            if release_entry:
+                update_entry(release_entry)
+                write_manifest_inplace(MANIFEST_PATH, [release_entry])
 
     errors = []
     checked = 0

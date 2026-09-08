@@ -13,6 +13,20 @@ function M.normalize(config_values, defaults, add_warning, utils)
     config_values.storage_bus = defaults.storage_bus
     add_warning("storage_bus invalid; defaulting to " .. tostring(defaults.storage_bus))
   end
+  if config_values.reserve_items ~= nil and type(config_values.reserve_items) ~= "table" then
+    config_values.reserve_items = defaults.reserve_items
+    add_warning("reserve_items invalid; defaulting to shipped item list")
+  elseif type(config_values.reserve_items) == "table" then
+    local cleaned = {}
+    for i, entry in ipairs(config_values.reserve_items) do
+      if type(entry) == "table" and nonempty_string(entry.item) then
+        cleaned[#cleaned + 1] = entry
+      else
+        add_warning(string.format("reserve_items[%d] invalid; ignoring", i))
+      end
+    end
+    config_values.reserve_items = cleaned
+  end
   if config_values.minimum_reserve == nil and type(config_values.target) == "number" then
     config_values.minimum_reserve = config_values.target
     add_warning("minimum_reserve missing; using target value " .. tostring(config_values.target))
@@ -59,6 +73,10 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.me_bridge) ~= "string" then
     lg.me_bridge = (defaults.logistics and defaults.logistics.me_bridge) or "me_bridge"
   end
+  if lg.export_chest ~= nil and not nonempty_string(lg.export_chest) then
+    lg.export_chest = nil
+    add_warning("logistics.export_chest invalid; ignoring")
+  end
 
   -- A configured reactor is an actuator route. Invalid demand identity or
   -- amounts must disable logistics as a whole instead of falling into the
@@ -66,6 +84,13 @@ function M.normalize(config_values, defaults, add_warning, utils)
   -- UI/config editors can still show and repair them; only runtime activation
   -- is fail-closed.
   local unsafe_reactor_config = false
+  -- export_chest is the ONE shared hand-off point every reactor's delivery
+  -- exports into (see logistics_router.lua) -- a global precondition, not
+  -- a per-reactor one, so it's required once here instead of per entry.
+  if #lg.reactors > 0 and not nonempty_string(lg.export_chest) then
+    add_warning("logistics.export_chest missing; unsafe/unconfigured export target, logistics will be disabled until set")
+    unsafe_reactor_config = true
+  end
   for i, r in ipairs(lg.reactors) do
     if type(r) ~= "table" then
       add_warning(string.format("logistics.reactors[%d] invalid entry", i))
@@ -76,12 +101,8 @@ function M.normalize(config_values, defaults, add_warning, utils)
         add_warning(string.format("logistics.reactors[%d] missing reactor_id; unsafe always-supply fallback is disabled", i))
         unsafe_reactor_config = true
       end
-      if not nonempty_string(r.inlet) then
-        add_warning(string.format("logistics.reactors[%d] missing inlet peripheral", i))
-        unsafe_reactor_config = true
-      end
-      if not nonempty_string(r.item) then
-        add_warning(string.format("logistics.reactors[%d] missing item name", i))
+      if r.path ~= nil and type(r.path) ~= "table" then
+        add_warning(string.format("logistics.reactors[%d].path invalid; expected a list of VALVE-Node ids", i))
         unsafe_reactor_config = true
       end
       if r.request_below ~= nil then
@@ -104,6 +125,13 @@ function M.normalize(config_values, defaults, add_warning, utils)
         local reserve = tonumber(r.min_in_me)
         if reserve == nil or reserve < 0 then
           add_warning(string.format("logistics.reactors[%d].min_in_me=%s invalid; must be >= 0", i, tostring(r.min_in_me)))
+          unsafe_reactor_config = true
+        end
+      end
+      if r.resupply_cooldown_s ~= nil then
+        local cooldown = tonumber(r.resupply_cooldown_s)
+        if cooldown == nil or cooldown < 0 then
+          add_warning(string.format("logistics.reactors[%d].resupply_cooldown_s=%s invalid; must be >= 0", i, tostring(r.resupply_cooldown_s)))
           unsafe_reactor_config = true
         end
       end

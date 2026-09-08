@@ -261,21 +261,6 @@ function regulator.target_band_state(input)
     }
   end
 
-  if at_max_flow and error <= 0 then
-    local next_flow = regulator.clamp_flow(requested - trim_down, min_flow, max_flow)
-    local reason = next_flow == requested and "MIN_LIMIT_OVERSPEED" or "TARGET_TRIM_DOWN"
-    return {
-      in_band = true,
-      mode = reason,
-      flow = next_flow,
-      direction = next_flow < requested and -1 or 0,
-      reason = reason,
-      error = error,
-      live_error = error_live,
-      smoothed_error = error_smooth,
-      at_min_limit = next_flow <= min_flow
-    }
-  end
   if requested <= (min_flow + 1) and error >= 0 then
     local next_flow = regulator.clamp_flow(requested + trim_up, min_flow, max_flow)
     local reason = next_flow == requested and "MAX_LIMIT_UNDERSPEED" or "TARGET_TRIM_UP"
@@ -293,22 +278,6 @@ function regulator.target_band_state(input)
   end
 
   local deadband_reason = coil_engaged and "TARGET_BAND_ACTIVE_WITH_COIL" or "TARGET_BAND_ACTIVE"
-  if at_max_flow then
-    local next_flow = regulator.clamp_flow(requested - trim_down, min_flow, max_flow)
-    local reason = next_flow == requested and "MAX_LIMIT_UNDERSPEED" or "TARGET_TRIM_DOWN"
-    return {
-      in_band = true,
-      mode = reason,
-      flow = next_flow,
-      direction = next_flow < requested and -1 or 0,
-      reason = reason,
-      error = error,
-      live_error = error_live,
-      smoothed_error = error_smooth,
-      at_min_limit = next_flow <= min_flow,
-      at_max_limit = next_flow >= max_flow
-    }
-  end
   return {
     in_band = true,
     mode = "HOLDING_TARGET_ACTIVE",

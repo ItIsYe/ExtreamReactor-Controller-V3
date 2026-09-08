@@ -26,6 +26,22 @@ local function render(mon, model)
   model.fuel = model.fuel or {}
   model.water = model.water or {}
 
+  -- BEKANNTE LUECKE: ui_controller.build_models()/build_models_safe() liefern
+  -- model.resources aktuell als {} -- model.fuel/.water/.node_details/.comms
+  -- werden nirgends im Code befuellt (siehe Kommentar dort). Ohne diesen
+  -- Frueh-Ausstieg wuerden die Berechnungen unten mit lauter Nullen einen
+  -- aktiv falschen "Water Loop EMERGENCY"-Badge anzeigen, obwohl schlicht
+  -- keine Daten verkabelt sind -- das saehe fuer einen Bediener wie ein
+  -- echter Störfall aus. Lieber ehrlich "keine Daten" anzeigen.
+  local no_data = next(model.fuel) == nil and next(model.water) == nil
+    and next(model.node_details or {}) == nil and next(model.comms or {}) == nil
+  if no_data then
+    ui.text(mon, 2, 3, "Keine Resource-Daten verkabelt", colorset.get("text"), colorset.get("background"))
+    ui.text(mon, 2, 4, "(Fuel/Water/Node-Diagnose fuer diese Ansicht", colorset.get("text"), colorset.get("background"))
+    ui.text(mon, 2, 5, "noch nicht implementiert)", colorset.get("text"), colorset.get("background"))
+    return
+  end
+
   local fuel_total = model.fuel.total or 0
   local fuel_status = fuel_total <= (model.fuel.minimum or 0) and "WARNING" or "OK"
   ui.bigNumber(mon, 2, 2, "Fuel Total", string.format("%.0f", fuel_total), "mB", fuel_status)

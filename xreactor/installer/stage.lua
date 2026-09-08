@@ -72,10 +72,6 @@ end
 
 local function reclaim(needed)
   local free = free_space()
-  if free and free >= needed then return true end
-  if fs.exists("/xreactor_backup_prev") then pcall(fs.delete, "/xreactor_backup_prev") end
-  if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
-  free = free_space()
   if free == nil or free >= needed then return true end
   local logs_were_cleared = reclaim_logs(needed)
   if logs_were_cleared then

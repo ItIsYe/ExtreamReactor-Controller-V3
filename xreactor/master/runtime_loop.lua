@@ -17,7 +17,7 @@ local function run_master()
   -- Geschuetzte Nutzerdatei (kein Manifest-Eintrag, uebersteht Auto-Updates)
   -- wird -- falls vorhanden -- rekursiv ueber die Defaults gemergt, statt
   -- master/config.lua direkt zu require()n.
-  local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
+  local MASTER_USER_CONFIG_PATH = "/xreactor_config/master.lua"
   if not fs.exists(MASTER_USER_CONFIG_PATH) then
     local ok_read, handle = pcall(fs.open, "/xreactor/master/config.lua", "r")
     if ok_read and handle then
@@ -78,7 +78,7 @@ local function run_master()
   local ui_service          = require("services.ui_service")
 
   -- Logger
-  local node_id = utils.read_node_id("/xreactor/config/node_id.txt")
+  local node_id = utils.read_node_id("/xreactor_config/node_id.txt")
   context.normalize_config(config)
   utils.init_logger({ log_name = utils.build_log_name("master", node_id), prefix = "MASTER",
     enabled = config.debug_logging, truncate = config.reset_log_on_start == true, log_dir = config.log_dir })

@@ -33,7 +33,7 @@ local CONFIG = {
   -- simultaneously.
   --
   -- Hardware (FUEL computer must have):
-  --   Wired Modem → ME Bridge + each reactor's dedicated inlet transporter/chest
+  --   Wired Modem → ME Bridge + the ONE shared export_chest (see below)
   --   Wireless Modem → MASTER communication + reactor fuel-level relay
   --   (Redstone valve control, if used: see nodes/valve/main.lua — those
   --   are separate standalone computers on their own dedicated channel,
@@ -45,77 +45,99 @@ local CONFIG = {
     discovery_interval = 60,
     me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
     --
-    -- reactors: one entry per reactor.
+    -- export_chest: the ONE physical hand-off point every delivery, for
+    -- every reactor, exports into -- e.g. "mekanism:ultimate_logistical_
+    -- transporter_0". There is no per-reactor delivery target. A Mekanism
+    -- logistics network (sorters + VALVE-Nodes) carries everything
+    -- downstream from this single chest; which reactor a given delivery
+    -- actually reaches is decided purely by which valves are open at
+    -- export time (redstone_router.lua blocks every other route before
+    -- opening the target reactor's own `path`, see below, and only then
+    -- runs the export).
+    export_chest       = nil,
+    --
+    -- reactors: one entry per reactor. reactor_id and label are learned
+    -- from the owning RT node's own broadcasts (router_ui.lua's reactor-
+    -- teach flow), never typed by hand -- the FUEL router page lists every
+    -- currently-broadcasting RT reactor by its real name; tapping one
+    -- takes over its reactor_id/label here.
     --   reactor_id    = ID of the reactor as reported by its RT node's status
     --                   (fuel level comes via network relay from Master, see
-    --                   master/fuel_relay.lua, not a local peripheral read.
-    --                   Check the RT node's own log/dashboard for the exact
-    --                   reactor id string it reports.)
-    --   inlet         = where to deliver fuel (transporter or chest — must be dedicated
-    --                   to THIS reactor; no shared pipes for targeted delivery)
-    --   item          = fuel item name
+    --                   master/fuel_relay.lua, not a local peripheral read.)
+    --   label         = the reactor's real display name, as reported by RT.
+    --   path          = ordered list of VALVE-Node ids to open for this
+    --                   reactor's delivery (see redstone_tree note below —
+    --                   this is the only place a route is configured; FUEL
+    --                   derives the topology redstone_router.lua consumes
+    --                   from this field automatically).
     --   request_below = fuel ratio below which reactor requests resupply (0.0–1.0)
-    --   fill_amount   = how many items to export per resupply event
+    --   fill_amount   = how many ingot-equivalent items to export per resupply event
     --   min_in_me     = minimum ME stock to maintain (never export below this)
+    --   resupply_cooldown_s = minimum seconds between deliveries to this
+    --                   reactor (default 30). FUEL has no Wired Modem to the
+    --                   last chest before the reactor, so it cannot see
+    --                   whether a previous delivery has physically arrived
+    --                   yet -- the reactor's own reported fuel level only
+    --                   rises AFTER it consumes what's already there. Without
+    --                   this cooldown, FUEL would re-export every supply
+    --                   cycle while fuel_pct stays below request_below, even
+    --                   though the last batch is still in transit, and fuel
+    --                   piles up in the chest before the reactor. Tune per
+    --                   reactor to roughly match its transport distance.
     --
-    -- Example (two reactors, RT-reported fuel level, ME-connected delivery):
-    -- { name          = "Reaktor A",
-    --   reactor_id    = "node-52-reactor-0",
-    --   inlet         = "mekanism:ultimate_logistical_transporter_0",
-    --   item          = "bigreactors:yellorium_ingot",
+    -- No `item` field: FUEL decides Uranium vs Blutonium, and Ingot vs
+    -- Block, automatically on every delivery, based on which currently has
+    -- more ME stock (see logistics_router.lua's build_fuel_families()/
+    -- pick_fuel_family()/pick_fuel_form(), fed by config.reserve_items).
+    --
+    -- Example (export_chest + two reactors, RT-reported fuel level):
+    -- export_chest = "mekanism:ultimate_logistical_transporter_0",
+    -- reactors = {
+    -- { reactor_id    = "node-52-reactor-0",
+    --   label         = "Reaktor A",
+    --   path          = { "VALVE-1" },
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
-    -- { name          = "Reaktor B",
-    --   reactor_id    = "node-52-reactor-1",
-    --   inlet         = "mekanism:ultimate_logistical_transporter_1",
-    --   item          = "bigreactors:yellorium_ingot",
+    -- { reactor_id    = "node-52-reactor-1",
+    --   label         = "Reaktor B",
+    --   path          = { "VALVE-2" },
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
+    -- }
     reactors           = {},
     --
     -- waste: peripheral(s) where reactor waste arrives — CC drains into ME.
     -- { name = "Reaktor A Waste", outlet = "mekanism:ultimate_logistical_transporter_2" },
     waste              = {},
     --
-    -- redstone_tree: one route per reactor, each with an ORDERED list of
-    -- valves ("path") that must be blocked/opened together for that
-    -- reactor's export. Pipe must be configured: "High Redstone =
-    -- Interrupt" in Mekanism. CC blocks ALL known valves, then opens ONLY
-    -- the target reactor's own path.
+    -- redstone_tree: NOT hand-configured. logistics_router.lua's
+    -- refresh_peripherals() rebuilds it automatically, every refresh, from
+    -- each entry in `reactors` above (reactor_id + label + path) -- this
+    -- key only exists so redstone_router.lua (shared with
+    -- nodes/reprocessor/feed_router.lua, which manages its own, unrelated
+    -- redstone_tree) has something to consume; whatever is written here
+    -- directly is overwritten on the next refresh.
     --
-    -- Flat list: repeat the SAME {side=,integrator=} step in more than one
-    -- reactor's path to express a shared valve -- no nesting needed. The
-    -- in-game Router page (4/4, EDIT tab) builds exactly this format: pick a
-    -- reactor, then tap valves one at a time to build its chain. Old NESTED
-    -- tree configs (side/children) are still understood automatically (see
-    -- nodes/fuel/redstone_router.lua's normalize_tree()).
-    --
-    -- path[i].side: built-in CC side (top/bottom/left/right/front/back) --
-    --   this is the side on the FUEL computer itself (direct redstone) OR,
-    --   if 'integrator' is set, the side on THAT integrator/VALVE node.
-    -- path[i].integrator (optional): identifies a separate valve
-    --   controller.
-    --   the "integrator" is itself a small standalone CC:Tweaked computer
-    --   sitting at the valve (role VALVE, see nodes/valve/main.lua) -- it
-    --   has no Wired Modem to FUEL, only Wireless, addressed by its node_id
-    --   (auto-discovered once online, see redstone_router.lua refresh()).
-    --   Set integrator = "<valve node_id>" here, e.g. "VALVE-1" (check the
-    --   VALVE node's own boot log for its assigned node_id). A local
-    --   Mekanism Redstone Integrator peripheral (wired directly to FUEL)
-    --   also still works as a fallback if the name doesn't match a known
-    --   VALVE node_id.
-    -- valve_open_ms: how long to keep valve open after export (default 2000ms)
-    --
-    -- { reactor = "RT-1", label = "Reaktor A", path = { { side = "right" } } },
-    -- { reactor = "RT-2", label = "Reaktor B", path = { { side = "left" } } },
-    -- { reactor = "RT-3", label = "Reaktor C",
-    --   path = { { side = "back" }, { side = "front", integrator = "VALVE-1" } } },
-    --   -- ^ two valves in series: a shared trunk valve ("back", local to
-    --   -- FUEL) plus Reaktor C's own branch valve on VALVE-1. Repeating
-    --   -- { side = "back" } as the first step of another reactor's path
-    --   -- means that reactor shares the same trunk valve.
+    -- path[i]: the node_id of a VALVE-Node (a small standalone CC:Tweaked
+    --   computer sitting at the valve, role VALVE, see nodes/valve/main.lua)
+    --   -- it has no Wired Modem to FUEL, only Wireless, addressed by its
+    --   node_id (auto-discovered once online). Pipe must be configured:
+    --   "High Redstone = Interrupt" in Mekanism. CC blocks ALL known
+    --   valves, then opens ONLY the target reactor's own path. Repeating
+    --   the same VALVE id in more than one reactor's path expresses a
+    --   shared trunk valve -- no nesting needed.
+    -- valve_open_ms: how long to keep valve open after export (default
+    -- 2000ms). This is the TOTAL budget for a delivery's whole path, not
+    -- per hop -- with no learned hop timing yet (fresh install, or an
+    -- uncalibrated path), a reactor of any distance gets exactly this
+    -- value. Once nodes/fuel/hop_timing.lua has calibrated real per-hop
+    -- transit times from a few real deliveries (see nodes/valve/hop_
+    -- reporter.lua's optional hop_chest), the actual HOLD_OPEN window for
+    -- a given reactor shifts away from this value in proportion to how
+    -- much longer/shorter its specific path turns out to be -- this stays
+    -- the floor/no-data fallback, never an unannounced multiple of it.
     redstone_tree      = {},
     valve_open_ms      = 2000,
   },

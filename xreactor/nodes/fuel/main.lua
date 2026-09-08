@@ -4,7 +4,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5
 }
@@ -25,10 +25,12 @@ local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
+local discovery_stability = require("core.discovery_stability")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
+local me_bridge_compat = require("core.me_bridge_compat")
 local support_runtime = require("nodes.support.runtime")
 local role_logic = require("nodes.support.role_logic")
 local support_ui_pages = require("nodes.support.ui_pages")
@@ -38,6 +40,7 @@ local config_normalizer = require("nodes.fuel.config_normalizer")
 local logistics_router = require("nodes.fuel.logistics_router")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 local router_ui_lib = require("nodes.fuel.router_ui")
+local hop_timing_lib = require("nodes.fuel.hop_timing")
 local reactor_targets = require("nodes.fuel.reactor_targets")
 local fuel_ui_pages = require("nodes.fuel.ui_pages")
 
@@ -62,6 +65,20 @@ local DEFAULT_CONFIG = {
   wireless_modem = nil,
   wired_modem = nil,
   storage_bus = "meBridge_0",
+  -- Reserve wird item-basiert aus dem storage_bus (ME Bridge) gezaehlt:
+  -- eine Liste von Fuel-Item-IDs, deren ME-Bestand aufsummiert die
+  -- Reserve ergibt. unit_multiplier erlaubt Bloecke (z.B. 9 Ingots/Block)
+  -- im selben Ingot-Aequivalent wie target/minimum_reserve mitzuzaehlen.
+  -- `element` gruppiert Ingot+Block derselben Fuel-Sorte -- dieselbe Liste
+  -- ist auch die austauschbare Fuel-Familien-Tabelle, aus der
+  -- logistics_router.lua bei jeder Lieferung automatisch die Sorte mit dem
+  -- groesseren ME-Bestand waehlt (siehe build_fuel_families() dort).
+  reserve_items = {
+    { item = "bigreactors:blutonium_ingot", element = "blutonium" },
+    { item = "bigreactors:blutonium_block", element = "blutonium", unit_multiplier = 9 },
+    { item = "alltheores:uranium_ingot", element = "uranium" },
+    { item = "alltheores:uranium_block", element = "uranium", unit_multiplier = 9 },
+  },
   target = 2000,
   minimum_reserve = 2000,
   heartbeat_interval = 2,
@@ -78,7 +95,7 @@ local DEFAULT_CONFIG = {
 -- jedem Auto-Update ueberschrieben wird -- kanonische Nutzer-Config an
 -- einem vom Manifest unberuehrten Pfad, mit einmaliger Migration eines
 -- eventuell bereits vorhandenen Standes aus der alten Quelldatei.
-local USER_CONFIG_PATH = "/xreactor/config/fuel.lua"
+local USER_CONFIG_PATH = "/xreactor_config/fuel.lua"
 if not fs.exists(USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -98,36 +115,38 @@ CONFIG.CONFIG_PATH = USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- /xreactor/config/fuel_routes.lua (vom Router-Editor atomar geschrieben)
--- wird VOR der ersten Router-Erzeugung geladen und mit derselben
--- validate_tree()-Funktion geprueft wie der Router selbst -- nur bei
--- Erfolg wird das Ergebnis nach config.logistics.redstone_tree
--- uebernommen. Bei fehlender/ungueltiger Datei bleibt redstone_tree
--- unveraendert und routing_load_status haelt den Fehler fest.
+-- /xreactor_config/fuel_routes.lua (vom Router atomar geschrieben, siehe
+-- router_ui.lua) wird VOR config_normalizer.normalize() geladen und nach
+-- config.logistics.export_chest/.reactors uebernommen -- normalize()
+-- validiert danach export_chest und jeden Reaktor-Eintrag (reactor_id/
+-- path/Schwellwerte) im selben Durchlauf wie den Rest der Config. Die
+-- Datei speichert { export_chest = <peripheral name>, reactors = {...} }
+-- -- export_chest ist der EINE geteilte Uebergabepunkt fuer alle
+-- Reaktoren (siehe logistics_router.lua), kein Feld pro Reaktor mehr.
+-- redstone_tree wird nie aus dieser Datei uebernommen: logistics_router.lua
+-- baut es bei jedem refresh() automatisch aus reactors[*].path (siehe
+-- dessen build_redstone_tree_from_reactors()). Bei fehlender/nicht
+-- ladbarer Datei bleiben logistics.export_chest/.reactors leer und
+-- routing_load_status haelt den Fehler fest.
 local routing_load_status = { ok = true, source = "config" }
 do
-  local routes_path = "/xreactor/config/fuel_routes.lua"
+  local routes_path = "/xreactor_config/fuel_routes.lua"
   if fs.exists(routes_path) then
     local ok_load, content = pcall(dofile, routes_path)
     if not ok_load or type(content) ~= "table" then
       routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
-      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Reaktor-Konfiguration bleibt leer: " .. tostring(content))
     else
-      local validation = redstone_router_lib.validate_tree(content)
-      if not validation.ok then
-        local fe = validation.errors[1]
-        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
-        add_config_warning("fuel_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
-      else
-        config.logistics = config.logistics or {}
-        config.logistics.redstone_tree = content
-        routing_load_status = { ok = true, source = routes_path }
-      end
+      config.logistics = config.logistics or {}
+      config.logistics.export_chest = content.export_chest
+      config.logistics.reactors = type(content.reactors) == "table" and content.reactors or {}
+      routing_load_status = { ok = true, source = routes_path }
     end
   end
 end
+
+config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
@@ -136,12 +155,26 @@ local node_id = support_runtime.init_logging({
 
 local comms
 local services
+-- Eigene Service-Gruppe fuer Discovery/Telemetry (siehe init() unten):
+-- laeuft in ihrer eigenen Coroutine (support_runtime.run_slow_loop(), siehe
+-- Zeile ~478), damit ein langsamer Peripherie-Scan/Export nicht UI-Touch
+-- oder die Ventil-Transaktion (redstone_router:tick(), bleibt in der
+-- "fast"-Gruppe) blockiert.
+local slow_services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local fuel_health = health.new({})
 local router
 local rs_router_instance
 local router_ui_instance
 local fuel_status_cache = fuel_status_network.new()
+-- Passiver Beobachter fuer HOP_SCAN-Meldungen der VALVE-Nodes -- lernt
+-- distanzabhaengige Liefer-Timeouts, siehe nodes/fuel/hop_timing.lua. Immer
+-- erzeugt (billig ohne HOP_SCAN-Traffic); ohne modemausgestattete VALVE-
+-- Nodes bleibt es einfach ungenutzt und valve_open_ms faellt wie zuvor auf
+-- den festen Default zurueck.
+local hop_timing_instance = hop_timing_lib.new({
+  log = function(level, msg) utils.log("FUEL", msg, level) end,
+})
 local devices = {
   monitor = nil, monitor_name = nil, storage_name = nil, discovery_failed = false,
   registry_summary = nil, registry_load_error = nil, proto_mismatch = false,
@@ -151,7 +184,7 @@ local master_alerts = {}
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
 local fuel_ui = fuel_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
-local FUEL_MONITOR_SCALE = 0.5
+local FUEL_MONITOR_SCALE = 1.0
 
 local function warn_once(key, message)
   support_runtime.warn_once(devices, function(msg, level) utils.log(CONFIG.LOG_PREFIX, msg, level) end, key, message)
@@ -165,6 +198,7 @@ local function get_rs_router()
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
       comms = comms,
+      hop_timing = hop_timing_instance,
     })
   end
   return rs_router_instance
@@ -178,24 +212,67 @@ local function get_router()
       warn_once = function(key, msg) warn_once(key, msg) end,
       rs_router = get_rs_router(),
       fuel_status = fuel_status_cache,
+      hop_timing = hop_timing_instance,
     })
   end
   return router
 end
 
+-- logistics.enabled ist ein reiner Sicherheits-Schalter (Default false,
+-- siehe config.lua) -- wird NIE automatisch aus fuel_routes.lua/router_ui
+-- gesetzt, nur ueber diesen Touch-Button oder von Hand in der Config.
+-- Persistiert sofort in die Live-Config-Datei (nicht fuel_routes.lua).
+local function set_logistics_enabled(value)
+  config.logistics = config.logistics or {}
+  config.logistics.enabled = value == true
+  local persisted, persist_err = utils.write_config(CONFIG.CONFIG_PATH, config)
+  if not persisted then
+    utils.log("FUEL", "LOGISTIK-Schalter angewendet, aber Persistierung fehlgeschlagen: "
+      .. tostring(persist_err), "WARN")
+  end
+  utils.log("FUEL", "Logistik " .. (value and "aktiviert" or "deaktiviert") .. " (Touch)", "INFO")
+end
+
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
+      config = config,
       redstone_router = get_rs_router(),
-      config_path = "/xreactor/config/fuel_routes.lua",
+      logistics_router = get_router(),
+      config_path = "/xreactor_config/fuel_routes.lua",
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       routing_load_status = routing_load_status,
       get_reactors = function()
         return reactor_targets.collect(config, fuel_status_cache)
       end,
+      set_logistics_enabled = set_logistics_enabled,
     })
   end
   return router_ui_instance
+end
+
+-- "meBridge_0" ist der Konventions-Default aus DEFAULT_CONFIG, keine
+-- Zusicherung ueber die tatsaechliche Peripherie: Advanced Peripherals
+-- vergibt generierte Namen wie "meBridge_0"/"meBridge_1" je nach
+-- Anschlussreihenfolge (siehe nodes/fuel/logistics_router.lua's und
+-- nodes/reprocessor/feed_router.lua's find_me_bridge_by_methods() fuer
+-- denselben, dort bereits behobenen Fall). Reale Logs (2026-09-02) zeigten
+-- FUEL-Nodes, deren Storage-Bus per exaktem Namensvergleich dauerhaft als
+-- "[FEHLT]" galt, obwohl eine ME Bridge tatsaechlich am Netz haengt --
+-- nur eben nicht unter Index 0. Ein wirklich individuell konfigurierter
+-- Name bleibt weiterhin eine strikte Bindung.
+local DEFAULT_STORAGE_BUS = "meBridge_0"
+
+-- Die reale ME Bridge (Advanced Peripherals) hat weder tanks() noch
+-- getFluidAmount() (das waere ein dedizierter Fluid-Tank-Block) --
+-- sie ist eine Item-Schnittstelle (core/me_bridge_compat.lua deckt beide
+-- API-Generationen ab, siehe dort). Reale Logs (2026-09-03) zeigten
+-- FUEL-Nodes mit korrekt benanntem storage_bus, die trotzdem nie als
+-- Storage erkannt wurden, weil die Methodenpruefung auf eine Fluid-
+-- Peripherie zielte statt auf die tatsaechliche ME-Bridge-API. Reserve
+-- wird item-basiert ueber config.reserve_items gezaehlt (storage.lua).
+local function is_storage_candidate(method_set)
+  return method_set.tanks or method_set.getFluidAmount or me_bridge_compat.is_bridge(method_set)
 end
 
 local function discover()
@@ -211,8 +288,14 @@ local function discover()
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
   local storage_devices = support_discovery.collect_devices_by_methods(names, {
     kind = "storage",
-    allow_name = function(name) return not config.storage_bus or name == config.storage_bus end,
-    match = function(method_set) return method_set.tanks or method_set.getFluidAmount end
+    allow_name = function(name)
+      local configured = config.storage_bus
+      if configured == nil or configured == "" or configured == DEFAULT_STORAGE_BUS or configured == "meBridge" then
+        return true
+      end
+      return name == configured
+    end,
+    match = is_storage_candidate
   })
   for _, entry in ipairs(storage_devices) do table.insert(registry_devices, entry) end
   registry:sync(registry_devices)
@@ -229,30 +312,40 @@ local function hello() comms:send_hello({ reserve = reserve }) end
 local is_master_connected
 local master_peer_state
 
--- Kurzlebiger Cache (300ms, unter dem 1s-Renderintervall) haelt render_
--- monitor() und render_ampel() (die beide etwa im selben Rhythmus laufen)
--- innerhalb desselben Zyklus zusammen, statt build_status_payload()'s
--- Peripherie-/Registry-Arbeit doppelt auszufuehren.
-local payload_cache, payload_cache_ts = nil, 0
-local PAYLOAD_CACHE_TTL_MS = 300
+-- build_status_payload()'s eigentliche Arbeit (status_snapshot_lib, darunter
+-- fuel_storage.read_fuel() -- bis zu vier synchrone ME-Bridge-getItem()-
+-- Aufrufe) darf NICHT aus der "fast"-Coroutine (ui_service/ampel_render,
+-- siehe run_fast_loop weiter unten) laufen: sie wuerde Touch-Eingabe fuer
+-- ihre eigene Laufzeit blockieren, exakt das Problem, das die fast/slow-
+-- Trennung eigentlich verhindern soll (Feldbericht 2026-09-06: FUEL blieb
+-- traege, obwohl RT durch dieselbe Trennung spuerbar reagierte -- RT hat
+-- keinen aequivalenten Peripherie-Read in seinem UI-Modellaufbau).
+-- refresh_status_payload() macht die eigentliche Arbeit und wird nur aus
+-- der "slow"-Coroutine aufgerufen (nach jedem run_slow_loop-Zyklus, siehe
+-- unten); build_status_payload() (von ui_service/ampel_render UND
+-- telemetry_service genutzt) liest nur noch den zuletzt berechneten Cache,
+-- ohne selbst jemals die ME-Bridge zu befragen. Vor dem ersten slow-loop-
+-- Zyklus (kurzes Startfenster) baut sie einmalig synchron auf, damit die
+-- erste Anzeige nicht auf einen leeren Payload trifft.
+local payload_cache = nil
 
-local function build_status_payload()
-  local now = os.epoch("utc")
-  if payload_cache and (now - payload_cache_ts) < PAYLOAD_CACHE_TTL_MS then
-    return payload_cache
-  end
+local function refresh_status_payload()
   payload_cache = status_snapshot_lib.build_status_payload({
     config = config, devices = devices, fuel_health = fuel_health,
     comms = comms, registry = registry, health = health,
     non_rt_payload = non_rt_payload, master_alerts = master_alerts,
     master_seen_ts = master_seen_ts, reserve = reserve, storage = fuel_storage.get(),
-    read_fuel = function() return fuel_storage.read_fuel(warn_once, support_runtime) end,
+    read_fuel = function() return fuel_storage.read_fuel(config, warn_once, support_runtime) end,
     enforce_reserve = function(current) return fuel_storage.enforce_reserve(current, reserve, safety, utils) end,
     is_master_connected = is_master_connected, get_router = get_router,
     routing_load_status = routing_load_status, get_rs_router = get_rs_router,
   })
-  payload_cache_ts = now
   return payload_cache
+end
+
+local function build_status_payload()
+  if payload_cache then return payload_cache end
+  return refresh_status_payload()
 end
 
 -- Zentraler ctx-Aufbau fuer sowohl Model-Bau als auch Zeichnung --
@@ -331,6 +424,7 @@ local function init()
     .. (devices.monitor and "" or " (KEIN Monitor gefunden!)"), devices.monitor and "INFO" or "WARN")
 
   services = service_manager.new({ log_prefix = "FUEL" })
+  slow_services = service_manager.new({ log_prefix = "FUEL-BG" })
   comms = comms_service.new({
     config = config, log_prefix = "FUEL", on_command = handle_command,
     on_message = function(message)
@@ -353,6 +447,16 @@ local function init()
       get_rs_router():handle_valve_ack(message)
     end
   end })
+  -- HOP_SCAN teilt sich denselben Kanal/rohen Listener-Ansatz wie VALVE_ACK
+  -- oben -- passive Fuellstandsmeldung, siehe hop_timing.lua/handle_hop_scan().
+  services:add({ name = "hop_scan_listener", wants_events = true, tick = function(_self, dt, event)
+    if not event or event[1] ~= "modem_message" then return end
+    local channel, message = event[3], event[5]
+    if channel ~= constants.channels.VALVE then return end
+    if type(message) == "table" and message.type == "HOP_SCAN" then
+      get_rs_router():handle_hop_scan(message)
+    end
+  end })
   local last_valve_retry_check_ms = 0
   services:add({ name = "valve_ack_retry", tick = function()
     local now = os.epoch and os.epoch("utc") or 0
@@ -372,8 +476,15 @@ local function init()
       router_ui_instance:handle_teach_pulse(message.src)
     end
   end })
-  services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
-  services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
+  local discovery_stability_cache = discovery_stability.new({})
+  slow_services:add(discovery_service.new({
+    registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
+    should_discover = function(service, ts, event, due)
+      return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
+    end,
+    managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
+  }))
+  slow_services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
   services:add(ui_service.new({
     interval = 1,
     build_model = build_fuel_model,
@@ -399,6 +510,7 @@ local function init()
   -- Toggle-Buttons: setzt den Zustand, zweiter Aufruf hebt ihn sofort auf).
   services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
   services:init()
+  slow_services:init()
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")
   if ok_report_mod then
@@ -414,15 +526,39 @@ local function init()
 end
 
 init()
--- get_rs_router():tick() treibt die asynchrone Ventil-Transaktion voran --
--- muss unabhaengig vom 5s-Logistics-Zyklus regelmaessig laufen, sonst
--- kaeme eine laufende Transaktion nie ueber WAIT_SETTLE/HOLD_OPEN hinaus.
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop() fuer die Begruendung): "fast" traegt UI/Touch/
+-- Ventil-ACKs/Teach-in UND get_rs_router():tick() (treibt eine laufende
+-- Ventil-Transaktion voran -- guenstige State-Machine-Pruefungen, kein
+-- blockierender Peripherie-Call), "slow" traegt Discovery/Telemetry UND
+-- get_router():tick() (macht den eigentlichen ME-Bridge-Export-Call, der
+-- laut Feldberichten spuerbar lange dauern kann) -- ein langsamer Export
+-- soll UI/Touch/Ventil-Sicherheit nicht mehr blockieren.
 local quiesce_handshake = _G.__xreactor_update_handshake
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-  get_router():tick()
-  get_rs_router():tick()
-end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
-  local rs_router = get_rs_router()
-  rs_router:begin_quiesce("UPDATE_QUIESCE")
-  return rs_router:poll_quiesce()
-end } or nil)
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        after_cycle = function() get_rs_router():tick() end,
+        quiesce_opts = quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
+          local rs_router = get_rs_router()
+          rs_router:begin_quiesce("UPDATE_QUIESCE")
+          return rs_router:poll_quiesce()
+        end } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({
+        interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services,
+        after_cycle = function()
+          refresh_status_payload()
+          get_router():tick()
+        end,
+      })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

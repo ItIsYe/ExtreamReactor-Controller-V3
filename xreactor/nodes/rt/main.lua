@@ -14,9 +14,9 @@
 local CONFIG = {
   LOG_NAME           = "rt",
   LOG_PREFIX         = "RT",
-  NODE_ID_PATH       = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH       = "/xreactor_config/node_id.txt",
   CONFIG_PATH        = nil,          -- wird von role_descriptor befüllt
-  CAPACITY_CACHE_PATH = "/xreactor/config/capacity_cache.lua",
+  CAPACITY_CACHE_PATH = "/xreactor_config/capacity_cache.lua",
   -- 0.1s so the scheduler cycle (which drives the reactor/turbine control
   -- tick) meets the required 10Hz cadence; other periodic services gate on
   -- their own interval and are unaffected.
@@ -91,10 +91,10 @@ local rt_default_config = require("nodes.rt.config")
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 
-CONFIG.CONFIG_PATH = "/xreactor/config/rt.lua"
+CONFIG.CONFIG_PATH = "/xreactor_config/rt.lua"
 local DEFAULT_CONFIG = utils.deep_copy(rt_default_config)
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
-local reactor_names = utils.load_config("/xreactor/config/reactor_names.lua", {
+local reactor_names = utils.load_config("/xreactor_config/reactor_names.lua", {
   version = 2, completed = false, aliases = {}, reactors = {},
 })
 if type(reactor_names) ~= "table" or reactor_names.completed ~= true
@@ -180,7 +180,7 @@ local RT_BUILD_INFO = (function()
   return { manifest_id = "unknown", release_id = "unknown" }
 end)()
 
-local comms, services
+local comms, services, slow_services
 local node_state_machine
 local current_state_value = "INIT"
 local states_table
@@ -277,6 +277,15 @@ local function build_ctx()
     reactor_steam_guard_state = state.reactor_steam_guard_state,
     -- Runtime-State (von runtime_ctx)
     peripherals               = devices,
+    -- Read-only reference so reactor_control.lua can reuse module_lifecycle's
+    -- already-fresh-this-tick module.coolant_safety_diag instead of calling
+    -- ctx.fluid.read_coolant_sample() a second time per reactor per tick --
+    -- module_lifecycle.update_module_states() always runs first in
+    -- control_tick() (safety-first ordering), so by the time
+    -- reactor_control.updateReactorControl() reads this, it's guaranteed
+    -- fresh for the current tick. See reactor_control.lua's
+    -- cached_coolant_ratio().
+    modules                   = modules_registry,
     reactor_ctrl              = {},   -- wird in init_reactor_ctrl befüllt
     turbine_ctrl_store        = {},   -- wird in init_turbine_ctrl befüllt
     autonom_state             = {
@@ -419,6 +428,24 @@ end
 local function discover()
   discovery_runtime.discover(build_discovery_context())
   devices.last_scan_ts = os.epoch("utc")
+  -- CC:Tweaked peripheral names are not guaranteed stable across a wired-
+  -- modem reconnect -- if one shifts, reactor_names.lua's name-keyed alias
+  -- silently stops matching and this reactor falls back to its technical
+  -- ID everywhere downstream (RT's own UI, Master, and FUEL's route
+  -- picker, which all read registry entry.alias off the SAME broadcast).
+  -- Surface that immediately as a visible warning instead of letting it
+  -- look like a name-propagation bug in FUEL/Master.
+  if reactor_names.completed == true then
+    for _, entry in ipairs(registry:get_bound_devices("reactor")) do
+      if not entry.alias then
+        warn_once("reactor_no_alias:" .. tostring(entry.name), string.format(
+          "Reaktor %s hat keinen zugewiesenen Namen (reactor_names.lua). Moeglich: " ..
+          "CC:Tweaked hat den Peripherie-Namen nach einem Reconnect geaendert. " ..
+          "Master/FUEL zeigen fuer diesen Reaktor die technische ID statt des Namens.",
+          tostring(entry.name)))
+      end
+    end
+  end
 end
 
 -- After DISCOVERY_STABLE_STREAK unchanged scans in a row (binding_
@@ -462,28 +489,35 @@ end
 
 -- ── Status-Payload ───────────────────────────────────────────────────────────
 
+-- Pure state/no peripheral calls (see nodes/rt/health_payload.lua) -- shared
+-- by build_status_payload() (telemetry) and update_monitor() (local UI) so
+-- the monitor doesn't have to run a full build_status_payload() sweep
+-- (which re-inspects every bound reactor/turbine) just to read out the
+-- small .health record.
+local function build_rt_health_payload()
+  return health_payload.build_health_payload({
+    comms = comms, constants = constants,
+    master_seen = master_seen_ts or os.epoch("utc"),
+    hb = config.heartbeat_interval,
+    devices = devices, registry = registry, binding = binding,
+    configured_reactors = runtime_config.configured_reactors,
+    configured_turbines = runtime_config.configured_turbines,
+    health = health, warn_once = warn_once,
+    -- Was hardcoded false, so MASTER could never see the required
+    -- degraded state (CONTROL_DEGRADED) after a startup watchdog timeout.
+    startup_watchdog_tripped = startup_watchdog_tripped_value,
+    rt_health = rt_health,
+    configured_caps = runtime_config.configured_caps,
+  })
+end
+
 local function build_status_payload(status_level)
   local ctx_snap = {
     status_level         = status_level or constants.status_levels.OK,
     node_state_machine   = node_state_machine,
     current_state        = current_state_value,
     targets              = ctx.targets,
-    build_health_payload = function()
-      return health_payload.build_health_payload({
-        comms = comms, constants = constants,
-        master_seen = master_seen_ts or os.epoch("utc"),
-        hb = config.heartbeat_interval,
-        devices = devices, registry = registry, binding = binding,
-        configured_reactors = runtime_config.configured_reactors,
-        configured_turbines = runtime_config.configured_turbines,
-        health = health, warn_once = warn_once,
-        -- Was hardcoded false, so MASTER could never see the required
-        -- degraded state (CONTROL_DEGRADED) after a startup watchdog timeout.
-        startup_watchdog_tripped = startup_watchdog_tripped_value,
-        rt_health = rt_health,
-        configured_caps = runtime_config.configured_caps,
-      })
-    end,
+    build_health_payload = build_rt_health_payload,
     devices              = devices,
     registry             = registry,
     -- Were hardcoded {}/nil/{}, so MASTER never received real module
@@ -563,7 +597,7 @@ local function update_monitor()
     -- get_target_rpm() lives in turbine_control, not reactor_control.
     get_target_rpm = function() return turbine_control.get_target_rpm(ctx) end,
     binding = binding,
-    build_health_payload = function() return build_status_payload() end,
+    build_health_payload = build_rt_health_payload,
     read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
     read_turbine_flow = function(t, c) return turbine_control.read_turbine_flow(ctx, t, c) end,
     reactor_adapter = adapters.reactor,
@@ -898,6 +932,7 @@ local function init()
 
   -- Services
   services = service_manager.new({ log_prefix = "RT" })
+  slow_services = service_manager.new({ log_prefix = "RT-BG" })
 
   handle_command = command_handler_lib.new(build_command_ctx())
 
@@ -924,7 +959,7 @@ local function init()
   })
   services:add(comms)
 
-  services:add(discovery_service.new({
+  slow_services:add(discovery_service.new({
     registry = registry,
     discover = discover_with_stability_tracking,
     should_discover = should_discover,
@@ -933,13 +968,15 @@ local function init()
     update_health = function(ok) devices.discovery_failed = not ok end,
   }))
 
-  -- Control-Service: läuft auf eigenem Intervall (nicht am Comms-Timeout gebunden)
+  -- Control-Service (Reaktor-/Turbinenregelung) bleibt in der "fast"-
+  -- Coroutine (siehe run_fast_loop/run_slow_loop unten): zeitkritisch, darf
+  -- nicht hinter Discovery/Telemetry in derselben Liste warten muessen.
   services:add({
     name = "control",
     tick = function() control_tick() end,
   })
 
-  services:add(telemetry_service.new({
+  slow_services:add(telemetry_service.new({
     comms = comms,
     status_interval  = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
@@ -958,6 +995,7 @@ local function init()
   }))
 
   services:init()
+  slow_services:init()
 
   configure_lifecycle_context()
   configure_state_machine()
@@ -1075,8 +1113,27 @@ local function update_quiesce_safe()
   return true
 end
 
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() end,
-  quiesce_handshake and {
-    handshake = quiesce_handshake,
-    on_quiesce = update_quiesce_safe,
-  } or nil)
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop()): "fast" traegt UI/Touch/Comms UND die
+-- zeitkritische Reaktor-/Turbinenregelung ("control"-Service), "slow"
+-- traegt Discovery/Telemetry -- ein langsamer Discovery-Scan soll die
+-- Regelung/UI nicht mehr blockieren.
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        quiesce_opts = quiesce_handshake and {
+          handshake = quiesce_handshake,
+          on_quiesce = update_quiesce_safe,
+        } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({ interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

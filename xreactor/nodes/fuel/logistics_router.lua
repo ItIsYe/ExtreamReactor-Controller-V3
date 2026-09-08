@@ -17,13 +17,19 @@
 --      to directly overhearing RT's status broadcasts if Master hasn't
 --      relayed recently.
 --   3. If fuel_level / capacity < request_below → that reactor requests fuel.
---   4. ME Bridge exports exactly the calculated amount to that reactor's
---      dedicated inlet peripheral (transporter or chest).
+--   4. ME Bridge exports exactly the calculated amount into the ONE shared
+--      export chest (config.logistics.export_chest) -- there is no
+--      per-reactor delivery target. A Mekanism logistics network (sorters +
+--      VALVE-Nodes) carries everything downstream from that single chest;
+--      which physical reactor actually receives it is decided purely by
+--      which valves are open at export time (see redstone_router.lua's
+--      begin_transaction(), which blocks every other route before opening
+--      this reactor's path and only then runs the export).
 --   5. No other reactor is affected.
 --
 -- Hardware requirements:
---   - Wired Modem on the FUEL computer, connected to:
---       • Each reactor's dedicated inlet transporter/chest (for delivery)
+--   - Wired Modem on the FUEL computer, connected to the shared export
+--     chest/transporter (config.logistics.export_chest)
 --   - Wireless Modem on the FUEL computer  (for MASTER communication)
 --   - ME Bridge accessible (wired or by name)
 --
@@ -31,18 +37,24 @@
 --
 --   me_bridge = "me_bridge",
 --
+--   -- The ONE physical hand-off point for every reactor: FUEL always
+--   -- exports here, never to a per-reactor target. Which reactor the item
+--   -- actually reaches is entirely a function of the valve path opened for
+--   -- that delivery (see redstone_tree synthesis below).
+--   export_chest = "mekanism:ultimate_logistical_transporter_0",
+--
 --   reactors = {
---     { name              = "Reactor A",
---       -- FUEL has no wired access to the reactor itself (only the ME
+--     { -- FUEL has no wired access to the reactor itself (only the ME
 --       -- system) -- fuel level comes via network (master/fuel_relay.lua,
 --       -- with a fallback on overhearing RT's status broadcasts). reactor_id
---       -- must match the ID the owning RT node reports for this reactor.
+--       -- and label are learned from the owning RT node's own broadcasts
+--       -- (see router_ui.lua's reactor-teach flow), never typed by hand.
 --       reactor_id        = "node-52-reactor-0",
---       inlet             = "mekanism:ultimate_logistical_transporter_0",
---       item              = "bigreactors:yellorium_ingot",
+--       label             = "Reactor A",
+--       path              = { "VALVE-1", "VALVE-3" },  -- see redstone_tree note below
 --       request_below     = 0.25,  -- request when fuel_level < 25% of capacity
---       fill_amount       = 64,    -- how many items to export per request
---       min_in_me         = 32,    -- don't export if ME has fewer than this
+--       fill_amount       = 64,    -- how many ingot-equivalent items to export per request
+--       min_in_me         = 32,    -- don't export if ME has fewer than this (ingot-equivalent)
 --     },
 --   },
 --
@@ -52,19 +64,21 @@
 --       outlet = "mekanism:ultimate_logistical_transporter_1",
 --     },
 --   },
+--
+-- No `item` field: which fuel (Uranium vs Blutonium) and which form (ingot
+-- vs block) to deliver is decided automatically, fresh on every delivery --
+-- see pick_fuel_delivery() below. The interchangeable fuel families come
+-- from config.reserve_items (shared with nodes/fuel/storage.lua's reserve
+-- tally), grouped by their `element` field.
+--
+-- redstone_tree (the VALVE routing topology redstone_router.lua actually
+-- consumes) is never hand-maintained here: refresh_peripherals() builds it
+-- transparently from each reactor's own `path`, keyed by `reactor_id`, on
+-- every refresh. See build_redstone_tree_from_reactors() below.
 
 local M = {}
 local redstone_router_lib = require("nodes.fuel.redstone_router")
-
-local WASTE_PATTERNS = { "cyanite", "magentite", "rossinite", "waste" }
-
-local function is_waste(name)
-  local lower = tostring(name or ""):lower()
-  for _, p in ipairs(WASTE_PATTERNS) do
-    if lower:find(p, 1, true) then return true end
-  end
-  return false
-end
+local me_bridge_compat = require("core.me_bridge_compat")
 
 local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
@@ -107,6 +121,104 @@ local function read_reactor_fuel_from_network(fuel_status, reactor_id)
   return best.fuel_amount, best.fuel_capacity
 end
 
+-- ---- automatic fuel family/form selection ----------------------------------
+
+-- Groups config.reserve_items (the same list nodes/fuel/storage.lua sums for
+-- the reserve display) by their `element` field into ingot/block pairs.
+-- Entries without a usable `element`/`item` are skipped -- they still count
+-- toward the plain reserve total in storage.lua, but can't participate in
+-- delivery family selection without an element to group by.
+local function build_fuel_families(reserve_items)
+  local by_element, order = {}, {}
+  for _, entry in ipairs(reserve_items or {}) do
+    if type(entry) == "table" and type(entry.element) == "string" and entry.element ~= ""
+        and type(entry.item) == "string" and entry.item ~= "" then
+      local family = by_element[entry.element]
+      if not family then
+        family = { element = entry.element, ingot = nil, block = nil, block_multiplier = 9 }
+        by_element[entry.element] = family
+        order[#order + 1] = family
+      end
+      local multiplier = tonumber(entry.unit_multiplier) or 1
+      if multiplier > 1 then
+        family.block = entry.item
+        family.block_multiplier = multiplier
+      else
+        family.ingot = entry.item
+      end
+    end
+  end
+  return order
+end
+
+-- Reads the live ME stock (in ingot-equivalent units) for every fuel family,
+-- then picks whichever family currently has the larger stock -- decided
+-- fresh on every delivery, never fixed per reactor. Returns nil if no
+-- family has any stock at all (nothing sensible to deliver).
+local function pick_fuel_family(bridge, families)
+  local best = nil
+  for _, family in ipairs(families) do
+    local ingot_amt = 0
+    if family.ingot then
+      local info = safe_call(bridge.wrapped, "getItem", { name = family.ingot })
+      ingot_amt = me_bridge_compat.item_amount(info)
+    end
+    local block_amt = 0
+    if family.block then
+      local info = safe_call(bridge.wrapped, "getItem", { name = family.block })
+      block_amt = me_bridge_compat.item_amount(info)
+    end
+    local total = ingot_amt + block_amt * family.block_multiplier
+    if total > 0 and (not best or total > best.total) then
+      best = {
+        element = family.element,
+        ingot = family.ingot, ingot_amt = ingot_amt,
+        block = family.block, block_amt = block_amt,
+        block_multiplier = family.block_multiplier,
+        total = total,
+      }
+    end
+  end
+  return best
+end
+
+-- Chooses ingot vs block form for a single delivery of `push` ingot-
+-- equivalent units of the already-picked family: whole blocks first (fewer
+-- item transfers for bulk amounts), otherwise ingots for small/remaining
+-- amounts. Never splits one delivery across both forms -- redstone-routed
+-- deliveries move exactly one item stack through one valve-open window.
+-- ---- redstone_tree synthesis ------------------------------------------------
+
+-- redstone_router.lua (shared with nodes/reprocessor/feed_router.lua) is the
+-- one piece of shared valve-routing machinery and is left untouched -- it
+-- still consumes a flat { {reactor=, label=, path=}, ... } tree. FUEL no
+-- longer hand-maintains that tree as a second config object: it is rebuilt
+-- here, every refresh, directly from each reactor's own `path`. A reactor
+-- without a reactor_id or a non-empty path contributes no route (nothing to
+-- route to yet -- e.g. freshly learned but not wired up).
+local function build_redstone_tree_from_reactors(reactor_entries)
+  local tree = {}
+  for _, r in ipairs(reactor_entries) do
+    if r.reactor_id and type(r.path) == "table" and #r.path > 0 then
+      tree[#tree + 1] = { reactor = r.reactor_id, label = r.label, path = r.path }
+    end
+  end
+  return tree
+end
+
+local function pick_fuel_form(family, push)
+  local whole_blocks = family.block and math.floor(push / family.block_multiplier) or 0
+  if whole_blocks >= 1 and family.block_amt >= 1 then
+    local count = math.min(whole_blocks, family.block_amt)
+    return family.block, count, count * family.block_multiplier
+  end
+  if family.ingot and family.ingot_amt >= 1 then
+    local count = math.min(push, family.ingot_amt)
+    return family.ingot, count, count
+  end
+  return nil, 0, 0
+end
+
 -- ---- constructor -----------------------------------------------------------
 
 function M.new(opts)
@@ -118,9 +230,14 @@ function M.new(opts)
     external_rs_router = opts.rs_router or nil,  -- shared rs_router injected from main.lua
     -- Netzwerkbasierter Fuellstand-Cache (siehe read_reactor_fuel_from_network()).
     fuel_status = opts.fuel_status or { master_relay = {}, direct_heard = {} },
+    -- Optional: nodes/fuel/hop_timing.lua-Instanz, siehe finish_delivery()
+    -- und _run_supply() unten. nil-fähig -- ohne hop_timing bleibt
+    -- valve_open_ms wie zuvor ein fester, globaler Wert.
+    hop_timing = opts.hop_timing or nil,
     _state = {
       bridge        = nil,
-      reactors      = {},   -- { name, label, reactor, inlet, item, cfg }
+      reactors      = {},   -- { label, reactor_id, path, cfg }
+      export_chest  = nil,  -- { name, wrapped, is_transporter } -- shared by all reactors
       waste_outlets = {},   -- { name, label, outlet }
       rs_router     = nil,  -- redstone_router instance (if configured)
       total_exported= 0,
@@ -135,6 +252,10 @@ function M.new(opts)
       current_request = nil,  -- { transaction_id, reactor_id, label, state, phase }
       last_delivery = nil,
       delivery_seq = 0,
+      -- Ueberlebt refresh_peripherals() (das self._state.reactors komplett
+      -- neu aufbaut) -- Grundlage fuer die Abklingzeit unten: wann eine
+      -- Lieferung an diesen Reaktor zuletzt tatsaechlich exportiert wurde.
+      last_export_ts = {},  -- [reactor_id] = os.epoch("utc")
     },
   }
   return setmetatable(self, { __index = M })
@@ -152,12 +273,18 @@ local function finish_delivery(self, request, phase, terminal_state, err)
   request.terminal_state = terminal_state
   request.error = err or request.error
   request.finished_ts = os.epoch and os.epoch("utc") or 0
+  -- Jeder Ausgang (Erfolg wie Fehlschlag) liefert reale Transitdaten fuer
+  -- die bereits erreichten Hops -- hop_timing lernt daraus unabhaengig vom
+  -- Ergebnis dieser Lieferung.
+  if self.hop_timing then self.hop_timing:finish_delivery(request.reactor_id) end
   self._state.last_delivery = {
     transaction_id = request.transaction_id,
     reactor_id = request.reactor_id,
     label = request.label,
     phase = request.phase,
     terminal_state = request.terminal_state,
+    item = request.item,
+    element = request.element,
     moved = request.moved or 0,
     error = request.error,
     started_ts = request.started_ts,
@@ -175,6 +302,20 @@ local function account_async_error(self, request)
   end
 end
 
+-- Merkt sich, WANN zuletzt tatsaechlich etwas an diesen Reaktor exportiert
+-- wurde -- Grundlage fuer resupply_cooldown_s in _run_supply()'s Phase 1
+-- (siehe dortiger Kommentar): FUEL hat kein Wired-Modem-Sichtfeld auf die
+-- letzte Kiste vor dem Reaktor, kann also physisch nicht pruefen, ob eine
+-- vorige Lieferung schon angekommen/verbraucht wurde. Der vom Reaktor
+-- gemeldete Fuellstand (fuel_pct) aktualisiert sich erst NACH Verbrauch --
+-- ohne diese Abklingzeit wuerde FUEL bei jedem ~5s-Zyklus erneut nachlegen,
+-- solange fuel_pct unter der Schwelle bleibt, und Fuel staut sich in der
+-- Kiste vor dem Reaktor an (Feldbericht 2026-09-06).
+local function record_export(self, reactor_id, moved)
+  if not reactor_id or (tonumber(moved) or 0) <= 0 then return end
+  self._state.last_export_ts[reactor_id] = os.epoch and os.epoch("utc") or 0
+end
+
 local function account_async_export(self, request, moved, move_line)
   if moved <= 0 then return end
   self._state.total_exported = self._state.total_exported + moved
@@ -186,17 +327,18 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
--- Sucht per Methodensignatur (getItem + exportItemToPeripheral +
--- importItemFromPeripheral), sobald der konfigurierte/Default-Name nicht
--- direkt gefunden wird -- Advanced Peripherals vergibt generierte Namen
--- wie "meBridge_0", nicht den Konventions-Default "me_bridge".
+-- Sucht per Methodensignatur (core/me_bridge_compat.lua, deckt beide
+-- Advanced-Peripherals-API-Generationen ab), sobald der konfigurierte/
+-- Default-Name nicht direkt gefunden wird -- Advanced Peripherals vergibt
+-- generierte Namen wie "meBridge_0"/"me_bridge_3", nicht den Konventions-
+-- Default "me_bridge".
 local function find_me_bridge_by_methods()
   for _, name in ipairs(peripheral.getNames() or {}) do
     local ok, methods = pcall(peripheral.getMethods, name)
     if ok and type(methods) == "table" then
       local set = {}
       for _, m in ipairs(methods) do set[m] = true end
-      if set.getItem and set.exportItemToPeripheral and set.importItemFromPeripheral then
+      if me_bridge_compat.is_bridge(set) then
         return name
       end
     end
@@ -234,46 +376,58 @@ function M:refresh_peripherals()
     self.warn_once("bridge_absent", "Logistics: ME Bridge absent: " .. bridge_name)
   end
 
+  -- Shared export chest: the ONE physical hand-off point every delivery
+  -- exports into, regardless of which reactor it's destined for. Which
+  -- reactor actually receives it is decided by the valve path opened for
+  -- that delivery (see redstone_router.lua's begin_transaction()), not by
+  -- picking a different peripheral here.
+  self._state.export_chest = nil
+  if cfg.export_chest and peripheral.isPresent(cfg.export_chest) then
+    local ok, w = pcall(peripheral.wrap, cfg.export_chest)
+    if ok and w then
+      self._state.export_chest = { name = cfg.export_chest, wrapped = w,
+        is_transporter = is_transporter_name(cfg.export_chest) }
+    else
+      self.warn_once("export_chest_wrap", "Logistics: export_chest wrap failed: " .. cfg.export_chest)
+    end
+  elseif cfg.export_chest then
+    self.warn_once("export_chest_absent", "Logistics: export_chest absent: " .. cfg.export_chest
+      .. " (needs Wired Modem connection)")
+  end
+
   -- Per-reactor entries
   local reactors = {}
   for i, entry in ipairs(cfg.reactors or {}) do
-    local label = entry.name or ("Reactor " .. i)
-
-    -- Kein Wired-Zugriff auf den Reaktor selbst -- nur die ID merken, unter
-    -- der der zustaendige RT-Node ihn im Netzwerk meldet. entry.reactor_port
-    -- (alt) wird als Fallback-Alias akzeptiert, aber kein Peripheral gewrapped.
+    -- reactor_id/label are learned from the owning RT node's broadcasts
+    -- (router_ui.lua's teach flow) and never typed by hand; reactor_port is
+    -- accepted as a legacy alias for reactor_id only.
     local reactor_id = entry.reactor_id or entry.reactor_port
+    local label = entry.label or reactor_id or ("Reactor " .. i)
 
-    -- Inlet: dedicated transporter or chest for THIS reactor
-    local inlet = nil
-    if entry.inlet and peripheral.isPresent(entry.inlet) then
-      local ok, w = pcall(peripheral.wrap, entry.inlet)
-      if ok and w then
-        inlet = { name = entry.inlet, wrapped = w,
-                  is_transporter = is_transporter_name(entry.inlet)
-                                or (entry.transporter == true) }
-      else
-        self.warn_once("inlet_wrap_" .. i,
-          "Logistics: inlet wrap failed: " .. entry.inlet)
+    local path = {}
+    if type(entry.path) == "table" then
+      for _, step in ipairs(entry.path) do
+        if type(step) == "string" and step ~= "" then path[#path + 1] = step end
       end
-    elseif entry.inlet then
-      self.warn_once("inlet_absent_" .. i,
-        "Logistics: inlet absent: " .. entry.inlet
-        .. " (needs Wired Modem connection)")
     end
 
     reactors[#reactors + 1] = {
       label        = label,
       reactor_id   = reactor_id,
-      inlet        = inlet,
-      item         = entry.item or "",
+      path         = path,
       request_below = tonumber(entry.request_below) or 0.25,
       fill_amount  = tonumber(entry.fill_amount)   or 64,
       min_in_me    = tonumber(entry.min_in_me)     or 32,
+      -- Mindestwartezeit nach einer Lieferung an diesen Reaktor, bevor
+      -- erneut nachgelegt wird -- siehe record_export()-Kommentar oben.
+      -- Je nach physischer Entfernung des Reaktors vom Transportnetz
+      -- unterschiedlich lang, daher pro Reaktor einstellbar (Router-UI).
+      resupply_cooldown_s = math.max(0, tonumber(entry.resupply_cooldown_s) or 30),
       cfg          = entry,
     }
   end
   self._state.reactors = reactors
+  cfg.redstone_tree = build_redstone_tree_from_reactors(reactors)
 
   -- Waste outlets
   local waste_outlets = {}
@@ -336,43 +490,61 @@ function M:_run_supply(cycle_log)
   if self._state.current_request then return 0, 0 end
   local exported, errors = 0, 0
 
+  -- The shared export chest is a global precondition, not a per-reactor one
+  -- -- without it, nothing can be delivered to ANY reactor regardless of
+  -- routing/ME stock, so this is checked once up front.
+  local export_chest = self._state.export_chest
+  if not export_chest then
+    self.warn_once("no_export_chest", "Logistics: no export_chest configured — cannot supply any reactor")
+    return 0, 0
+  end
+
   -- Phase 1: ermitteln, WELCHE Reaktoren gerade Fuel anfordern, ohne sie
   -- schon zu beliefern. Alle anfordernden Reaktoren sammeln, dann nach
   -- Prioritaet sortieren (niedrigster Fuellstand zuerst). Reaktoren ohne
   -- reactor_id (Always-Supply-Fallback) werden nach allen bekannten
   -- Fuellstaenden eingeplant, da ihre Dringlichkeit nicht vergleichbar ist.
+  local now_ts = os.epoch and os.epoch("utc") or 0
   local candidates = {}
   for _, r in ipairs(self._state.reactors) do
-    if not r.inlet then
-      self.warn_once("no_inlet:" .. r.label,
-        "Logistics: no inlet configured for " .. r.label)
-    elseif is_waste(r.item) then
-      self.warn_once("waste_fuel:" .. r.item,
-        "SAFETY BLOCK: item '" .. r.item .. "' is waste — cannot use as fuel supply")
-    else
-      local requesting, fuel_pct = false, nil
-      if r.reactor_id then
-        local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
-        if fuel_amt and capacity and capacity > 0 then
-          fuel_pct = fuel_amt / capacity
-          requesting = fuel_pct < r.request_below
-          self.log("DEBUG", string.format(
-            "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
-            r.label, fuel_pct * 100, fuel_amt, capacity,
-            requesting and "YES" or "no"))
-        else
-          self.warn_once("fuel_read_fail:" .. r.label,
-            "Logistics: no fresh network fuel data for " .. r.label
-            .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
-        end
+    local requesting, fuel_pct = false, nil
+    if r.reactor_id then
+      local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
+      if fuel_amt and capacity and capacity > 0 then
+        fuel_pct = fuel_amt / capacity
+        requesting = fuel_pct < r.request_below
+        self.log("DEBUG", string.format(
+          "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
+          r.label, fuel_pct * 100, fuel_amt, capacity,
+          requesting and "YES" or "no"))
       else
-        requesting = true
-        self.log("DEBUG", "Logistics: " .. r.label
-          .. " has no reactor_id — using always-supply mode")
+        self.warn_once("fuel_read_fail:" .. r.label,
+          "Logistics: no fresh network fuel data for " .. r.label
+          .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
       end
-      if requesting then
-        candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
+    else
+      requesting = true
+      self.log("DEBUG", "Logistics: " .. r.label
+        .. " has no reactor_id — using always-supply mode")
+    end
+    -- Abklingzeit seit der letzten tatsaechlichen Lieferung: fuel_pct
+    -- aktualisiert sich erst, NACHDEM der Reaktor eine vorige Lieferung
+    -- verbraucht hat -- ohne diese Sperre wuerde hier jeden Zyklus erneut
+    -- nachgelegt, solange fuel_pct noch unter der Schwelle liegt, obwohl
+    -- die letzte Ladung physisch noch unterwegs/nicht verbraucht ist (siehe
+    -- record_export()-Kommentar oben).
+    if requesting and r.reactor_id then
+      local last_ts = self._state.last_export_ts[r.reactor_id]
+      local cooldown_ms = (r.resupply_cooldown_s or 0) * 1000
+      if last_ts and (now_ts - last_ts) < cooldown_ms then
+        requesting = false
+        self.log("DEBUG", string.format(
+          "Logistics: %s: resupply_cooldown aktiv (%.0fs verbleibend) — kein Nachlegen diesen Zyklus",
+          r.label, (cooldown_ms - (now_ts - last_ts)) / 1000))
       end
+    end
+    if requesting then
+      candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
     end
   end
 
@@ -410,6 +582,16 @@ function M:_run_supply(cycle_log)
   end
   local routed = routing_state == "ROUTING_VALID"
 
+  -- Which fuel family to deliver is decided once per cycle (freshest ME
+  -- read available), not per reactor -- see pick_fuel_family() above. At
+  -- most one delivery happens per cycle anyway (see comment above), so a
+  -- per-reactor re-read would only waste getItem() calls.
+  local families = build_fuel_families(self.config.reserve_items)
+  local family = #candidates > 0 and pick_fuel_family(bridge, families) or nil
+  if #candidates > 0 and not family then
+    self.warn_once("no_fuel_family", "Logistics: no fuel (Uranium/Blutonium) available in the ME system — cannot supply any reactor")
+  end
+
   for _, cand in ipairs(candidates) do
     local r, fuel_pct = cand.r, cand.fuel_pct
 
@@ -422,35 +604,51 @@ function M:_run_supply(cycle_log)
       cycle_log = cycle_log,
     }
 
-    -- Check ME availability
-    local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = r.item })
-    local in_me = type(me_info) == "table" and (me_info.amount or 0) or 0
-    if in_me < r.min_in_me then
+    if not family then goto continue end
+
+    -- ME availability, in ingot-equivalent units of the chosen family.
+    if family.total < r.min_in_me then
       self.log("DEBUG", string.format(
-        "Logistics: %s: ME has %d %s (need >%d) — skip",
-        r.label, in_me, r.item, r.min_in_me))
+        "Logistics: %s: ME has %d %s-equivalent (need >%d) — skip",
+        r.label, family.total, family.element, r.min_in_me))
       goto continue
     end
 
-    local push = math.min(r.fill_amount, in_me - r.min_in_me)
+    local push = math.min(r.fill_amount, family.total - r.min_in_me)
     if push <= 0 then goto continue end
 
+    local deliver_item, deliver_count = pick_fuel_form(family, push)
+    if not deliver_item or deliver_count <= 0 then goto continue end
+
     do
-      local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+      local default_valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+      -- Distanzabhaengiger Timeout statt eines festen Werts fuer alle
+      -- Reaktoren -- siehe hop_timing.lua. compute_timeout_ms() liefert
+      -- exakt default_valve_ms zurueck, solange kein Pfad-Hop kalibriert
+      -- ist (unabhaengig von dessen Laenge); erst gelernte Kanten
+      -- verschieben das Ergebnis nach oben/unten davon weg.
+      local valve_ms = (routed and self.hop_timing)
+        and self.hop_timing:compute_timeout_ms(r.path, default_valve_ms)
+        or default_valve_ms
       local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
       local request = self._state.current_request
       request.transaction_id = request.transaction_id or next_delivery_id(self, r.label)
+      request.item = deliver_item
+      request.element = family.element
 
       if routed then
+        if self.hop_timing then
+          self.hop_timing:begin_delivery(r.reactor_id, r.path, deliver_item, request.started_ts)
+        end
         local function do_export()
           request.phase = "EXPORTING"
           request.state = "delivering"
-          local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-            { name = r.item, count = push }, r.inlet.name)
+          local ok, result = me_bridge_compat.export_to(bridge.wrapped,
+            { name = deliver_item, count = deliver_count }, export_chest.name)
           if not ok then
             local err = tostring(result)
-            self.warn_once("exp_err:" .. r.inlet.name,
-              "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
+            self.warn_once("exp_err:" .. export_chest.name,
+              "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
             account_async_error(self, request)
             request.error = err
             return false, err
@@ -459,11 +657,12 @@ function M:_run_supply(cycle_log)
           request.moved = moved
           request.exported_at = os.epoch and os.epoch("utc") or 0
           if moved > 0 then
+            record_export(self, request.reactor_id, moved)
             local move_line = string.format(
-              "ME→[%s]%s %s x%d via %s", r.label, pct_str, r.item, moved, r.inlet.name)
+              "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
             account_async_export(self, request, moved, move_line)
             self.log("INFO", string.format("ME→[%s]%s %s x%d via %s [tx=%s]",
-              r.label, pct_str, r.item, moved, r.inlet.name, tostring(request.transaction_id)))
+              r.label, pct_str, deliver_item, moved, export_chest.name, tostring(request.transaction_id)))
           end
           return true, moved
         end
@@ -486,12 +685,18 @@ function M:_run_supply(cycle_log)
           end
         end
 
-        local started, reason, router_tx_id = rs:begin_transaction(r.label, do_export, valve_ms, {
+        local started, reason, router_tx_id = rs:begin_transaction(r.reactor_id, do_export, valve_ms, {
           on_error = on_transaction_error,
           on_complete = on_transaction_complete,
           transaction_id = request.transaction_id,
         })
         if not started then
+          -- begin_delivery() above already primed hop_timing's baseline for
+          -- this reactor; the transaction never opened a path, so there is
+          -- nothing to learn from -- clear it the same way a terminal
+          -- outcome would (finish_delivery() is a no-op learning-wise when
+          -- no hop ever recorded an arrival).
+          if self.hop_timing then self.hop_timing:finish_delivery(r.reactor_id) end
           self._state.current_request = nil
           if reason == "busy" then
             self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
@@ -515,12 +720,12 @@ function M:_run_supply(cycle_log)
       -- stable transaction identity/terminal semantics.
       request.state = "delivering"
       request.phase = "EXPORTING"
-      local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-        { name = r.item, count = push }, r.inlet.name)
+      local ok, result = me_bridge_compat.export_to(bridge.wrapped,
+        { name = deliver_item, count = deliver_count }, export_chest.name)
       if not ok then
         local err = tostring(result)
-        self.warn_once("exp_err:" .. r.inlet.name,
-          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
+        self.warn_once("exp_err:" .. export_chest.name,
+          "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
         errors = errors + 1
         request.error_counted = true
         finish_delivery(self, request, "ERROR", "EXPORT_FAILED", err)
@@ -528,9 +733,10 @@ function M:_run_supply(cycle_log)
         local moved = type(result) == "number" and result or 0
         request.moved = moved
         if moved > 0 then
+          record_export(self, request.reactor_id, moved)
           exported = exported + moved
           cycle_log[#cycle_log + 1] = string.format(
-            "ME→[%s]%s %s x%d via %s", r.label, pct_str, r.item, moved, r.inlet.name)
+            "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
         end
         finish_delivery(self, request, "COMPLETE", "COMPLETE_SAFE", nil)
       end
@@ -550,15 +756,14 @@ function M:_run_collect(cycle_log)
   local imported, errors = 0, 0
 
   for _, outlet in ipairs(self._state.waste_outlets) do
-    local ok, result = pcall(bridge.wrapped.importItemFromPeripheral,
-      {}, outlet.name)
+    local ok, result = me_bridge_compat.import_from(bridge.wrapped, {}, outlet.name)
     if not ok then
       -- Fallback: import item by item
       local items, _ = safe_call(outlet.wrapped, "list")
       if items then
         for _, stack in pairs(items) do
           if type(stack) == "table" and stack.name then
-            local ok2, res2 = pcall(bridge.wrapped.importItemFromPeripheral,
+            local ok2, res2 = me_bridge_compat.import_from(bridge.wrapped,
               { name = stack.name, count = stack.count or 64 }, outlet.name)
             if ok2 then
               local n = type(res2) == "number" and res2 or 0
@@ -656,15 +861,13 @@ function M:get_summary()
     reactor_status[#reactor_status + 1] = {
       label         = r.label,
       fuel_pct      = fuel_pct,
-      inlet         = r.inlet and r.inlet.name or nil,
       reactor_id    = r.reactor_id,
-      connected     = r.reactor_id ~= nil and r.inlet ~= nil,
+      path          = r.path,
+      -- Delivery to a reactor no longer depends on a peripheral dedicated
+      -- to it (see export_chest below) -- only on having learned its
+      -- identity from the owning RT node.
+      connected     = r.reactor_id ~= nil,
     }
-  end
-  local total_routes, active_routes = 0, 0
-  for _, r in ipairs(reactor_status) do
-    total_routes = total_routes + 1
-    if r.connected then active_routes = active_routes + 1 end
   end
   local active_tx = s.rs_router and type(s.rs_router.get_active_transaction) == "function"
     and s.rs_router:get_active_transaction() or nil
@@ -675,6 +878,30 @@ function M:get_summary()
   end
   local safety_latch = s.rs_router and type(s.rs_router.get_safety_latch) == "function"
     and s.rs_router:get_safety_latch() or nil
+
+  -- Live ME-Bestand je Fuel-Familie fuer die Diagnose-Seite (ui_pages.lua)
+  -- -- unabhaengig davon, ob gerade ein Reaktor anfordert, damit der
+  -- Bestand jederzeit einsehbar ist, nicht nur waehrend einer Lieferung.
+  local fuel_families = nil
+  if s.bridge then
+    fuel_families = {}
+    for _, fam in ipairs(build_fuel_families(self.config.reserve_items)) do
+      local ingot_amt = 0
+      if fam.ingot then
+        ingot_amt = me_bridge_compat.item_amount(safe_call(s.bridge.wrapped, "getItem", { name = fam.ingot }))
+      end
+      local block_amt = 0
+      if fam.block then
+        block_amt = me_bridge_compat.item_amount(safe_call(s.bridge.wrapped, "getItem", { name = fam.block }))
+      end
+      fuel_families[#fuel_families + 1] = {
+        element = fam.element, ingot_amt = ingot_amt, block_amt = block_amt,
+        total = ingot_amt + block_amt * fam.block_multiplier,
+      }
+    end
+    table.sort(fuel_families, function(a, b) return a.total > b.total end)
+  end
+
   local current_request = nil
   if s.current_request then
     current_request = {
@@ -691,11 +918,10 @@ function M:get_summary()
   return {
     enabled        = cfg.enabled == true,
     bridge         = s.bridge and s.bridge.name or nil,
+    export_chest   = s.export_chest and s.export_chest.name or nil,
     reactors       = reactor_status,
+    fuel_families  = fuel_families,
     waste_outlets  = #s.waste_outlets,
-    -- ui_pages.lua's "ROUTEN"-Anzeige braucht beide Felder.
-    total_routes   = total_routes,
-    active_routes  = active_routes,
     -- Deckt den ganzen Entscheidungs-/Lieferzyklus ab (das kurze Ventil-
     -- Fenster bleibt separat ueber rs_router:get_active_route() verfuegbar).
     current_request = current_request,

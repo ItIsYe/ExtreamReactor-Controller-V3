@@ -76,6 +76,7 @@ function M.normalize(config_values, defaults, utils, add_warning)
   clamp_num(config_values, "matrix_metric_slow_call_ms",       50,  5000,  defaults.matrix_metric_slow_call_ms,        warn, "ms")
   clamp_num(config_values, "matrix_metric_slow_poll_multiplier", 1, 30,    defaults.matrix_metric_slow_poll_multiplier, warn, "x")
   clamp_num(config_values, "matrix_metric_per_matrix_budget",   0,  4,     defaults.matrix_metric_per_matrix_budget,   warn)
+  clamp_num(config_values, "matrix_sample_min_tick_spacing_ms", 100, 10000, defaults.matrix_sample_min_tick_spacing_ms, warn, "ms")
 
   -- Matrix-Komponenten
   clamp_num(config_values, "matrix_component_poll_interval",    0,  300,   defaults.matrix_component_poll_interval,    warn, "s")

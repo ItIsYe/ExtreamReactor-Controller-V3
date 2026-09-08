@@ -63,7 +63,7 @@ function alert_service.new(opts)
     info_ttl_s = config.alert_info_ttl or 10,
     history_size = config.alert_history_size or 100
   })
-  local state_path = config.alert_state_path or "/xreactor/config/alerts_state.lua"
+  local state_path = config.alert_state_path or "/xreactor_config/alerts_state.lua"
   local state = utils.load_config(state_path, state_defaults)
   normalize_mutes(state)
   local now = now_ms()
@@ -266,7 +266,7 @@ function alert_service:tick()
   -- fehlt der Speaker oder ist opts.speaker_alarm nicht gesetzt, passiert
   -- hier einfach nichts.
   if self.speaker_alarm then
-    local counts = self:get_counts_by_severity()
+    local counts = self:get_counts()
     local critical_active = (counts.CRITICAL or 0) > 0
     if critical_active then
       pcall(self.speaker_alarm.play, "alarm")

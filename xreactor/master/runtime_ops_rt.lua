@@ -249,7 +249,13 @@ function M.check_timeouts(runtime)
     if should_mark_down then
       if node.status ~= runtime.libs.constants.status_levels.OFFLINE then runtime.log("Node offline: " .. tostring(node.id)) end
       if not node.down_since then node.down_since = now end
-      node.status = runtime.libs.health.status.DOWN
+      -- node.status uses constants.status_levels, not health.status (which
+      -- is what node.health.status below uses) -- setting it to
+      -- health.status.DOWN ("DOWN") previously meant the OFFLINE checks in
+      -- rt_sync.lua (evaluate_rt_node()/mode_sync_action()) and
+      -- startup_sequencer.lua never matched, so a comms-down RT node could
+      -- still be treated as controllable/assignable by the sequencer.
+      node.status = runtime.libs.constants.status_levels.OFFLINE
       node.offline = true; node.stale = true; node.recovering = false; node.managed = false
       node.health = node.health or runtime.libs.health.new({})
       node.health.status = runtime.libs.health.status.DOWN
@@ -269,7 +275,7 @@ function M.check_timeouts(runtime)
   end
   for _, node_id in ipairs(stale_nodes) do
     local node = runtime.state.nodes[node_id]
-    if node and node.status == runtime.libs.health.status.DOWN then
+    if node and node.status == runtime.libs.constants.status_levels.OFFLINE then
       runtime.log(("Node stale purged from managed set: %s"):format(tostring(node_id)), "INFO")
       node.managed = false
       node.active = false

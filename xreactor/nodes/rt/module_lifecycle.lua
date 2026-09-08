@@ -31,6 +31,11 @@ function M.update_module_limits(ctx, module)
   local limits = {}
   if module.type == "turbine" then
     local _, rpm_value = safe_wrapped_call(module.peripheral, "getRotorSpeed")
+    -- Cached for turbine_control.lua's updateControl() (runs right after
+    -- this, same tick) to reuse instead of calling getRotorSpeed a second
+    -- time for the same turbine -- see turbine_control.lua's
+    -- cached_rotor_rpm().
+    module.last_rotor_rpm = type(rpm_value) == "number" and rpm_value or nil
     local rpm = type(rpm_value) == "number" and rpm_value or 0
     local target_rpm = ctx.get_target_rpm()
     if target_rpm > 0 and rpm > 0 and rpm < target_rpm * 0.7 then
@@ -480,12 +485,46 @@ function M.update_module_states(ctx)
               tostring(temp_diag.condition)
             ))
             ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE")
+
+            -- Eskalation: mehrfaches Kurzzeit-Antriggern (z.B. weil der
+            -- Wassernachfluss nicht mit dem Verbrauch mithaelt) soll nicht
+            -- ewig oszillieren duerfen. Wenn ein Reaktor innerhalb eines
+            -- Zeitfensters mehrfach wegen Kuehlmittel in SAFE geht, wird der
+            -- automatische SAFE-Exit fuer diesen Reaktor gesperrt -- ein
+            -- Bediener muss per SET_MODE=MASTER manuell bestaetigen, dass
+            -- wirklich wieder ausreichend Kuehlmittel vorhanden ist.
+            local esc_count  = tonumber(ctx.config.safety.coolant_trip_escalation_count) or 4
+            local esc_window_ms = (tonumber(ctx.config.safety.coolant_trip_escalation_window_s) or 600) * 1000
+            if not module.coolant_trip_window_start
+                or (now - module.coolant_trip_window_start) > esc_window_ms then
+              module.coolant_trip_window_start = now
+              module.coolant_trip_count = 0
+            end
+            module.coolant_trip_count = (module.coolant_trip_count or 0) + 1
+            if module.coolant_trip_count >= esc_count and not module.coolant_trip_locked then
+              module.coolant_trip_locked = true
+              ctx.log("ERROR", ("Safety escalation: module=%s coolant getrippt %d mal innerhalb %ds -> SAFE-Auto-Exit gesperrt, manueller Reset (SET_MODE=MASTER) erforderlich"):format(
+                tostring(module.id), module.coolant_trip_count, math.floor(esc_window_ms / 1000)))
+            end
+
             ctx.setState(ctx.STATE.SAFE, "SAFETY_COOLANT_LOW")
           end
           if ctx.node_state_machine:state() ~= ctx.constants.node_states.EMERGENCY then
             ctx.node_state_machine:transition(ctx.constants.node_states.EMERGENCY)
           end
         end
+      elseif module.state == "ERROR" and ctx.current_state() ~= ctx.STATE.SAFE then
+        -- Weder TEMP- noch WATER-Limit ist mehr aktiv, und RT hat SAFE
+        -- bereits verlassen (ueber reactor_control.lua's eigene Exit-Logik,
+        -- inkl. Coolant-Trip-Eskalation) -- die zuvor sicherheitsbedingt
+        -- ERROR gesetzte Modul-Statusanzeige war sonst fuer immer stehen
+        -- geblieben, obwohl der Reaktor laengst wieder normal geregelt
+        -- wird (reactor_control.lua/turbine_control.lua pruefen
+        -- module.state ueberhaupt nicht, das Feld dient nur der Status-
+        -- Anzeige/dem Reporting an MASTER). Wie ein frischer Start durch
+        -- die STABLE-Debounce laufen lassen, statt direkt auf RUNNING zu
+        -- springen.
+        M.mark_stable(ctx, module, now)
       end
     end
     if module.state == "STABLE" and module.stable_since and (now - module.stable_since > 3000) then

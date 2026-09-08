@@ -7,7 +7,7 @@
 
 local M = {}
 
-M.CONFIG_PATH = "/xreactor/config/reactor_names.lua"
+M.CONFIG_PATH = "/xreactor_config/reactor_names.lua"
 M.MAX_LABEL_LENGTH = 32
 M.MAX_INPUT_ATTEMPTS = 20
 M.MAX_RESTORE_ATTEMPTS = 10
@@ -205,11 +205,12 @@ local function identify_next(peripheral_api, reactors, output, input)
 
   for _ = 1, M.MAX_INPUT_ATTEMPTS do
     if readable > 0 then
-      output("Genau EINEN noch unbenannten Reaktor manuell AN/AUS schalten, dann ENTER druecken.")
+      output("Genau EINEN noch unbenannten Reaktor manuell AN/AUS schalten, dann ENTER druecken")
+      output("(oder direkt die Nummer aus der Liste oben eingeben und ENTER druecken).")
     else
       output("Aktivzustand nicht lesbar. Reaktor anhand der Liste waehlen [1-" .. #reactors .. "].")
     end
-    output("Alternativ die Nummer eingeben; Q bricht ohne Speichern ab.")
+    output("'Q' bricht die gesamte Installation ohne Speichern ab.")
     local answer = trim(input())
     if answer:upper() == "Q" or answer:upper() == "ABBRUCH" then
       return nil, "operator_aborted"
@@ -257,12 +258,25 @@ local function identify_next(peripheral_api, reactors, output, input)
   return nil, "reactor_identification_attempts_exhausted"
 end
 
+-- "input(default)" pre-fills the CC:Tweaked edit line with the suggested
+-- name (read()'s 4th parameter) so the operator can tweak it in place --
+-- arrow/backspace like any other line -- instead of only being able to
+-- accept it blindly (Enter) or retype the whole name from scratch.
+-- 'Z' discards the CURRENT reactor's identification (nothing has been
+-- committed to aliases/used yet at this point) and lets the caller redo
+-- identify_next() for it, so a wrongly-identified reactor can be corrected
+-- without aborting the entire naming step.
 local function ask_label(peripheral_name, default, used, output, input)
   for _ = 1, M.MAX_INPUT_ATTEMPTS do
-    output(string.format("  Name fuer %s [%s]:", peripheral_name, default))
-    local label = trim(input())
+    output(string.format(
+      "  Name fuer %s (Vorschlag '%s' ist editierbar, Enter uebernimmt; 'Z'=diesen Reaktor neu erkennen, 'Q'=abbrechen):",
+      peripheral_name, default))
+    local label = trim(input(default))
     if label:upper() == "Q" or label:upper() == "ABBRUCH" then
       return nil, "operator_aborted"
+    end
+    if label:upper() == "Z" then
+      return nil, "operator_redo"
     end
     if label == "" then label = default end
     local key = label:lower()
@@ -323,7 +337,11 @@ function M.run(opts)
   if #reactors == 0 then return true, "no_reactors_detected" end
 
   local output = opts.output or function(message) print(message) end
-  local input = opts.input or function() return read() end
+  -- "default" (used only by ask_label()) is forwarded to CC:Tweaked's
+  -- read()'s 4th parameter, which pre-fills the edit line with that text
+  -- instead of just showing it as a bracketed hint the operator has to
+  -- either accept blindly or retype from scratch.
+  local input = opts.input or function(default) return read and read(nil, nil, nil, default) or "" end
   output("")
   output("=== Reaktoren benennen ===")
   output("Die Namen werden einmal gespeichert und im FUEL-Routen-Editor angezeigt.")
@@ -337,10 +355,19 @@ function M.run(opts)
     assigned = assigned + 1
     local label, label_err = ask_label(
       peripheral_name, "Reaktor " .. tostring(assigned), used, output, input)
-    if not label then return false, label_err end
-    aliases[peripheral_name] = label
-    for index, name in ipairs(remaining) do
-      if name == peripheral_name then table.remove(remaining, index); break end
+    if not label then
+      if label_err ~= "operator_redo" then return false, label_err end
+      -- Nothing was committed for this reactor (identify_next() only
+      -- returns a peripheral name, ask_label() only wrote into a LOCAL
+      -- attempt) -- undo just the "Reaktor N" default counter and loop
+      -- back to re-identify the SAME still-remaining reactor.
+      assigned = assigned - 1
+      output("  Erkennung fuer " .. peripheral_name .. " wird wiederholt.")
+    else
+      aliases[peripheral_name] = label
+      for index, name in ipairs(remaining) do
+        if name == peripheral_name then table.remove(remaining, index); break end
+      end
     end
   end
 

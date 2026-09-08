@@ -1,52 +1,70 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-08-11 | beta-v545 (INSTABIL)**
+**Stand: 2026-09-08 | beta-v633 | manifest-v633**
 
----
+## Aktueller Zustand: stabil, alles gemergt
 
-## ⚠️ KRITISCH — Aktueller Zustand
+Kein offener PR, keine offene Issue. `beta` ist der aktive Entwicklungszweig;
+`main` bleibt unangetastet (stabile Releases, nie direkt bearbeiten).
 
-**beta ist aktuell INSTABIL.** Durch Agent-Audit-PRs (#503-#513) sind mehrere Kernfunktionen kaputt gegangen:
+## Architektur-Grundlagen (weiterhin gültig)
 
-- **ui_router.lua Touch-Verarbeitung kaputt** — Seitenwechsel auf allen Nodes funktioniert nicht
-- **Master erkennt Nodes nicht** / Nodes gehen ständig offline
-- **Installer zweiter Durchlauf** schlägt fehl (Disk-Space für Config-Backup)
+- Config (`role.lua`, `node_id.txt`, `reactor_names.lua`, `*_routes.lua`,
+  Registry-Dateien) liegt unter `/xreactor_config/` — außerhalb des Baums,
+  den der Installer bei jeder (Re-)Installation komplett löscht und neu
+  aufbaut. Config wird dadurch nie gelöscht.
+- FUEL/WATER/REPROCESSING/RT/VALVE laufen seit PR #543/#544 auf einem
+  geteilten Event-Loop (`nodes/support/runtime.lua`'s `run_fast_loop()` +
+  `run_slow_loop()`, via `parallel.waitForAny()`): sicherheits-/UI-kritische
+  Arbeit (Touch, Comms, Aktor-Ticks) im fast-Loop, langsame Peripherie-Arbeit
+  (Discovery, ME-Bridge-Reads, Telemetry) im slow-Loop — verhindert, dass
+  eine langsame Peripherie-Abfrage die Touch-UI einfriert. MASTER/ENERGY/
+  LOG_COLLECTOR nutzen weiterhin das ältere, ungeteilte `run_event_loop()`.
+- `xreactor/release.lua`'s `commit_sha` bleibt IMMER `"beta"` (nicht der
+  echte Git-SHA) — `scripts/package_release.py --sync` setzt ihn
+  versehentlich auf den echten SHA; nach jedem `--sync`-Lauf manuell
+  zurück auf `"beta"` prüfen (siehe `tests/release_metadata_consistency_test.lua`).
+- `scripts/package_release.py --sync` erzeugt zusätzlich ein untracked
+  `dist/xreactor-release.zip` — nach dem Lauf entfernen (`rm -rf dist`).
+- Manifest und `release.lua` vor jedem Commit manuell resynchronisieren
+  (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
+  aktualisiert aber nichts automatisch.
 
-## Stabiler Rollback-Punkt
+## FUEL-Logistik (Stand PR #547–#550)
 
-```
-Branch: beckup-vor-audit
-SHA:    fd26894cd744f93cf66d333de7e5bd44ec24c2be
-Stand:  2026-08-09 20:15 (beta-v512)
-```
+- Ein gemeinsamer `export_chest` für alle Reaktoren; welcher Reaktor
+  tatsächlich beliefert wird, entscheidet ausschließlich, welcher
+  VALVE-Pfad geöffnet ist (`redstone_router.lua`'s `begin_transaction()`,
+  blockiert immer erst alle anderen Pfade). Die Export-Kiste selbst
+  braucht kein eigenes Ventil.
+- `resupply_cooldown_s` (Default 30s) verhindert, dass FUEL bei jedem
+  ~5s-Zyklus erneut nachlegt, solange der Reaktor eine vorige Lieferung
+  noch nicht verbraucht/gemeldet hat (Feldbericht: Fuel staute sich sonst
+  vor dem Reaktor).
+- `logistics.enabled` ist ein bewusster Sicherheits-Default (`false`),
+  nie automatisch gesetzt — Touch-Button auf der Router-Seite schaltet ihn um.
+- **Hop-Timing** (PR #550, optional): VALVE-Nodes mit lokal verkabelter
+  Kreuzungskiste (`config.hop_chest`, `nil` = deaktiviert) melden passiv
+  deren Inhalt über den bestehenden Funkkanal. `nodes/fuel/hop_timing.lua`
+  lernt daraus reale Transitzeiten pro Streckenabschnitt und macht
+  `valve_open_ms` distanzabhängig statt eines festen globalen Werts —
+  ohne gelernte Daten bleibt der Timeout exakt der konfigurierte Default,
+  unabhängig von der Pfadlänge. Ohne konfigurierte `hop_chest` ändert sich
+  am Verhalten nichts.
 
-**Nächste Session:** beta auf `beckup-vor-audit` zurückrollen, dann sauber neu aufbauen.
+## VALVE-Node (Stand PR #551)
 
----
+Optionale lokale 51×19-Terminal-UI am Ventil-Computer selbst
+(`nodes/valve/local_ui.lua`): zeigt Status, Master-Verbindung, Pairing,
+Hop-Reporter-Status. Genau eine Aktion — SAFE BLOCKIEREN (erzwingt
+`apply_valve(true, true)`) — kein lokales Öffnen möglich, das bleibt
+exklusiv dem FUEL/VALVE-Netzwerkkommando vorbehalten.
 
-## Was noch funktioniert (vor Agent-PRs)
+## FUEL-UI (Stand PR #548)
 
-- Installer: Journal-Verify-Fix ✅, SHA-Rate-Limit-Fix ✅, Config-Backup WARN statt Abbruch ✅
-- `network_auth.lua` als Repo-Datei (`xreactor/config/network_auth.lua`) ✅
-- FUEL Monitor Skala 0.5 ✅
-
-## Node-Übersicht
-
-| Computer | Rolle | Status |
-|---|---|---|
-| 53 | MASTER | instabil (Node-Erkennung) |
-| 54,56,57,58 | ENERGY | läuft |
-| 62 | LOG | läuft |
-| 64 | FUEL | UI läuft, kein Seitenwechsel |
-| 52+ | RT | kein Seitenwechsel |
-| 70,74 | VALVE | gelegentliche Aussetzer |
-
-## Wichtige Regeln
-
-- **NIEMALS** Dateien manuell per curl/Server-Konsole anlegen — immer über den Installer
-- Manuell angelegte Dateien → root-Ownership → Berechtigungsprobleme
-- Installer-Update: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer`
-- Branches: `main` (stabil), `beta` (aktuell instabil), `beckup-vor-audit` (stabiler Rollback)
+Fest auf 82×40 (8×6 Advanced Monitor, TextScale 1.0) umgestellt, keine
+responsive/Legacy-Variante mehr — bei falscher Monitorgröße erscheint ein
+Fehlerbildschirm statt eines UI-Fallbacks.
 
 ## ⛔ Nicht nochmal einbauen — gescheiterte Ansätze
 
@@ -71,11 +89,36 @@ Stand:  2026-08-09 20:15 (beta-v512)
 - Fix: Nur bei echtem Monitor-/Seitenwechsel nil setzen, nie vorher
 
 ### Agent-Audit-PRs blind mergen
-- PRs #503-#513 wurden ohne ausreichende Verifikation gemergt
-- Viele PRs haben Abhängigkeiten auf nicht-existente Funktionen eingebaut
-- Fix: Jeden PR einzeln auf einem Test-Computer verifizieren bevor gemergt wird
+- PRs #503-#513 (August 2026) wurden ohne ausreichende Verifikation gemergt,
+  viele hatten Abhängigkeiten auf nicht-existente Funktionen
+- Fix: Jeden PR einzeln verifizieren (Syntax → Manifest-Resync → volle
+  Testsuite → alle `tests/*_test.py`) bevor gemergt wird — seitdem
+  Standardablauf für jeden PR in diesem Repo
+
+## Wichtige Regeln
+
+- **NIEMALS** Dateien manuell per curl/Server-Konsole anlegen — immer über den Installer
+- Manuell angelegte Dateien → root-Ownership → Berechtigungsprobleme
+- Installer-Update: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer`
+- Vor dem Mergen von Agent-generierten PRs: einzeln verifizieren (siehe oben)
+
+## Backlog — mögliches zukünftiges Feature (nicht priorisiert)
+
+- **Unabhängiger "Wächter"-Mechanismus für RT-Node-Ausfall:** Stürzt
+  ausgerechnet der RT-Computer selbst ab (Server läuft normal weiter), läuft
+  der Reaktor bis zum automatischen Reboot unbeaufsichtigt auf dem letzten
+  Stand weiter. Bewusst zurückgestellt: Risiko eingeschätzt als unkritisch.
+  Falls gewünscht: ein zweiter, unabhängiger Node könnte bei
+  Kommunikationsausfall eines RT-Nodes proaktiv eingreifen (analog zu
+  VALVE's `tick_failsafe`).
+- **Positionsabhängige Stau-Diagnose:** mit den HOP_SCAN-Daten aus PR #550
+  ließe sich künftig auch erkennen, WO genau eine Lieferung hängt (nicht
+  nur, dass der Timeout überschritten wurde) — siehe Diskussion vom
+  2026-09-07, noch nicht umgesetzt.
 
 ## Doku-Index
+- `docs/README.md` — vollständiger Dokumentationsindex
 - `docs/CI_MAINTENANCE.md` — CI-Bugs und Fixes
 - `docs/SESSION_HANDOFF.md` — dieser Handoff
-- `docs/REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md` — Safety-Audit August 2026
+- `docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md` — historischer
+  Gesamt-Audit, wird von ~30 Testdateien referenziert

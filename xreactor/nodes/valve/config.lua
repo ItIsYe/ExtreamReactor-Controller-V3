@@ -6,10 +6,14 @@
 -- nodes/valve/main.lua, Kommando SET_VALVE). redstone_router.lua auf der
 -- FUEL-Seite adressiert diesen Node ueber seine node_id.
 --
--- Steuert ausschliesslich einen Mekanism Logistical Sorter (setAutoMode()),
--- kein Redstone-Aktor/"side"-Feld. sorter_name wird bei nil automatisch per
--- Methodensignatur erkannt, wie wireless_modem -- nur bei mehreren Sortern
--- am selben Computer explizit setzen.
+-- Steuert bevorzugt einen Mekanism Logistical Sorter (setAutoMode()).
+-- sorter_name wird bei nil automatisch per Methodensignatur erkannt, wie
+-- wireless_modem -- nur bei mehreren Sortern am selben Computer explizit
+-- setzen. Wird KEIN Sorter gefunden, ist redstone_side (top/bottom/left/
+-- right/front/back) ein optionaler Redstone-Fallback-Aktor -- sobald
+-- irgendein Sorter ansteuerbar ist, haelt der Controller ohnehin JEDE
+-- Redstone-Seite aktiv auf false (siehe nodes/valve/controller.lua), damit
+-- ein Redstone-Signal die per API gesetzte Ejection nie uebersteuern kann.
 --
 -- Fest eingebauter 1x1-Statusmonitor (gruen=offen, rot=blockiert), wird
 -- automatisch erkannt -- kein Config-Feld noetig, anders als das geteilte
@@ -21,6 +25,18 @@ return {
   reset_log_on_start = true,
   wireless_modem  = nil,   -- nil = automatisch erkennen
   sorter_name     = nil,   -- nil = automatisch erkennen
+  redstone_side   = nil,   -- nil = kein Redstone-Fallback (nur bei fehlendem Sorter relevant)
+  -- hop_chest: optionaler Peripherie-Name einer Kreuzungskiste, die dieser
+  -- VALVE-Node per eigenem Wired Modem sehen kann (siehe nodes/valve/hop_
+  -- reporter.lua) -- rein lesend, dient nur der Fuellstandsmeldung an FUEL
+  -- fuer distanzabhaengige Liefer-Timeouts (nodes/fuel/hop_timing.lua).
+  -- nil (Default) = keine Kiste konfiguriert, kein HOP_SCAN wird gesendet,
+  -- keine Verhaltensaenderung. MUSS explizit gesetzt werden -- keine
+  -- Auto-Erkennung, um nie versehentlich die falsche Kiste zu erfassen.
+  hop_chest       = nil,
+  -- hop_scan_interval: Sekunden zwischen zwei Kisten-Scans/-Meldungen
+  -- (nur relevant wenn hop_chest gesetzt ist).
+  hop_scan_interval = 4,
   -- Fail-Safe-Grundzustand beim Boot/bei Verbindungsverlust: Ventil
   -- geschlossen (high=true -> Sorter-Auto-Modus AUS, siehe main.lua
   -- write_actuator()).

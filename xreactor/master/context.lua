@@ -59,7 +59,7 @@ function M.normalize_config(config)
   table.sort(config.alert_mute_durations)
   config.alert_log_muted_events = config.alert_log_muted_events == nil and true or config.alert_log_muted_events
   config.alert_state_path = type(config.alert_state_path) == "string"
-    and config.alert_state_path or "/xreactor/config/alerts_state.lua"
+    and config.alert_state_path or "/xreactor_config/alerts_state.lua"
   return config
 end
 
@@ -84,7 +84,7 @@ function M.new_runtime(opts)
       trends = (opts and opts.trends) or nil,
     },
     tuning = {
-      layout_config_path = (opts and opts.layout_config_path) or "/xreactor/config/master_ui_layout.json",
+      layout_config_path = (opts and opts.layout_config_path) or "/xreactor_config/master_ui_layout.json",
       node_offline_purge_after_ms = (opts and opts.node_offline_purge_after_ms) or 120000,
       rt_sync_batch_window_ms = (opts and opts.rt_sync_batch_window_ms) or 250,
       rt_shutdown_candidate_stability_ms = (opts and opts.rt_shutdown_candidate_stability_ms) or 1500,
