@@ -34,12 +34,15 @@ Alle `uses:` Einträge in `.github/workflows/` auf aktuelle Commit-SHAs prüfen:
 
 ## Skip-Budget Grenzwerte
 
+Stand 2026-09-08 (`tests/known_failing_lua_tests.txt` ist aktuell leer —
+keine Tests uebersprungen):
+
 | Kategorie     | Aktuell | Ziel |
 |---------------|---------|------|
 | STALE_STRUCTURE | 0     | 0    |
-| STALE_API       | 13    | ≤10  |
-| NEEDS_MOCK      | 12    | ≤10  |
-| Budget gesamt   | /48   | /40  |
+| STALE_API       | 0     | ≤10  |
+| NEEDS_MOCK      | 0     | ≤10  |
+| Budget gesamt   | 0/37  | ≤40  |
 
 ## Workflow-Übersicht
 
