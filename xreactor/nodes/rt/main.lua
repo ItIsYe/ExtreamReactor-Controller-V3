@@ -164,6 +164,17 @@ local devices = {
   registry_load_error = nil, proto_mismatch = false,
   binding_signature = nil, last_scan_ts = nil, discovery_log_signature = nil
 }
+-- Separate from `devices`: devices.reactors/.turbines hold the registry
+-- ENTRY LIST ({id,name,kind,bound,...}, iterated with ipairs by
+-- monitor_ui.lua, state_handlers.lua and discovery_runtime.build_modules()),
+-- while peripheral_cache.reactors/.turbines hold the wrapped CC:Tweaked
+-- peripheral objects keyed by NAME (looked up by reactor_control.lua/
+-- turbine_control.lua/module_lifecycle.lua). These must stay two distinct
+-- tables -- aliasing them let discovery_runtime.M.cache()'s peripheral-map
+-- write silently overwrite devices.reactors/.turbines with a name-keyed map,
+-- so every ipairs() consumer above saw zero entries and modules_registry
+-- got wiped empty on every binding change.
+local peripheral_cache = { reactors = {}, turbines = {} }
 local master_seen_ts = nil
 local master_alerts  = {}
 
@@ -276,7 +287,7 @@ local function build_ctx()
     reactor_rails_state       = state.reactor_rails_state,
     reactor_steam_guard_state = state.reactor_steam_guard_state,
     -- Runtime-State (von runtime_ctx)
-    peripherals               = devices,
+    peripherals               = peripheral_cache,
     -- Read-only reference so reactor_control.lua can reuse module_lifecycle's
     -- already-fresh-this-tick module.coolant_safety_diag instead of calling
     -- ctx.fluid.read_coolant_sample() a second time per reactor per tick --
@@ -388,7 +399,7 @@ local function build_discovery_context()
     config = config,
     configured_reactors = runtime_config.configured_reactors,
     configured_turbines = runtime_config.configured_turbines,
-    peripherals = devices,
+    peripherals = peripheral_cache,
     utils = utils,
     capability_cache = ctx and ctx.capability_cache or {},
     build_capabilities = function(name)
@@ -418,7 +429,7 @@ local function build_discovery_context()
       end
     end,
     refresh_module_peripherals = function()
-      discovery_runtime.refresh_module_peripherals(modules_registry, devices, function(kind, name)
+      discovery_runtime.refresh_module_peripherals(modules_registry, peripheral_cache, function(kind, name)
         return turbine_control.get_device_caps(ctx, kind, name)
       end)
     end,
@@ -717,7 +728,7 @@ local function configure_lifecycle_context()
       constants         = constants,
       comms             = comms,
       modules           = modules_registry,
-      peripherals       = devices,
+      peripherals       = peripheral_cache,
       configured_reactors = runtime_config.configured_reactors,
       configured_turbines = runtime_config.configured_turbines,
       binding           = require("nodes.rt.binding"),
