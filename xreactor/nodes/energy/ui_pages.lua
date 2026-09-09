@@ -26,7 +26,8 @@ end
 local function status_from_percent(pct, degraded)
   if degraded then return "WARNING" end
   if pct == nil then return "muted" end
-  if pct < 0.15 then return "EMERGENCY" end
+  -- A low/not-full storage level is expected operating behavior, not a
+  -- fault: cap this at WARNING, never EMERGENCY (red/"Störung").
   if pct < 0.30 then return "WARNING" end
   if pct > 0.95 then return "LIMITED" end
   return "OK"
@@ -72,7 +73,8 @@ function M.new(opts)
     local pct = tonumber(total.percent)
     if model.degraded then return "STORAGE WARNING", "WARNING" end
     if pct == nil then return "STORAGE UNKNOWN", "muted" end
-    if pct < 0.15 then return "STORAGE CRITICAL", "EMERGENCY" end
+    -- A low/not-full storage level is expected operating behavior, not a
+    -- fault: capped at WARNING, never EMERGENCY ("Störung").
     if pct < 0.30 then return "STORAGE LOW", "WARNING" end
     if pct > 0.95 then return "STORAGE HIGH", "LIMITED" end
     return "STORAGE NORMAL", "OK"
@@ -313,7 +315,11 @@ function M.new(opts)
     -- thresholds (defaults and the optional operator override file) are
     -- authored on a 0-100 scale, so convert once before comparing.
     local pct = ratio * 100
-    local emergency_below, warning_below, limited_above = 15, 30, 95
+    -- A low/not-full storage level is expected operating behavior, not a
+    -- fault: emergency_below defaults to 0 (never triggers, i.e. capped at
+    -- WARNING) unless an operator explicitly opts back in via the override
+    -- file below.
+    local emergency_below, warning_below, limited_above = 0, 30, 95
     local cfg_path = "/xreactor_config/ampel_thresholds.lua"
     if fs and fs.exists and fs.exists(cfg_path) then
       local ok_read, cfg = pcall(function()

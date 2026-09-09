@@ -315,11 +315,15 @@ function M:handle_input(monitor_name, x, y)
 
   local view_key = self.sessions:resolve_view_key(session)
 
-  -- AUX-Monitor (nicht locked) → Touch auf [<]/[>]-Buttons wechselt View
+  -- AUX-Monitor (nicht locked) → Touch auf [<]/[>]-Buttons wechselt View.
+  -- Jeder andere Touch faellt weiter unten in die normale view.hit_test()-
+  -- Dispatch-Logik durch -- sonst waeren die interaktiven Buttons einer
+  -- AUX-View (z.B. ACK/MUTE in alerts.lua) permanent tot, da AUX-Monitore
+  -- laut monitor_sessions.resolve_locked() nie "locked" werden.
   if not session.locked then
     -- Nur Touch auf die sichtbaren [<]/[>]-Buttons (Koordinaten aus
     -- self.aux_nav_hitboxes, gesetzt beim letzten Render) loest einen
-    -- Wechsel aus, nicht jeder Touch auf dem Bildschirm.
+    -- View-Wechsel aus.
     local hitboxes = self.aux_nav_hitboxes and self.aux_nav_hitboxes[session.name]
     local direction = nil
     if hitboxes then
@@ -345,20 +349,20 @@ function M:handle_input(monitor_name, x, y)
         tostring(session.name), tostring(x), tostring(y), tostring(session.locked), hb_desc, tostring(direction)
       ), "INFO")
     end
-    if not direction then
-      self.last_input = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = nil, dispatched = false, handled = false, outside_nav_buttons = true }
+    if direction then
+      local new_view = self.sessions.cycle_aux_view(self.sessions, session, direction)
+      local payload = {
+        monitor = session.name, x = x, y = y,
+        view = view_key, new_view = new_view,
+        input = input_kind, hit = nil, dispatched = true, handled = true,
+        aux_cycle = true
+      }
+      self.last_input = payload
+      self.sessions:note_input(session, payload)
       return
     end
-    local new_view = self.sessions.cycle_aux_view(self.sessions, session, direction)
-    local payload = {
-      monitor = session.name, x = x, y = y,
-      view = view_key, new_view = new_view,
-      input = input_kind, hit = nil, dispatched = true, handled = true,
-      aux_cycle = true
-    }
-    self.last_input = payload
-    self.sessions:note_input(session, payload)
-    return
+    -- Kein Nav-Button getroffen: nicht zurueckkehren, sondern den Touch
+    -- unten wie bei einem locked Monitor an view.hit_test() weiterreichen.
   end
 
   local view = self.views[view_key]

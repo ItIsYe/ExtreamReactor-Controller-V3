@@ -410,7 +410,9 @@ function rules:evaluate(context)
     local active = pct <= warn
     local key = "ENERGY_LOW"
     emit(key, active, base_opts, function()
-      local severity = pct <= crit and "CRITICAL" or "WARN"
+      -- A low/not-full total energy level is expected operating behavior,
+      -- not a fault: capped at WARN, never CRITICAL ("Störung").
+      local severity = "WARN"
       return {
         code = "ENERGY_LOW",
         severity = severity,

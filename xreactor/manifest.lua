@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 635,
-  manifest_id = "manifest-v635",
+  manifest_version = 638,
+  manifest_id = "manifest-v638",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "417c4b92", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "f6c083b7", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -68,7 +68,7 @@ return {
     { path = "master/config_edits.lua", size_bytes = 8693, hash = "f6e43664", required_for={"MASTER"} },
     { path = "master/context.lua", size_bytes = 5370, hash = "3edeec32", required_for={"MASTER"} },
     { path = "master/loop.lua", size_bytes = 4318, hash = "2b30d64b", required_for={"MASTER"} },
-    { path = "core/alert_rules.lua", size_bytes = 19847, hash = "a1322c5a", required_for={"MASTER"} },
+    { path = "core/alert_rules.lua", size_bytes = 19959, hash = "a56229de", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 6441, hash = "1df55b57", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 4106, hash = "c43799c5", required_for={"MASTER"} },
     { path = "master/fuel_relay.lua", size_bytes = 3413, hash = "0b9f8c37", required_for={"MASTER"} },
@@ -88,7 +88,7 @@ return {
     { path = "master/ui/alarms.lua", size_bytes = 7730, hash = "50e520ed", required_for={"MASTER"} },
     { path = "master/ui/alerts.lua", size_bytes = 28137, hash = "4bf57a50", required_for={"MASTER"} },
     { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"} },
-    { path = "master/ui/multiview.lua", size_bytes = 16482, hash = "7e1c435e", required_for={"MASTER"} },
+    { path = "master/ui/multiview.lua", size_bytes = 16713, hash = "8c28d0a5", required_for={"MASTER"} },
     { path = "master/ui/overview.lua", size_bytes = 13792, hash = "33054a4f", required_for={"MASTER"} },
     { path = "master/ui/resources.lua", size_bytes = 6869, hash = "a28f683a", required_for={"MASTER"} },
     { path = "master/ui/rt_dashboard.lua", size_bytes = 13651, hash = "4c1330dc", required_for={"MASTER"} },
@@ -164,7 +164,7 @@ return {
     { path = "nodes/energy/status_payload.lua", size_bytes = 9098, hash = "f01b2d8b", required_for={"ENERGY"} },
     { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 6118, hash = "04b90706", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_model.lua", size_bytes = 4152, hash = "e44f676b", required_for={"ENERGY"} },
-    { path = "nodes/energy/ui_pages.lua", size_bytes = 19332, hash = "e7bfd612", required_for={"ENERGY"} },
+    { path = "nodes/energy/ui_pages.lua", size_bytes = 19742, hash = "a0795dcf", required_for={"ENERGY"} },
     },
     water = {
     { path = "nodes/water/config.lua", size_bytes = 3884, hash = "1804d0e7", required_for={"WATER"} },
