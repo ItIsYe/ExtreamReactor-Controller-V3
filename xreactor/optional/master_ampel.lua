@@ -40,31 +40,51 @@ local COLORS = {
 
 local cache = { name = nil, last_color = nil, resolved = false, ampel_name = nil, next_probe = 0 }
 
-local function find_ampel_monitor()
+-- Fix: anders als optional/ampel.lua (ein Node, EIN bekannter Hauptmonitor,
+-- per Name ausgeschlossen) hatte diese MASTER-Variante gar keinen
+-- Ausschluss -- sie hat bei JEDER Sondierung (alle ~60s, solange keine
+-- Ampel gefunden ist) ALLE MASTER-eigenen Monitore durchprobiert,
+-- einschliesslich der 3 primaeren Displays (Overview/RT/Energy) und aller
+-- AUX-Monitore: TextScale kurzzeitig auf 1 gesetzt, Groesse geprueft,
+-- wieder zurueckgesetzt -- UND fuer jeden Nicht-Treffer eine Diagnosezeile
+-- gedruckt. Das erzeugte Dauerspam ("kein Treffer" fuer Monitore, die nie
+-- eine Ampel sein sollten) und kurzzeitiges Skalen-Flackern auf den echten
+-- Anzeigen. known_names (aus M.update(), von view_manager.sessions) schliesst
+-- alle bereits als MASTER-Monitor gebundenen Peripherals aus, bevor
+-- ueberhaupt ihre Skala angefasst wird. seen_non_match droesselt die
+-- Diagnosezeile zusaetzlich auf einmal pro (noch unbekanntem) Kandidaten,
+-- statt bei jeder Sondierung erneut zu drucken.
+local seen_non_match = {}
+
+local function find_ampel_monitor(known_names)
   if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
   local ok, names = pcall(peripheral.getNames)
   if not ok or type(names) ~= "table" then return nil end
   for _, name in ipairs(names) do
-    local ok_t, ptype = pcall(peripheral.getType, name)
-    if ok_t and tostring(ptype):find("monitor", 1, true) then
-      local ok_w, mon = pcall(peripheral.wrap, name)
-      if ok_w and mon then
-        local ok_orig, orig_scale = pcall(mon.getTextScale)
-        -- Geometrie bei Skala 1: einzelner Block = 7x5 Zeichen, 3x3-Cluster =
-        -- 29x19 -- daraus breite(N)=11N-4, hoehe(M)=7M-2. Fuer 1 breit x 3
-        -- hoch: w=7 (exakt), h=19 (Toleranz 17-21 fuer Bauabweichungen).
-        local ok_scale = pcall(mon.setTextScale, 1)
-        local ok_s, w, h = pcall(mon.getSize)
-        local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"
-          and w == 7 and h >= 17 and h <= 21
-        if is_ampel_shape then
-          return name, mon
-        end
-        if ok_s and type(w) == "number" then
-          pcall(print, "[MASTER_AMPEL] Kandidat " .. tostring(name) .. " bei Skala 1: w=" .. tostring(w) .. " h=" .. tostring(h) .. " (erwartet 7x17-21, kein Treffer)")
-        end
-        if ok_scale and ok_orig and type(orig_scale) == "number" then
-          pcall(mon.setTextScale, orig_scale)
+    if not (known_names and known_names[name]) then
+      local ok_t, ptype = pcall(peripheral.getType, name)
+      if ok_t and tostring(ptype):find("monitor", 1, true) then
+        local ok_w, mon = pcall(peripheral.wrap, name)
+        if ok_w and mon then
+          local ok_orig, orig_scale = pcall(mon.getTextScale)
+          -- Geometrie bei Skala 1: einzelner Block = 7x5 Zeichen, 3x3-Cluster =
+          -- 29x19 -- daraus breite(N)=11N-4, hoehe(M)=7M-2. Fuer 1 breit x 3
+          -- hoch: w=7 (exakt), h=19 (Toleranz 17-21 fuer Bauabweichungen).
+          local ok_scale = pcall(mon.setTextScale, 1)
+          local ok_s, w, h = pcall(mon.getSize)
+          local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"
+            and w == 7 and h >= 17 and h <= 21
+          if is_ampel_shape then
+            seen_non_match[name] = nil
+            return name, mon
+          end
+          if ok_s and type(w) == "number" and not seen_non_match[name] then
+            seen_non_match[name] = true
+            pcall(print, "[MASTER_AMPEL] Kandidat " .. tostring(name) .. " bei Skala 1: w=" .. tostring(w) .. " h=" .. tostring(h) .. " (erwartet 7x17-21, kein Treffer)")
+          end
+          if ok_scale and ok_orig and type(orig_scale) == "number" then
+            pcall(mon.setTextScale, orig_scale)
+          end
         end
       end
     end
@@ -125,7 +145,21 @@ function M.update(runtime, constants)
     if not name then
       local now = (os.clock and os.clock()) or 0
       if not cache.resolved or now >= cache.next_probe then
-        name, mon = find_ampel_monitor()
+        -- Alle bereits als MASTER-Monitor gebundenen Peripherals (die 3
+        -- primaeren Displays plus jeder AUX-Monitor, siehe
+        -- master/monitor_sessions.lua) vom Ampel-Scan ausschliessen --
+        -- keiner von ihnen kann jemals die Ampel sein.
+        local known_names = {}
+        local sessions = runtime.refs and runtime.refs.view_manager and runtime.refs.view_manager.sessions
+        if sessions and sessions.get_sessions then
+          local ok_sessions, list = pcall(sessions.get_sessions, sessions)
+          if ok_sessions and type(list) == "table" then
+            for _, session in ipairs(list) do
+              if session and session.name then known_names[session.name] = true end
+            end
+          end
+        end
+        name, mon = find_ampel_monitor(known_names)
         cache.resolved = true
         cache.ampel_name = name
         cache.next_probe = now + 60

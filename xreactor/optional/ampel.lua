@@ -33,7 +33,14 @@ M.COLORS = {
 -- M.new(), damit RT- und ENERGY-Instanzen (falls beide je liefen) sich
 -- nicht gegenseitig beeinflussen.
 function M.new()
-  local self = { cache = { name = nil, last_color = nil, resolved = false, ampel_name = nil, next_probe = 0 } }
+  local self = {
+    cache = { name = nil, last_color = nil, resolved = false, ampel_name = nil, next_probe = 0 },
+    -- Droesselt die Diagnosezeile unten auf einmal pro (noch unbekanntem)
+    -- Kandidaten, statt bei jeder Sondierung (alle 30s, solange keine
+    -- Ampel gefunden ist) erneut zu drucken -- siehe master_ampel.lua fuer
+    -- dieselbe Korrektur samt Begruendung.
+    seen_non_match = {},
+  }
 
   -- Die urspruengliche Skala jedes Kandidaten wird VOR dem Groessen-Probe
   -- gesichert und bei einem Fehlschlag sofort wiederhergestellt -- sonst
@@ -66,13 +73,17 @@ function M.new()
             local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"
               and w == 7 and h >= 17 and h <= 21
             if is_ampel_shape then
+              self.seen_non_match[name] = nil
               return name, mon
             end
             -- Diagnose (nur bei Fehlschlag, siehe M.new()-Cache fuer Rate-
             -- Limit): zeigt beim naechsten Mal die tatsaechlichen Zahlen,
             -- damit eine weitere Anpassung auf echten Daten basiert statt
-            -- auf einer dritten Vermutung.
-            if ok_s and type(w) == "number" then
+            -- auf einer dritten Vermutung. Nur einmal pro Kandidat, nicht
+            -- bei jeder Sondierung erneut -- sonst spammt ein Monitor, der
+            -- nie eine Ampel sein wird, dauerhaft dieselbe Zeile.
+            if ok_s and type(w) == "number" and not self.seen_non_match[name] then
+              self.seen_non_match[name] = true
               pcall(print, "[AMPEL] Kandidat " .. tostring(name) .. " bei Skala 1: w=" .. tostring(w) .. " h=" .. tostring(h) .. " (erwartet 7x17-21, kein Treffer)")
             end
             -- Kein Treffer: Ursprungs-Skala sofort wiederherstellen, statt

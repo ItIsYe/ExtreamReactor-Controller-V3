@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 639,
-  manifest_id = "manifest-v639",
+  manifest_version = 640,
+  manifest_id = "manifest-v640",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "17e5dc30", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "10ecfbde", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -101,7 +101,7 @@ return {
     -- VALVE bewusst nicht in required_for: hat einen eigenen, fest
     -- eingebauten 1x1-Statusmonitor in nodes/valve/main.lua
     -- (render_status_monitor()), unabhaengig von diesem 1x3-Ampel-Modul.
-    { path = "optional/ampel.lua", size_bytes = 5398, hash = "e02e967f", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
+    { path = "optional/ampel.lua", size_bytes = 5997, hash = "57133720", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     -- required_for entspricht den tatsaechlichen
     -- require("optional.speaker_alarm")-Aufrufstellen (alle Node-main.lua
     -- ausser VALVE, plus services/alert_service.lua/MASTER); anders als
@@ -115,7 +115,7 @@ return {
     -- irgendeiner Rolle auftaucht; trotzdem im Manifest gefuehrt, damit
     -- Groesse/Hash bei gezieltem manuellem Download verifizierbar sind.
     { path = "optional/pocket_client.lua", size_bytes = 10477, hash = "bf1a75b4", optional=true, feature="pocket_client", required_for={} },
-    { path = "optional/master_ampel.lua", size_bytes = 5891, hash = "13753910", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 7905, hash = "84d786cc", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 50609, hash = "df77b3fd", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
