@@ -35,7 +35,7 @@ local DEFAULT_CONFIG = {
   reset_log_on_start = true,
   -- Built-in terminal: 1.0 normal layout, 0.5 compact density.
   -- term has no setTextScale(), so this does not change the physical font.
-  ui_scale = 1.0,
+  ui_scale = 0.5,
   wireless_modem = nil,
   sorter_name = nil,
   -- Redstone-Fallback-Seite, NUR verwendet wenn kein Sorter gefunden werden

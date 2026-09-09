@@ -86,7 +86,7 @@ local DEFAULT_CONFIG = {
   status_interval = 5,
   -- FUEL Advanced Monitor: supported values are 1.0 and 0.5.
   -- 0.5 keeps the same logical 82x40 SCADA surface in a centered viewport.
-  ui_scale = 1.0,
+  ui_scale = 0.5,
   channels = { control = constants.channels.CONTROL, status = constants.channels.STATUS },
   comms = {
     ack_timeout_s = 3.0, max_retries = 4, backoff_base_s = 0.6, backoff_cap_s = 6.0,

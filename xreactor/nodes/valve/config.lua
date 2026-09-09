@@ -24,7 +24,7 @@ return {
   debug_logging   = false,
   reset_log_on_start = true,
   -- Built-in 51x19 terminal: 1.0 = normal, 0.5 = compact layout.
-  ui_scale        = 1.0,
+  ui_scale        = 0.5,
   wireless_modem  = nil,   -- nil = automatisch erkennen
   sorter_name     = nil,   -- nil = automatisch erkennen
   redstone_side   = nil,   -- nil = kein Redstone-Fallback (nur bei fehlendem Sorter relevant)
