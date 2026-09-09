@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 643,
-  manifest_id = "manifest-v643",
+  manifest_version = 644,
+  manifest_id = "manifest-v644",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "fd722bef", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "371bbfb9", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -183,8 +183,8 @@ return {
     { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 7855, hash = "53d04318", required_for={"FUEL"} },
     { path = "nodes/fuel/reactor_targets.lua", size_bytes = 1815, hash = "17439bad", required_for={"FUEL"} },
     { path = "nodes/fuel/monitor_ui.lua", size_bytes = 13042, hash = "88f09230", required_for={"FUEL"} },
-    { path = "nodes/fuel/monitor_scada.lua", size_bytes = 17837, hash = "594d601c", required_for={"FUEL"} },
-    { path = "nodes/fuel/half_overview.lua", size_bytes = 8178, hash = "0a4ebc2c", required_for={"FUEL"} },
+    { path = "nodes/fuel/monitor_scada.lua", size_bytes = 18335, hash = "1935bfea", required_for={"FUEL"} },
+    { path = "nodes/fuel/half_overview.lua", size_bytes = 9442, hash = "13e91be7", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_completion.lua", size_bytes = 5071, hash = "2450c53c", required_for={"FUEL"} },
     { path = "nodes/fuel/scada_layout.lua", size_bytes = 21921, hash = "ef2106ca", required_for={"FUEL"} },
     { path = "nodes/fuel/storage.lua", size_bytes = 3726, hash = "9555d6e4", required_for={"FUEL"} },

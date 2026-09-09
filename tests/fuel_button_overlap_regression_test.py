@@ -34,7 +34,7 @@ for token in (
 ):
     assert token in router, token
 assert 33 + 3 - 1 == 35
-assert 'mux.button(mon, 2, 38, 22, "<< ZURUECK", "LIMITED", 3)' in footer
+assert 'mux.button(mon, left_x, 38, left_w, "<< ZURUECK", "LIMITED", 3)' in footer
 assert 35 < 38
 
 # Non-router page-local navigation also stays clear of the global footer.

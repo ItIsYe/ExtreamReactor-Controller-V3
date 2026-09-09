@@ -471,8 +471,21 @@ function M.render_size_error(mon, w, h, requested_scale)
 end
 
 function M.footer(mon, center)
-  local left = mux.button(mon, 2, 38, 22, "<< ZURUECK", "LIMITED", 3)
-  local right = mux.button(mon, 59, 38, 22, "WEITER >>", "LIMITED", 3)
+  local binding = M.get_binding(mon)
+  local left_x, left_w = 2, 22
+  local right_x, right_w = 59, 22
+
+  -- In 0.5 fullscreen the old doubled footer buttons looked overly massive.
+  -- Keep them fully readable, but reduce their logical width so they occupy
+  -- less physical monitor area while retaining the same bottom navigation role.
+  if binding and binding.scale == COMPACT_SCALE then
+    left_x, left_w = 4, 16
+    right_w = 16
+    right_x = TARGET_W - right_w - 3
+  end
+
+  local left = mux.button(mon, left_x, 38, left_w, "<< ZURUECK", "LIMITED", 3)
+  local right = mux.button(mon, right_x, 38, right_w, "WEITER >>", "LIMITED", 3)
   local text = tostring(center or "FUEL")
   local x = math.floor((TARGET_W - #text) / 2) + 1
   mux.text(mon, x, 39, mux.fit(text, 30), colorset.get("muted"), colorset.get("background"))

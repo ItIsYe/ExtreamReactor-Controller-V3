@@ -23,8 +23,8 @@ local mon = {
 local overlay = require('nodes.fuel.half_overview')
 local model = {
   payload = {
-    reserve = 1234,
-    minimum_reserve = 1000,
+    reserve = 12340,
+    minimum_reserve = 2000,
     logistics = {
       enabled = true,
       export_chest = 'minecraft:chest_0',
@@ -38,16 +38,19 @@ local model = {
 }
 
 assert(overlay.render(mon, model) == true)
-local found_title, found_a, found_b, found_empty, found_footer = false,false,false,false,false
+local found_reserve, found_reactors, found_logistics = false,false,false
+local found_a, found_b, found_empty, found_scada = false,false,false,false
 for _,w in ipairs(writes) do
   assert(w.y >= 25 and w.y <= 72, 'overlay must stay in physical rows 25..72')
-  if w.text:find('REAKTOR%-FLOTTE') then found_title=true end
+  if w.text:find('RESERVE',1,true) then found_reserve=true end
+  if w.text:find('REAKTOREN',1,true) then found_reactors=true end
+  if w.text:find('LOGISTIK',1,true) then found_logistics=true end
   if w.text:find('Reaktor A',1,true) then found_a=true end
   if w.text:find('Reaktor B',1,true) then found_b=true end
   if w.text:find('NICHT KONFIGURIERT',1,true) then found_empty=true end
-  if w.text:find('LOGISTIK',1,true) then found_footer=true end
+  if w.text:find('Hinweis:',1,true) then found_scada=true end
 end
-assert(found_title and found_a and found_b and found_empty and found_footer)
+assert(found_reserve and found_reactors and found_logistics and found_a and found_b and found_empty and found_scada)
 
 -- Wrong physical size: no render and no stale writes.
 writes = {}

@@ -8,6 +8,7 @@ valve = (ROOT / 'xreactor/nodes/valve/local_ui.lua').read_text(encoding='utf-8')
 # integration wiring it applied is checked against the actual runtime module
 # it patched (monitor_ui.lua) instead.
 monitor_ui = (ROOT / 'xreactor/nodes/fuel/monitor_ui.lua').read_text(encoding='utf-8')
+monitor_scada = (ROOT / 'xreactor/nodes/fuel/monitor_scada.lua').read_text(encoding='utf-8')
 
 # Native 0.5 overlay owns only the sparse physical middle area and no controls.
 for token in (
@@ -17,6 +18,9 @@ for token in (
     'local REGION_BOTTOM = 72',
     'local SLOT_COUNT = 16',
     'local SLOTS_PER_COL = 8',
+    'NICHT KONFIGURIERT',
+    'draw_summary_box',
+    'draw_box',
 ):
     assert token in overlay, token
 for forbidden in ('mux.button', 'handle_touch', 'apply_valve(', 'set_logistics_enabled(',
@@ -32,6 +36,15 @@ for token in (
     'pcall(half_overview.render, mon, model)',
 ):
     assert token in monitor_ui, token
+
+# Footer nav buttons shrink under 0.5 fullscreen so they no longer look
+# oversized once every draw call is physically doubled.
+for token in (
+    'binding and binding.scale == COMPACT_SCALE',
+    'left_x, left_w = 4, 16',
+    'right_w = 16',
+):
+    assert token in monitor_scada, token
 
 # VALVE 0.5 remains one-way SAFE only, with the new centered narrower button.
 for token in (

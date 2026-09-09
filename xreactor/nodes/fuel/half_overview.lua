@@ -1,13 +1,16 @@
 -- nodes/fuel/half_overview.lua
 --
--- Native TextScale-0.5 telemetry overlay for the FUEL Overview page.
--- The regular SCADA renderer still owns all controls and safety-relevant UI.
--- This module draws only into the physically unused middle area of the
--- 164x81 Advanced Monitor after the normal render has completed.
+-- Native TextScale-0.5 concept-pass overlay for the FUEL Overview page.
 --
--- IMPORTANT: presentation only. No routing, delivery, valve, persistence,
--- network command or safety logic is implemented here. There are no touch
--- controls in this overlay.
+-- Goal of this revision:
+--   * stronger panel framing
+--   * larger-feeling typography by using fewer lines per item
+--   * all 16 reactor slots remain visible
+--   * unconfigured reactors stay explicitly labeled
+--   * no new controls, routing, logistics, valve or persistence behavior
+--
+-- IMPORTANT: presentation only. This module has no touch handling and no
+-- control calls. The existing SCADA renderer still owns all interaction.
 
 local M = {}
 local colorset = require("shared.colors")
@@ -16,11 +19,11 @@ local PHYSICAL_W = 164
 local PHYSICAL_H = 81
 local REGION_TOP = 25
 local REGION_BOTTOM = 72
-local LEFT_X = 2
-local RIGHT_X = 84
-local COL_W = 79
 local SLOT_COUNT = 16
 local SLOTS_PER_COL = 8
+local COL_LEFT_X = 2
+local COL_RIGHT_X = 84
+local COL_W = 79
 local SLOT_H = 4
 
 local function clamp(v, lo, hi)
@@ -52,18 +55,45 @@ local function write_at(mon, x, y, text, fg, bg, width)
   pcall(mon.write, text)
 end
 
+local function fill_line(mon, x, y, width, ch, fg, bg)
+  write_at(mon, x, y, string.rep(ch or " ", math.max(0, width or 0)), fg, bg, width)
+end
+
 local function clear_line(mon, y, bg)
-  safe_set(mon, "setBackgroundColor", bg)
-  safe_set(mon, "setTextColor", colorset.get("text"))
-  if type(mon.setCursorPos) == "function" and type(mon.write) == "function" then
-    pcall(mon.setCursorPos, 1, y)
-    pcall(mon.write, string.rep(" ", PHYSICAL_W))
+  fill_line(mon, 1, y, PHYSICAL_W, " ", colorset.get("text"), bg)
+end
+
+local function draw_box(mon, x, y, w, h, title, key, bg)
+  if w < 4 or h < 3 then return end
+  local fg = colorset.get(key or "muted")
+  local top = "+" .. string.rep("-", w - 2) .. "+"
+  local bottom = top
+  write_at(mon, x, y, top, fg, bg, w)
+  for yy = y + 1, y + h - 2 do
+    write_at(mon, x, yy, "|", fg, bg, 1)
+    if w > 2 then fill_line(mon, x + 1, yy, w - 2, " ", fg, bg) end
+    write_at(mon, x + w - 1, yy, "|", fg, bg, 1)
   end
+  write_at(mon, x, y + h - 1, bottom, fg, bg, w)
+  if title and title ~= "" then
+    local label = " " .. fit(title, math.max(1, w - 6)) .. " "
+    local tx = x + math.max(1, math.floor((w - #label) / 2))
+    write_at(mon, tx, y, label, fg, bg, #label)
+  end
+end
+
+local function short_number(value, suffix)
+  local n = tonumber(value)
+  if not n then return "-" end
+  if math.abs(n) >= 1000000 then return string.format("%.1fM%s", n / 1000000, suffix or "") end
+  if math.abs(n) >= 1000 then return string.format("%.1fk%s", n / 1000, suffix or "") end
+  return string.format("%.0f%s", n, suffix or "")
 end
 
 local function reactor_key(reactor)
   if type(reactor) ~= "table" then return "muted" end
-  if type(reactor.fuel_pct) == "number" and reactor.fuel_pct < 10 then return "EMERGENCY" end
+  local pct = tonumber(reactor.fuel_pct)
+  if pct and pct < 10 then return "EMERGENCY" end
   local state = tostring(reactor.delivery_state or reactor.operational_state or "MISSING")
   if state == "READY" then return "OK" end
   if state == "DELIVERING" or state == "REQUESTING" then return "LIMITED" end
@@ -82,14 +112,6 @@ local function reactor_state_text(reactor)
   return state
 end
 
-local function progress_text(pct, width)
-  width = math.max(8, width or 48)
-  local value = clamp(tonumber(pct) or 0, 0, 100)
-  local inner = width - 2
-  local filled = math.floor(inner * value / 100 + 0.5)
-  return "[" .. string.rep("=", filled) .. string.rep(".", inner - filled) .. "]"
-end
-
 local function route_count(reactor)
   if type(reactor) ~= "table" then return 0 end
   if type(reactor.path) == "table" then return #reactor.path end
@@ -97,47 +119,55 @@ local function route_count(reactor)
   return tonumber(reactor.path_len or reactor.route_len) or 0
 end
 
+local function progress_text(pct, width)
+  width = math.max(12, width or 32)
+  local value = clamp(tonumber(pct) or 0, 0, 100)
+  local inner = width - 2
+  local filled = math.floor(inner * value / 100 + 0.5)
+  return "[" .. string.rep("=", filled) .. string.rep(".", inner - filled) .. "]"
+end
+
+local function draw_summary_box(mon, x, y, w, title, value, detail, key, bg)
+  draw_box(mon, x, y, w, 7, title, key, bg)
+  write_at(mon, x + 3, y + 2, fit(value, w - 6), colorset.get(key or "text"), bg, w - 6)
+  write_at(mon, x + 3, y + 4, fit(detail, w - 6), colorset.get("muted"), bg, w - 6)
+end
+
 local function draw_slot(mon, x, y, width, index, reactor, bg)
+  local inner_w = width - 4
+  local start_x = x + 2
+  local top_y = y
+
   if type(reactor) ~= "table" then
-    write_at(mon, x, y, string.format("%02d  -- NICHT KONFIGURIERT --", index),
-      colorset.get("muted"), bg, width)
-    write_at(mon, x, y + 1, string.rep("-", math.max(1, width - 2)),
-      colorset.get("muted"), bg, width)
-    write_at(mon, x, y + 2, "", colorset.get("muted"), bg, width)
+    write_at(mon, start_x, top_y,
+      string.format("%02d  NICHT KONFIGURIERT", index),
+      colorset.get("muted"), bg, inner_w)
+    write_at(mon, start_x, top_y + 1, "freier Reaktor-Slot",
+      colorset.get("muted"), bg, inner_w)
+    write_at(mon, start_x, top_y + 2, string.rep("-", inner_w - 2),
+      colorset.get("muted"), bg, inner_w)
     return
   end
 
   local key = reactor_key(reactor)
   local fg = colorset.get(key)
   local pct = tonumber(reactor.fuel_pct)
-  local pct_text = pct and string.format("%3d%%", math.floor(clamp(pct, 0, 100) + 0.5)) or " --%"
+  local pct_text = pct and string.format("%d%%", math.floor(clamp(pct, 0, 100) + 0.5)) or "--%"
   local label = tostring(reactor.label or reactor.reactor_id or ("Reaktor " .. tostring(index)))
   local state = reactor_state_text(reactor)
-  local right = pct_text .. "  " .. state
-  local left_width = math.max(10, width - #right - 4)
-
-  write_at(mon, x, y,
-    string.format("%02d  %s", index, fit(label, left_width)) .. string.rep(" ", 2) .. right,
-    fg, bg, width)
-
   local age = reactor.fuel_age_s ~= nil and (tostring(reactor.fuel_age_s) .. "s") or "--"
-  local data = tostring(reactor.fuel_data_state or "-")
   local route = route_count(reactor)
-  local delivery = tostring(reactor.delivery_state or reactor.operational_state or "-")
-  write_at(mon, x, y + 1,
-    string.format("DATA %-8s AGE %-5s ROUTE %-2d  STATE %s", data, age, route, delivery),
-    colorset.get(key == "OK" and "muted" or key), bg, width)
 
-  write_at(mon, x, y + 2, progress_text(pct, math.min(width, 58)) .. " " .. pct_text,
-    fg, bg, width)
-end
-
-local function short_number(value)
-  local n = tonumber(value)
-  if not n then return "-" end
-  if math.abs(n) >= 1000000 then return string.format("%.1fM", n / 1000000) end
-  if math.abs(n) >= 1000 then return string.format("%.1fk", n / 1000) end
-  return string.format("%.0f", n)
+  write_at(mon, start_x, top_y,
+    string.format("%02d  %s", index, fit(label, math.max(10, inner_w - #pct_text - 6))),
+    fg, bg, inner_w)
+  write_at(mon, start_x + inner_w - #pct_text, top_y, pct_text, fg, bg, #pct_text)
+  write_at(mon, start_x, top_y + 1,
+    string.format("%s   Route %d   Alter %s", state, route, age),
+    colorset.get(key == "OK" and "text" or key), bg, inner_w)
+  write_at(mon, start_x, top_y + 2, progress_text(pct, math.min(40, inner_w - #pct_text - 1)), fg, bg, inner_w)
+  write_at(mon, start_x + math.min(42, inner_w - #pct_text), top_y + 2, pct_text,
+    fg, bg, #pct_text)
 end
 
 function M.render(mon, model)
@@ -155,44 +185,55 @@ function M.render(mon, model)
   local view = type(model.view_state) == "table" and model.view_state or {}
 
   local configured = math.min(#reactors, SLOT_COUNT)
-  local section_key = configured > 0 and "LIMITED" or "WARNING"
-  write_at(mon, 2, 25,
-    string.format("REAKTOR-FLOTTE  %d/%d SLOTS   |   0.5 FULLSCREEN / NATIVE KLEINSCHRIFT", configured, SLOT_COUNT),
-    colorset.get(section_key), bg, 160)
-  write_at(mon, 2, 26, string.rep("-", 160), colorset.get(section_key), bg, 160)
+  local ready = 0
+  for i = 1, configured do
+    if reactor_state_text(reactors[i]) == "BEREIT" then ready = ready + 1 end
+  end
+  local reserve = short_number(payload.reserve, " mB")
+  local minimum = short_number(payload.minimum_reserve, " mB")
+  local logistics_state = logistics.enabled == true and "AKTIV" or "AUS"
+  local export = tostring(logistics.export_chest or "NICHT GESETZT")
+
+  draw_summary_box(mon, 2, 25, 52,
+    "RESERVE",
+    reserve,
+    "Minimum " .. minimum,
+    tonumber(payload.reserve or 0) >= tonumber(payload.minimum_reserve or 0) and "OK" or "WARNING",
+    bg)
+  draw_summary_box(mon, 56, 25, 52,
+    "REAKTOREN",
+    string.format("%d / %d konfiguriert", configured, SLOT_COUNT),
+    string.format("%d bereit", ready),
+    configured > 0 and "LIMITED" or "WARNING",
+    bg)
+  draw_summary_box(mon, 110, 25, 53,
+    "LOGISTIK",
+    logistics_state,
+    fit("Export " .. export, 45),
+    logistics.enabled == true and "OK" or "LIMITED",
+    bg)
+
+  write_at(mon, 2, 33, "REAKTORFLOTTE", colorset.get("LIMITED"), bg, 40)
+  draw_box(mon, COL_LEFT_X, 34, COL_W, 33, "SLOTS 01-08", "LIMITED", bg)
+  draw_box(mon, COL_RIGHT_X, 34, COL_W, 33, "SLOTS 09-16", "LIMITED", bg)
 
   for slot = 1, SLOT_COUNT do
     local col = slot <= SLOTS_PER_COL and 1 or 2
     local row = (slot - 1) % SLOTS_PER_COL
-    local x = col == 1 and LEFT_X or RIGHT_X
-    local y = 28 + row * SLOT_H
+    local x = col == 1 and COL_LEFT_X or COL_RIGHT_X
+    local y = 36 + row * SLOT_H
     draw_slot(mon, x, y, COL_W, slot, reactors[slot], bg)
   end
 
-  write_at(mon, 2, 61, string.rep("-", 160), colorset.get("muted"), bg, 160)
-  local reserve = short_number(payload.reserve)
-  local minimum = short_number(payload.minimum_reserve)
-  local logistics_state = logistics.enabled == true and "AN" or "AUS"
-  local export = tostring(logistics.export_chest or "NICHT GESETZT")
-  write_at(mon, 2, 62,
-    string.format("LOGISTIK %-3s   RESERVE %s / MIN %s   EXPORT %s", logistics_state, reserve, minimum, export),
-    colorset.get(logistics.enabled == true and "OK" or "LIMITED"), bg, 160)
-
-  local view_code = tostring(view.code or "-")
-  local view_title = tostring(view.title or "")
+  draw_box(mon, 2, 68, 161, 5, "SCADA", "muted", bg)
+  local scada = tostring(view.code or "-")
   local detail = tostring(view.detail or "")
-  write_at(mon, 2, 64,
-    "SCADA " .. view_code .. (view_title ~= "" and ("  |  " .. view_title) or "") .. (detail ~= "" and ("  |  " .. detail) or ""),
-    colorset.get(view.severity or "muted"), bg, 160)
-
-  if view.action and tostring(view.action) ~= "" then
-    write_at(mon, 2, 66, "OPERATOR: " .. tostring(view.action),
-      colorset.get(view.severity == "OK" and "muted" or "WARNING"), bg, 160)
-  end
-
-  write_at(mon, 2, 70,
-    "INFO: Dieser Bereich ist reine Telemetrie. Bedienung bleibt auf den sichtbaren SCADA-Buttons.",
-    colorset.get("muted"), bg, 160)
+  local line = "SCADA " .. scada
+  if detail ~= "" then line = line .. "  |  " .. detail end
+  write_at(mon, 5, 70, line, colorset.get(view.severity or "muted"), bg, 154)
+  write_at(mon, 5, 71,
+    "Hinweis: unkonfigurierte Reaktoren bleiben sichtbar. Bedienung nur ueber die SCADA-Buttons unten.",
+    colorset.get("muted"), bg, 154)
 
   return true
 end
@@ -202,5 +243,6 @@ M.PHYSICAL_H = PHYSICAL_H
 M.REGION_TOP = REGION_TOP
 M.REGION_BOTTOM = REGION_BOTTOM
 M.SLOT_COUNT = SLOT_COUNT
+M.SLOTS_PER_COL = SLOTS_PER_COL
 
 return M
