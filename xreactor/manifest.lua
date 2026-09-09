@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 642,
-  manifest_id = "manifest-v642",
+  manifest_version = 643,
+  manifest_id = "manifest-v643",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "09d74291", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "fd722bef", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -182,8 +182,9 @@ return {
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2032, hash = "dac721b1", required_for={"FUEL"} },
     { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 7855, hash = "53d04318", required_for={"FUEL"} },
     { path = "nodes/fuel/reactor_targets.lua", size_bytes = 1815, hash = "17439bad", required_for={"FUEL"} },
-    { path = "nodes/fuel/monitor_ui.lua", size_bytes = 12395, hash = "278cc231", required_for={"FUEL"} },
+    { path = "nodes/fuel/monitor_ui.lua", size_bytes = 13042, hash = "88f09230", required_for={"FUEL"} },
     { path = "nodes/fuel/monitor_scada.lua", size_bytes = 17837, hash = "594d601c", required_for={"FUEL"} },
+    { path = "nodes/fuel/half_overview.lua", size_bytes = 8178, hash = "0a4ebc2c", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_completion.lua", size_bytes = 5071, hash = "2450c53c", required_for={"FUEL"} },
     { path = "nodes/fuel/scada_layout.lua", size_bytes = 21921, hash = "ef2106ca", required_for={"FUEL"} },
     { path = "nodes/fuel/storage.lua", size_bytes = 3726, hash = "9555d6e4", required_for={"FUEL"} },
@@ -206,7 +207,7 @@ return {
     { path = "nodes/valve/config.lua", size_bytes = 2788, hash = "a7168614", required_for={"VALVE"} },
     { path = "nodes/valve/controller.lua", size_bytes = 15625, hash = "97893f5a", required_for={"VALVE"} },
     { path = "nodes/valve/hop_reporter.lua", size_bytes = 2144, hash = "3099e0bf", required_for={"VALVE"} },
-    { path = "nodes/valve/local_ui.lua", size_bytes = 18939, hash = "4e926f9d", required_for={"VALVE"} },
+    { path = "nodes/valve/local_ui.lua", size_bytes = 19270, hash = "a539841f", required_for={"VALVE"} },
     { path = "nodes/valve/main.lua", size_bytes = 15756, hash = "b2536eaf", required_for={"VALVE"} },
     { path = "installer/valve_naming.lua", size_bytes = 2805, hash = "a809108a", required_for={"VALVE"} },
     },

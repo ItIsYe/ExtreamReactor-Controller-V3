@@ -13,6 +13,7 @@ local window_buffer = require("core.window_buffer")
 local mux = require("core.mockup_ui")
 local utils = require("core.utils")
 local monitor_scada = require("nodes.fuel.monitor_scada")
+local half_overview = require("nodes.fuel.half_overview")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
@@ -188,6 +189,18 @@ function M.render_monitor(ctx, model)
   if not ok then
     if monitor_router.invalidate_layout then monitor_router:invalidate_layout() end
     error(result, 0)
+  end
+  -- TextScale 0.5 has 164x81 physical cells. The normal SCADA renderer
+  -- deliberately keeps the proven control geometry; this telemetry-only
+  -- overlay uses the otherwise sparse middle area with native small text.
+  if requested_scale == 0.5 then
+    local page = monitor_router and monitor_router:current() or nil
+    if page and page.name == "Overview" then
+      local overlay_ok, overlay_err = pcall(half_overview.render, mon, model)
+      if not overlay_ok then
+        utils.log("FUEL", "0.5 Overview overlay failed: " .. tostring(overlay_err), "WARN")
+      end
+    end
   end
   return result
 end

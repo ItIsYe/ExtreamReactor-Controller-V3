@@ -26,9 +26,9 @@ local ACTION_X = 2
 local ACTION_Y = 14
 local ACTION_W = 48
 local ACTION_H = 3
-local COMPACT_ACTION_X = 6
+local COMPACT_ACTION_X = 8
 local COMPACT_ACTION_Y = 11
-local COMPACT_ACTION_W = 40
+local COMPACT_ACTION_W = 36
 local COMPACT_ACTION_H = 3
 local NORMAL_SCALE = 1.0
 local COMPACT_SCALE = 0.5
@@ -386,60 +386,42 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
   local actuator_key = actuator_status(state)
   local health_key = (master_ok and actuator_key == "OK") and "OK" or "WARNING"
   local hop_key, hop_title, hop_detail = hop_status(hop, self.os)
+  local bg = colorset.get("background")
 
-  -- The built-in 51x19 terminal cannot physically scale text. This 0.5 mode
-  -- therefore reduces information density instead: one clear state banner,
-  -- two compact status columns, one hardware line, one large SAFE action and
-  -- only two operator/diagnostic lines below it. Rows 6, 9, 14, 18 and 19 are
-  -- intentionally left empty so the UI no longer looks compressed.
+  -- Screenshot-driven reduced mode: no icon-prefixed data rows and no broad
+  -- technical cards. The built-in 51x19 terminal cannot shrink its font, so
+  -- the only way to make the screen feel smaller/cleaner is to reduce visual
+  -- density, center the important state and leave deliberate breathing room.
   mux.clear(target)
-  mux.header(target, {
-    title = "VALVE NODE",
-    node_id = self.node_id,
-    status = health_key,
-    icon = "flow",
-  })
 
-  mux.banner(target, 4, 4, 44, physical_title, physical_key, nil)
-  mux.data_row(target, 6, 5, 40, {
-    label = physical_detail,
-    value = self.label and fit(self.label, 15) or "",
-    status = physical_key,
-    icon = "flow",
-  })
+  local title = "VALVE NODE   " .. tostring(self.node_id)
+  mux.text(target, math.max(2, math.floor((EXPECTED_W - #title) / 2) + 1), 2,
+    fit(title, 47), colorset.get(health_key), bg)
 
-  -- Row 6 blank.
-  mux.status_dot(target, 5, 7,
-    master_ok and "MASTER ONLINE" or "MASTER OFFLINE",
-    master_ok and "OK" or "WARNING", 19)
-  mux.status_dot(target, 28, 7,
-    actuator_key == "OK" and "AKTOR OK" or "AKTOR FEHLER",
-    actuator_key, 19)
+  mux.banner(target, 6, 4, 40, physical_title, physical_key, nil)
+  local detail = tostring(physical_detail or "")
+  mux.text(target, math.max(4, math.floor((EXPECTED_W - #detail) / 2) + 1), 5,
+    fit(detail, 43), colorset.get(physical_key), bg)
 
-  mux.data_row(target, 5, 8, 19, {
-    label = "SCADA",
-    value = fit(state.trusted_source or "UNPAIRED", 10),
-    status = (master_ok and state.pairing_persisted) and "OK" or "LIMITED",
-    icon = "network",
-  })
-  mux.data_row(target, 28, 8, 19, {
-    label = "HOP",
-    value = fit(hop_title, 10),
-    status = hop_key,
-    icon = "storage",
-  })
+  -- Row 6 intentionally blank.
+  local master_text = master_ok and "MASTER: ONLINE" or "MASTER: OFFLINE"
+  local actuator_text = actuator_key == "OK" and "AKTOR: OK" or "AKTOR: FEHLER"
+  mux.text(target, 5, 7, fit(master_text, 19), colorset.get(master_ok and "OK" or "WARNING"), bg)
+  mux.text(target, 29, 7, fit(actuator_text, 18), colorset.get(actuator_key), bg)
 
-  -- Row 9 blank. One concise hardware/readback line is enough here.
-  local device = fit(state.sorter_name or state.redstone_side or "-", 15)
-  local write_state = state.last_write_error and "FEHLER"
-    or (state.initialized and "READBACK OK" or "UNBESTAETIGT")
-  mux.data_row(target, 6, 10, 40, {
-    label = tostring(state.actuator_mode or "none") .. " " .. device,
-    value = write_state,
-    status = actuator_key,
-    icon = "output",
-  })
+  local source = fit(state.trusted_source or "UNPAIRED", 11)
+  local pair = state.pairing_persisted and "PAIR: OK" or "PAIR: NEIN"
+  mux.text(target, 5, 8, fit("SCADA: " .. source, 19),
+    colorset.get((master_ok and state.pairing_persisted) and "OK" or "LIMITED"), bg)
+  mux.text(target, 29, 8, fit(pair, 18),
+    colorset.get(state.pairing_persisted and "OK" or "WARNING"), bg)
 
+  local readback = state.last_write_error and "READBACK: FEHLER"
+    or (state.initialized and "READBACK: OK" or "READBACK: ?")
+  mux.text(target, 5, 9, fit("HOP: " .. tostring(hop_title), 19), colorset.get(hop_key), bg)
+  mux.text(target, 29, 9, fit(readback, 18), colorset.get(actuator_key), bg)
+
+  -- Row 10 blank before the only local action.
   local button_status =
     state.current_high == true and state.initialized and not state.last_write_error
       and "OK" or "LIMITED"
@@ -447,7 +429,7 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
     COMPACT_ACTION_X, COMPACT_ACTION_Y, COMPACT_ACTION_W,
     "SAFE BLOCKIEREN + READBACK PRUEFEN", button_status, COMPACT_ACTION_H)
 
-  -- Row 14 blank after the only local action.
+  -- Row 14 blank after the SAFE action.
   local msg = self.action_message
   local msg_status = self.action_status or "muted"
   if not msg or msg == "" then
@@ -461,7 +443,9 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
       msg = "HOP: " .. tostring(hop_detail)
       msg_status = "WARNING"
     else
-      msg = string.format("MODEM %s   Q %s   WRITE %s",
+      local device = fit(state.sorter_name or state.redstone_side or "-", 12)
+      msg = string.format("%s %s  |  MODEM %s  |  Q %s  |  %s",
+        tostring(state.actuator_mode or "none"), device,
         tostring(self.modem_name or "auto"),
         tostring(diag.queue_depth or 0),
         age_text(state.last_command_ts, self.os))
@@ -469,18 +453,17 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
     end
   end
 
-  mux.data_row(target, 6, 15, 40, {
-    label = fit(msg, 40), value = "", status = msg_status, icon = "config"
-  })
-  mux.data_row(target, 6, 16, 40, {
-    label = "LOCAL SAFE", value = "OEFFNEN NUR VIA FUEL",
-    status = "LIMITED", icon = "config"
-  })
-  mux.data_row(target, 6, 17, 40, {
-    label = "NODE", value = fit(self.label or self.node_id, 22),
-    status = health_key, icon = "network"
-  })
-  -- Rows 18..19 intentionally blank.
+  local msg_x = math.max(3, math.floor((EXPECTED_W - math.min(#tostring(msg), 45)) / 2) + 1)
+  mux.text(target, msg_x, 15, fit(msg, 45), colorset.get(msg_status), bg)
+
+  local warning = "OEFFNEN NUR VIA FUEL"
+  mux.text(target, math.floor((EXPECTED_W - #warning) / 2) + 1, 17,
+    warning, colorset.get("LIMITED"), bg)
+
+  local node_line = tostring(self.label or self.node_id)
+  mux.text(target, math.max(3, math.floor((EXPECTED_W - #node_line) / 2) + 1), 18,
+    fit(node_line, 45), colorset.get(health_key), bg)
+  -- Rows 16 and 19 intentionally blank.
   return true
 end
 

@@ -34,10 +34,10 @@ assert "valve_ui_scale ~= 0.5 and valve_ui_scale ~= 1.0" in valve_main
 assert "ui_scale = config.ui_scale" in valve_main
 assert "local COMPACT_SCALE = 0.5" in valve_ui
 assert "_render_compact_frame" in valve_ui
-assert "local COMPACT_ACTION_X = 6" in valve_ui
+assert "local COMPACT_ACTION_X = 8" in valve_ui
 assert "local COMPACT_ACTION_Y = 11" in valve_ui
-assert "local COMPACT_ACTION_W = 40" in valve_ui
-assert "Rows 18..19 intentionally blank" in valve_ui
+assert "local COMPACT_ACTION_W = 36" in valve_ui
+assert "Rows 16 and 19 intentionally blank" in valve_ui
 assert valve_ui.count("apply_valve(true, true)") == 1
 assert "apply_valve(false" not in valve_ui
 assert "SET_VALVE" not in valve_ui
