@@ -85,7 +85,8 @@ local DEFAULT_CONFIG = {
   discovery_interval = 15,
   status_interval = 5,
   -- FUEL Advanced Monitor: supported values are 1.0 and 0.5.
-  -- 0.5 keeps the same logical 82x40 SCADA surface in a centered viewport.
+  -- 0.5 keeps the logical 82x40 page geometry but fills the 164x81 monitor
+  -- via a 2x fullscreen surface; text remains native/small at scale 0.5.
   ui_scale = 0.5,
   channels = { control = constants.channels.CONTROL, status = constants.channels.STATUS },
   comms = {

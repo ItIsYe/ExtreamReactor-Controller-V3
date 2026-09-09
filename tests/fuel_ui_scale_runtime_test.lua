@@ -8,54 +8,68 @@ package.loaded['core.mockup_ui'] = {
   end,
   fit=function(s,w) return tostring(s or ''):sub(1,w) end,
 }
-package.loaded['shared.colors'] = { get=function() return 1 end }
+package.loaded['shared.colors'] = { get=function() return 32768 end }
 package.loaded['nodes.fuel.monitor_scada'] = nil
 
 local scale = 1.0
-local set_calls = {}
+local writes = {}
+local cursor_x, cursor_y = 1,1
 local mon = {
   getTextScale=function() return scale end,
-  setTextScale=function(v) scale=v; set_calls[#set_calls+1]=v end,
-  getSize=function()
-    if scale == 0.5 then return 164,81 end
-    return 82,40
-  end,
+  setTextScale=function(v) scale=v end,
+  getSize=function() if scale == 0.5 then return 164,81 end return 82,40 end,
   setBackgroundColor=function() end,
-  clear=function() end,
-}
-
-local created = nil
-window = {
-  create=function(parent,x,y,w,h,visible)
-    assert(parent == mon)
-    created={x=x,y=y,w=w,h=h,visible=visible,visible_now=visible}
-    return {
-      getSize=function() return w,h end,
-      setVisible=function(v) created.visible_now=v end,
-      setCursorPos=function() end, write=function() end,
-      setBackgroundColor=function() end, setTextColor=function() end,
-      clear=function() end,
-    }
+  getBackgroundColor=function() return 32768 end,
+  setTextColor=function() end,
+  getTextColor=function() return 1 end,
+  setCursorPos=function(x,y) cursor_x,cursor_y=x,y end,
+  getCursorPos=function() return cursor_x,cursor_y end,
+  setCursorBlink=function() end,
+  isColor=function() return true end,
+  clear=function() writes[#writes+1]={kind='clear'} end,
+  clearLine=function() end,
+  scroll=function() end,
+  blit=function(t,f,b)
+    writes[#writes+1]={kind='blit',x=cursor_x,y=cursor_y,text=t,fg=f,bg=b}
   end,
 }
 
 local scada = require('nodes.fuel.monitor_scada')
 local ok,w,h,target,s = scada.ensure(mon,0.5)
 assert(ok == true and w == 164 and h == 81 and s == 0.5)
-assert(created and created.x == 42 and created.y == 21 and created.w == 82 and created.h == 40)
-assert(target ~= mon)
-local b = scada.get_binding(mon)
-assert(b.origin_x == 42 and b.origin_y == 21)
-assert(b.logical_width == 82 and b.logical_height == 40)
+assert(target ~= mon, '0.5 must use the fullscreen scaling terminal')
+local lw,lh = target.getSize()
+assert(lw == 82 and lh == 40)
+local binding = scada.get_binding(mon)
+assert(binding.fullscreen == true)
+assert(binding.origin_x == 1 and binding.origin_y == 1)
+assert(binding.physical_render_width == 164 and binding.physical_render_height == 80)
 
-local x,y,inside = scada.touch_to_local(mon,42,21)
+-- Full-screen touch mapping: no centered dead border anymore.
+local x,y,inside = scada.touch_to_local(mon,1,1)
 assert(inside and x == 1 and y == 1)
-x,y,inside = scada.touch_to_local(mon,123,60)
+x,y,inside = scada.touch_to_local(mon,2,2)
+assert(inside and x == 1 and y == 1)
+x,y,inside = scada.touch_to_local(mon,164,80)
 assert(inside and x == 82 and y == 40)
-assert(select(3,scada.touch_to_local(mon,41,21)) == false)
-assert(select(3,scada.touch_to_local(mon,124,60)) == false)
-assert(select(3,scada.touch_to_local(mon,42,20)) == false)
-assert(select(3,scada.touch_to_local(mon,42,61)) == false)
+assert(select(3,scada.touch_to_local(mon,164,81)) == false,
+  'physical row 81 is not visibly owned by a logical control')
+
+-- Native 0.5 text must stay compact, not letter-spaced across every other cell.
+writes = {}
+target.setCursorPos(1,1)
+target.blit('ABC','000','fff')
+assert(#writes == 2)
+assert(writes[1].x == 1 and writes[1].y == 1)
+assert(#writes[1].text == 6 and writes[1].text:sub(1,3) == 'ABC')
+assert(writes[1].text ~= 'A B C ', 'text should remain native/small at scale 0.5')
+assert(writes[2].y == 2 and #writes[2].text == 6)
+
+-- Structural card borders expand to the full doubled widget width.
+writes = {}
+target.setCursorPos(1,2)
+target.blit('+---+','00000','fffff')
+assert(writes[1].text == '+--------+', writes[1].text)
 
 ok,w,h,target,s = scada.ensure(mon,1.0)
 assert(ok == true and w == 82 and h == 40 and s == 1.0)

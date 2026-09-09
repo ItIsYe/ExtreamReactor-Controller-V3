@@ -1,9 +1,10 @@
 -- nodes/valve/local_ui.lua
 --
 -- Fixed 51x19 local SCADA display for the VALVE node's own computer terminal.
--- ui_scale=1.0 uses the normal card layout. ui_scale=0.5 selects a denser
--- COMPACT layout; the built-in computer terminal has no setTextScale API,
--- so 0.5 is a layout-density mode here, not a physical font resize.
+-- ui_scale=1.0 uses the normal card layout. ui_scale=0.5 selects a reduced,
+-- low-density layout with deliberate blank rows and side margins. The built-in
+-- computer terminal has no setTextScale API, so 0.5 changes layout density,
+-- not the physical font size.
 -- Presentation plus ONE deliberately one-way local safety action only:
 -- BLOCKED + forced physical write/readback. There is intentionally NO local
 -- OPEN action. Normal opening remains owned by the trusted FUEL/VALVE network
@@ -25,9 +26,9 @@ local ACTION_X = 2
 local ACTION_Y = 14
 local ACTION_W = 48
 local ACTION_H = 3
-local COMPACT_ACTION_X = 5
-local COMPACT_ACTION_Y = 12
-local COMPACT_ACTION_W = 42
+local COMPACT_ACTION_X = 6
+local COMPACT_ACTION_Y = 11
+local COMPACT_ACTION_W = 40
 local COMPACT_ACTION_H = 3
 local NORMAL_SCALE = 1.0
 local COMPACT_SCALE = 0.5
@@ -384,11 +385,13 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
   local physical_key, physical_title, physical_detail = physical_status(state)
   local actuator_key = actuator_status(state)
   local health_key = (master_ok and actuator_key == "OK") and "OK" or "WARNING"
-  local hop_key, hop_title, hop_detail, hop_age = hop_status(hop, self.os)
+  local hop_key, hop_title, hop_detail = hop_status(hop, self.os)
 
-  -- ui_scale 0.5 on the built-in computer terminal is a reduced-density
-  -- layout, not a physical font scale. Keep deliberate empty rows and side
-  -- margins so the 51x19 display does not look packed edge-to-edge.
+  -- The built-in 51x19 terminal cannot physically scale text. This 0.5 mode
+  -- therefore reduces information density instead: one clear state banner,
+  -- two compact status columns, one hardware line, one large SAFE action and
+  -- only two operator/diagnostic lines below it. Rows 6, 9, 14, 18 and 19 are
+  -- intentionally left empty so the UI no longer looks compressed.
   mux.clear(target)
   mux.header(target, {
     title = "VALVE NODE",
@@ -398,64 +401,45 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
   })
 
   mux.banner(target, 4, 4, 44, physical_title, physical_key, nil)
-  mux.data_row(target, 5, 5, 42, {
+  mux.data_row(target, 6, 5, 40, {
     label = physical_detail,
-    value = self.label and fit(self.label, 17) or "",
+    value = self.label and fit(self.label, 15) or "",
     status = physical_key,
     icon = "flow",
   })
 
-  -- Row 6 intentionally blank.
-  mux.data_row(target, 5, 7, 42, {
-    label = "MASTER",
-    value = master_ok and "ONLINE" or "OFFLINE",
-    status = master_ok and "OK" or "WARNING",
-    icon = "network",
-  })
+  -- Row 6 blank.
+  mux.status_dot(target, 5, 7,
+    master_ok and "MASTER ONLINE" or "MASTER OFFLINE",
+    master_ok and "OK" or "WARNING", 19)
+  mux.status_dot(target, 28, 7,
+    actuator_key == "OK" and "AKTOR OK" or "AKTOR FEHLER",
+    actuator_key, 19)
 
-  local actuator_value = fit(state.sorter_name or state.redstone_side or "-", 15)
-  if state.last_write_error then
-    actuator_value = "FEHLER"
-  elseif state.initialized then
-    actuator_value = actuator_value .. " / OK"
-  else
-    actuator_value = actuator_value .. " / ?"
-  end
-  mux.data_row(target, 5, 8, 42, {
-    label = "AKTOR " .. tostring(state.actuator_mode or "none"),
-    value = fit(actuator_value, 20),
-    status = actuator_key,
-    icon = "output",
-  })
-
-  local source = fit(state.trusted_source or "UNPAIRED", 13)
-  local pair = bool_text(state.pairing_persisted, "PAIR OK", "UNPAIRED")
-  mux.data_row(target, 5, 9, 42, {
+  mux.data_row(target, 5, 8, 19, {
     label = "SCADA",
-    value = fit(source .. " / " .. pair, 22),
+    value = fit(state.trusted_source or "UNPAIRED", 10),
     status = (master_ok and state.pairing_persisted) and "OK" or "LIMITED",
     icon = "network",
   })
-
-  local hop_value
-  if hop_title == "AUS" then
-    hop_value = "AUS"
-  elseif hop_age ~= nil then
-    hop_value = string.format("%s / %ss / %ss",
-      hop_title,
-      tostring(hop_age),
-      tostring(math.max(1, tonumber(hop.interval_s) or 4)))
-  else
-    hop_value = hop_title
-  end
-  mux.data_row(target, 5, 10, 42, {
+  mux.data_row(target, 28, 8, 19, {
     label = "HOP",
-    value = fit(hop_value, 23),
+    value = fit(hop_title, 10),
     status = hop_key,
     icon = "storage",
   })
 
-  -- Row 11 intentionally blank before the only local action.
+  -- Row 9 blank. One concise hardware/readback line is enough here.
+  local device = fit(state.sorter_name or state.redstone_side or "-", 15)
+  local write_state = state.last_write_error and "FEHLER"
+    or (state.initialized and "READBACK OK" or "UNBESTAETIGT")
+  mux.data_row(target, 6, 10, 40, {
+    label = tostring(state.actuator_mode or "none") .. " " .. device,
+    value = write_state,
+    status = actuator_key,
+    icon = "output",
+  })
+
   local button_status =
     state.current_high == true and state.initialized and not state.last_write_error
       and "OK" or "LIMITED"
@@ -463,7 +447,7 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
     COMPACT_ACTION_X, COMPACT_ACTION_Y, COMPACT_ACTION_W,
     "SAFE BLOCKIEREN + READBACK PRUEFEN", button_status, COMPACT_ACTION_H)
 
-  -- Row 15 intentionally blank after the action.
+  -- Row 14 blank after the only local action.
   local msg = self.action_message
   local msg_status = self.action_status or "muted"
   if not msg or msg == "" then
@@ -477,7 +461,7 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
       msg = "HOP: " .. tostring(hop_detail)
       msg_status = "WARNING"
     else
-      msg = string.format("MODEM %s  QUEUE %s  AGE %s",
+      msg = string.format("MODEM %s   Q %s   WRITE %s",
         tostring(self.modem_name or "auto"),
         tostring(diag.queue_depth or 0),
         age_text(state.last_command_ts, self.os))
@@ -485,21 +469,18 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
     end
   end
 
-  mux.data_row(target, 5, 16, 42, {
-    label = fit(msg, 42), value = "", status = msg_status, icon = "config"
+  mux.data_row(target, 6, 15, 40, {
+    label = fit(msg, 40), value = "", status = msg_status, icon = "config"
   })
-  mux.data_row(target, 5, 17, 42, {
+  mux.data_row(target, 6, 16, 40, {
     label = "LOCAL SAFE", value = "OEFFNEN NUR VIA FUEL",
     status = "LIMITED", icon = "config"
   })
-  mux.data_row(target, 5, 18, 42, {
+  mux.data_row(target, 6, 17, 40, {
     label = "NODE", value = fit(self.label or self.node_id, 22),
     status = health_key, icon = "network"
   })
-  mux.data_row(target, 5, 19, 42, {
-    label = "UI", value = "0.5 REDUZIERT",
-    status = "muted", icon = "config"
-  })
+  -- Rows 18..19 intentionally blank.
   return true
 end
 
