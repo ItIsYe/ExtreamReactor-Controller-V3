@@ -1,5 +1,34 @@
 local M = {}
 
+-- AUX-View-Persistenz: welche View jeder AUX-Monitor (4.+, per Touch
+-- umschaltbar) zuletzt zeigte, ueberlebt einen MASTER-Neustart. Ohne das
+-- fielen alle AUX-Monitore nach jedem Neustart auf die erste View im
+-- Zyklus zurueck, unabhaengig davon was der Operator zuletzt eingestellt
+-- hatte. Gleiche Nutzerdatei wie master/ui_controller.lua's
+-- persist_master_settings() (PEAK/IDLE/AUTO-UPDATE), nur ein zusaetzliches
+-- Feld -- kein Manifest-Eintrag, uebersteht Auto-Updates. Schluessel ist
+-- die stabile Registry-ID des physischen Monitors (siehe
+-- core/monitor_manager.lua), nicht sein CC:Tweaked-Peripheriename, damit
+-- die Zuordnung auch nach einem Kabel-/Reconnect-bedingten Namenswechsel
+-- stabil bleibt.
+local AUX_VIEW_STATE_PATH = "/xreactor_config/master.lua"
+
+local function load_aux_view_keys(ctx)
+  local ok, cfg = pcall(ctx.utils.load_config, AUX_VIEW_STATE_PATH, {})
+  if ok and type(cfg) == "table" and type(cfg.aux_views) == "table" then
+    return cfg.aux_views
+  end
+  return {}
+end
+
+local function save_aux_view_key(ctx, monitor_id, view_key)
+  local ok, cfg = pcall(ctx.utils.load_config, AUX_VIEW_STATE_PATH, {})
+  cfg = (ok and type(cfg) == "table") and cfg or {}
+  cfg.aux_views = cfg.aux_views or {}
+  cfg.aux_views[tostring(monitor_id)] = view_key
+  pcall(ctx.utils.write_config, AUX_VIEW_STATE_PATH, cfg)
+end
+
 -- Fix P5: ctx-Interface ist bewusst flach gehalten für CC:Tweaked-Kompatibilität,
 -- aber die Felder sind jetzt in logische Gruppen dokumentiert:
 --
@@ -52,7 +81,9 @@ function M.run(ctx)
         return ctx.refs.ui_controller.handle_action(action)
       end
       return false, "ui-controller-missing"
-    end
+    end,
+    persisted_view_keys = load_aux_view_keys(ctx),
+    on_aux_view_change = function(monitor_id, view_key) save_aux_view_key(ctx, monitor_id, view_key) end
   })
   ctx.utils.log("MASTER", "View manager initialized for primary roles: monitor1=overview monitor2=rt monitor3=energy", "INFO")
   ctx.refresh_monitors(true)

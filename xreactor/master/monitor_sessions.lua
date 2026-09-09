@@ -73,6 +73,12 @@ function M:cycle_aux_view(session, direction)
   session.view_key = next_view
   session.dirty    = true
   session.dirty_reason = "user-cycle"
+  -- Persist so this AUX monitor reopens on the same page after a restart
+  -- (see resolve_binding()'s persisted_view_keys fallback below) instead of
+  -- always resetting to the first view in the cycle.
+  if self.on_aux_view_change and session.id then
+    pcall(self.on_aux_view_change, session.id, next_view)
+  end
   return next_view
 end
 
@@ -86,7 +92,13 @@ function M.new(opts)
   return setmetatable({
     sessions = {},
     order = {},
-    view_order = opts.view_order or { "overview", "rt", "energy" }
+    view_order = opts.view_order or { "overview", "rt", "energy" },
+    -- AUX view persistence (survives a MASTER restart): a { [monitor_id] =
+    -- view_key } snapshot loaded by the caller (init_runtime.lua, from
+    -- /xreactor_config/master.lua) and a callback invoked on every user
+    -- view-cycle so the caller can write the new choice back out.
+    persisted_view_keys = opts.persisted_view_keys or {},
+    on_aux_view_change = opts.on_aux_view_change
   }, { __index = M })
 end
 
@@ -111,7 +123,15 @@ function M:resolve_view_key(session, index)
   return session.view_key or default_view(index, self.view_order)
 end
 
-function M:resolve_binding(index, prior)
+local function view_is_valid(view_key, views)
+  if not view_key then return false end
+  for _, v in ipairs(views) do
+    if v == view_key then return true end
+  end
+  return false
+end
+
+function M:resolve_binding(index, prior, id)
   local prior_session = prior or {}
   local role = resolve_role(index)
   local locked = resolve_locked(index)
@@ -128,15 +148,19 @@ function M:resolve_binding(index, prior)
     -- resolve_binding() bei JEDEM render()-Tick auf, das wuerde sonst eine
     -- per Touch umgeschaltete AUX-View bei der naechsten Render-Runde
     -- sofort wieder verwerfen.
+    local views = self.view_order or AUX_VIEWS_FALLBACK
     local prior_view = prior_session.view_key
-    local prior_valid = false
-    if prior_view then
-      local views = self.view_order or AUX_VIEWS_FALLBACK
-      for _, v in ipairs(views) do
-        if v == prior_view then prior_valid = true break end
-      end
+    if view_is_valid(prior_view, views) then
+      view_key = prior_view
+    else
+      -- Kein In-Memory-Prior (allererstes Binden nach einem Neustart):
+      -- die zuletzt per Touch gewaehlte View dieses physischen Monitors
+      -- (ueber seine stabile Registry-ID, siehe monitor_manager.lua)
+      -- aus /xreactor_config/master.lua wiederherstellen, statt immer auf
+      -- die erste View im Zyklus zurueckzufallen.
+      local persisted = id and self.persisted_view_keys and self.persisted_view_keys[id]
+      view_key = view_is_valid(persisted, views) and persisted or default_view(index, self.view_order)
     end
-    view_key = prior_valid and prior_view or default_view(index, self.view_order)
   end
   return role, locked, view_key
 end
@@ -179,7 +203,7 @@ function M:bind_or_update(monitors, desired_scale, view_order)
       rebind_pending = rebound
     }
 
-    local role, locked, view_key = self:resolve_binding(i, prior)
+    local role, locked, view_key = self:resolve_binding(i, prior, id)
     session.role = role
     session.locked = locked
     session.view_key = view_key

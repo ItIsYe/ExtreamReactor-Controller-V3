@@ -140,7 +140,14 @@ function M.new(opts)
     views = opts.views or {},
     view_order = opts.view_order or { "overview", "rt", "energy" },
     on_action = opts.on_action,
-    sessions = sessions_lib.new({ view_order = opts.view_order })
+    -- persisted_view_keys/on_aux_view_change: let AUX monitors reopen on
+    -- the page they were on before a MASTER restart instead of always
+    -- resetting to the first view in the cycle (see monitor_sessions.lua).
+    sessions = sessions_lib.new({
+      view_order = opts.view_order,
+      persisted_view_keys = opts.persisted_view_keys,
+      on_aux_view_change = opts.on_aux_view_change
+    })
   }
   return setmetatable(self, { __index = M })
 end
