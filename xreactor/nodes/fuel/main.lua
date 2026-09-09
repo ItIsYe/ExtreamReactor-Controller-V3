@@ -84,10 +84,10 @@ local DEFAULT_CONFIG = {
   heartbeat_interval = 2,
   discovery_interval = 15,
   status_interval = 5,
-  -- FUEL Advanced Monitor: supported values are 1.0 and 0.5.
-  -- 0.5 keeps the logical 82x40 page geometry but fills the 164x81 monitor
-  -- via a 2x fullscreen surface; text remains native/small at scale 0.5.
-  ui_scale = 0.5,
+  -- FUEL Advanced Monitor: fixed to TextScale 1.0 / 82x40. 0.5 is still
+  -- accepted for backwards compatibility with old configs, but monitor_scada
+  -- now forces 1.0 regardless of this value.
+  ui_scale = 1.0,
   channels = { control = constants.channels.CONTROL, status = constants.channels.STATUS },
   comms = {
     ack_timeout_s = 3.0, max_retries = 4, backoff_base_s = 0.6, backoff_cap_s = 6.0,

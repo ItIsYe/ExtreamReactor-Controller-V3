@@ -1,6 +1,5 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Fixed 82x40 presentation/touch geometry harness.
 package.preload['shared.colors'] = function()
   return { get = function(name) return name end }
 end
@@ -9,6 +8,7 @@ package.preload['shared.constants'] = function()
 end
 
 local drawn_buttons = {}
+local drawn_text = {}
 package.preload['core.mockup_ui'] = function()
   local M = {}
   M.fit = function(text, width)
@@ -20,8 +20,11 @@ package.preload['core.mockup_ui'] = function()
   end
   local noop = function() end
   M.clear, M.header, M.banner, M.metric_card = noop, noop, noop, noop
-  M.text, M.data_row, M.outlined_progress, M.section = noop, noop, noop, noop
+  M.data_row, M.outlined_progress, M.section = noop, noop, noop
   M.card, M.warning_box, M.status_dot, M.table_header = noop, noop, noop, noop
+  M.text = function(_, x, y, text)
+    drawn_text[#drawn_text + 1] = { x=x, y=y, text=tostring(text or '') }
+  end
   M.button = function(_, x, y, w, label, _, h)
     h = math.max(1, tonumber(h) or 1)
     local r = { x1 = x, x2 = x + w - 1, y = y, y2 = y + h - 1, label = label }
@@ -67,18 +70,27 @@ local function assert_inside(r)
   assert(r.x1 >= 1 and r.x2 <= 82 and r.y >= 1 and r.y2 <= 40, 'touch rectangle outside 82x40')
 end
 
-
--- Global page footer: visible 3-row buttons must return the same 3-row touch rectangles.
+-- Fixed scale monitor and smaller shared footer.
 do
+  local scale = 0.5
+  local physical = {
+    getTextScale=function() return scale end,
+    setTextScale=function(v) scale=v end,
+    getSize=function() if scale == 1.0 then return 82,40 end return 164,81 end,
+    setBackgroundColor=function() end,
+    clear=function() end,
+  }
   local ms = require('nodes.fuel.monitor_scada')
+  local ready,w,h = ms.ensure(physical,0.5)
+  assert(ready and w==82 and h==40 and scale==1.0)
   drawn_buttons = {}
   local footer = ms.footer(mon(82, 40), 'FUEL OVERVIEW')
-  assert(height(footer.left) == 3 and height(footer.right) == 3, 'global footer touch height must match visible 3-row buttons')
-  assert(footer.left.y == 38 and footer.left.y2 == 40)
-  assert(footer.right.y == 38 and footer.right.y2 == 40)
+  assert(height(footer.left) == 2 and height(footer.right) == 2)
+  assert(footer.left.x1 == 3 and footer.left.x2 == 17 and footer.left.y == 38 and footer.left.y2 == 39)
+  assert(footer.right.x1 == 65 and footer.right.x2 == 79 and footer.right.y == 38 and footer.right.y2 == 39)
 end
 
--- Overview/Details/Diagnostics: always fixed SCADA, no small-screen legacy path.
+-- Overview/Details/Diagnostics.
 do
   local scada = require('nodes.fuel.scada_layout')
   local ui = {}
@@ -99,32 +111,39 @@ do
     },
   }
 
-  drawn_buttons = {}
+  drawn_buttons, drawn_text = {}, {}
   ui.render_overview(mon(82, 40), model, true)
   local s = ui.get_completion_state()
-  assert(s.fixed_width == 82 and s.fixed_height == 40, 'fixed contract must be 82x40')
+  assert(s.fixed_width == 82 and s.fixed_height == 40)
   assert(s.scada_overview_page == 1)
-  assert(ui.handle_overview_touch(65, 33) == true, 'overview page button must consume all three visible rows')
+  assert(ui.handle_overview_touch(70, 34) == true, 'overview next button must consume visible 2-row rectangle')
   assert(ui.get_completion_state().scada_overview_page == 2)
 
+  -- With only two configured reactors, all remaining slots must still be visible.
+  model.payload.logistics.reactors = reactors(2)
+  drawn_text = {}
+  ui.render_overview(mon(82, 40), model, true)
+  local missing = false
+  for _, t in ipairs(drawn_text) do
+    if t.text:find('NICHT KONFIGURIERT', 1, true) then missing = true; break end
+  end
+  assert(missing, 'Overview must visibly keep unconfigured reactor slots')
+
+  model.payload.logistics.reactors = reactors(20)
   drawn_buttons = {}
   ui.render_details(mon(82, 40), model, true)
   s = ui.get_completion_state()
   assert_inside(s.details_next)
-  assert(height(s.details_next) == 3, 'details reactor navigation must be 3 rows high')
-  assert(ui.handle_details_touch(s.details_next.x1, s.details_next.y2) == true,
-    'bottom row of visible details button must be touchable')
+  assert(height(s.details_next) == 2)
+  assert(ui.handle_details_touch(s.details_next.x1, s.details_next.y2) == true)
 
   drawn_buttons = {}
   ui.render_diagnostics(mon(82, 40), model, true)
-  assert(ui.handle_diagnostics_touch(10, 10) == false, 'diagnostics has no hidden touch action')
-
-  -- Wrong size may show only the fixed-size error, never a legacy UI.
+  assert(ui.handle_diagnostics_touch(10, 10) == false)
   assert(ui.render_overview(mon(60, 25), model, true) == false)
 end
 
--- Every router mode uses only the fixed renderer and every operational touch
--- reference is the rectangle returned by a visible mux.button.
+-- Router geometry.
 do
   local sr = require('nodes.fuel.router_scada')
   local rs = reactors(16)
@@ -144,42 +163,36 @@ do
   }
   sr.attach(router)
 
-  drawn_buttons = {}
   router:_render_list(mon(82, 40), 82, 40)
-  assert(#router._ui.reactor_btns == 8, 'router list intentionally pages 8 reactors')
-  assert(height(router._ui.reactor_btns[1]) == 2, 'visible BEARB button must be 2 rows high')
-  assert(height(router._ui.logistics_btn) == 3 and height(router._ui.export_chest_btn) == 3 and height(router._ui.learn_btn) == 3)
-  assert(height(router._ui.save_btn) == 3 and height(router._ui.reset_btn) == 3)
+  assert(#router._ui.reactor_btns == 8)
+  assert(height(router._ui.reactor_btns[1]) == 2)
+  assert(height(router._ui.logistics_btn) == 2 and height(router._ui.export_chest_btn) == 2 and height(router._ui.learn_btn) == 2)
+  assert(height(router._ui.save_btn) == 2 and height(router._ui.reset_btn) == 2)
   assert_inside(router._ui.list_scroll_down)
-  assert(height(router._ui.list_scroll_down) == 3)
+  assert(height(router._ui.list_scroll_down) == 2)
 
   router._ui.editing = rs[1]
-  drawn_buttons = {}
   router:_render_edit(mon(82, 40), 82, 40)
-  assert(height(router._ui.path_row) == 3)
-  assert(height(router._ui.request_below_minus) == 3 and height(router._ui.request_below_plus) == 3)
-  assert(height(router._ui.cooldown_minus) == 3 and height(router._ui.cooldown_plus) == 3)
-  assert(height(router._ui.edit_done_btn) == 3 and height(router._ui.edit_delete_btn) == 3 and height(router._ui.edit_cancel_btn) == 3)
+  assert(height(router._ui.path_row) == 2)
+  assert(height(router._ui.request_below_minus) == 2 and height(router._ui.request_below_plus) == 2)
+  assert(height(router._ui.cooldown_minus) == 2 and height(router._ui.cooldown_plus) == 2)
+  assert(height(router._ui.edit_done_btn) == 2 and height(router._ui.edit_delete_btn) == 2 and height(router._ui.edit_cancel_btn) == 2)
 
-  drawn_buttons = {}
   router:_render_learn(mon(82, 40), 82, 40)
   assert(#router._ui.learn_btns == 1 and height(router._ui.learn_btns[1]) == 2)
-  assert(height(router._ui.learn_cancel_btn) == 3)
+  assert(height(router._ui.learn_cancel_btn) == 2)
 
-  drawn_buttons = {}
   router:_render_chest_pick(mon(82, 40), 82, 40)
   assert(#router._ui.chest_btns == 1 and height(router._ui.chest_btns[1]) == 2)
-  assert(height(router._ui.chest_cancel_btn) == 3)
+  assert(height(router._ui.chest_cancel_btn) == 2)
 
   router._ui.editing = rs[1]
-  drawn_buttons = {}
   router:_render_path(mon(82, 40), 82, 40)
-  assert(height(router._ui.teach_btn) == 3)
+  assert(height(router._ui.teach_btn) == 2)
   assert(#router._ui.step_btns > 0 and height(router._ui.step_btns[1]) == 2)
   assert(#router._ui.integrator_btns > 0 and height(router._ui.integrator_btns[1]) == 2)
-  assert(height(router._ui.path_done_btn) == 3 and height(router._ui.path_clear_btn) == 3 and height(router._ui.path_cancel_btn) == 3)
+  assert(height(router._ui.path_done_btn) == 2 and height(router._ui.path_clear_btn) == 2 and height(router._ui.path_cancel_btn) == 2)
 
-  -- Wrong size never calls a legacy renderer: it clears all operational touch refs.
   router:_render_list(mon(60, 25), 60, 25)
   assert(router._ui.logistics_btn == nil and #router._ui.reactor_btns == 0)
 end
