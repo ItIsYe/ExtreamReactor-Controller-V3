@@ -33,6 +33,9 @@ local DEFAULT_CONFIG = {
   node_id = "VALVE-1",
   debug_logging = false,
   reset_log_on_start = true,
+  -- Built-in terminal: 1.0 normal layout, 0.5 compact density.
+  -- term has no setTextScale(), so this does not change the physical font.
+  ui_scale = 1.0,
   wireless_modem = nil,
   sorter_name = nil,
   -- Redstone-Fallback-Seite, NUR verwendet wenn kein Sorter gefunden werden
@@ -90,6 +93,13 @@ end
 if type(tonumber(config.hop_scan_interval)) ~= "number" or tonumber(config.hop_scan_interval) <= 0 then
   add_config_warning("hop_scan_interval ungueltig, verwende Default 4")
   config.hop_scan_interval = 4
+end
+local valve_ui_scale = tonumber(config.ui_scale)
+if valve_ui_scale ~= 0.5 and valve_ui_scale ~= 1.0 then
+  add_config_warning("ui_scale ungueltig; erlaubt sind 1.0 und 0.5; verwende 1.0")
+  config.ui_scale = 1.0
+else
+  config.ui_scale = valve_ui_scale
 end
 
 local node_id = support_runtime.init_logging({
@@ -199,6 +209,7 @@ local valve_ui = valve_local_ui.new({
   node_id = node_id,
   label = valve_label,
   modem_name = valve_modem_name,
+  ui_scale = config.ui_scale,
   is_master_reachable = function() return comms:is_master_reachable() end,
   get_comms_diagnostics = function() return comms:get_diagnostics() end,
   get_hop_status = function()

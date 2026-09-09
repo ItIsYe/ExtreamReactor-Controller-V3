@@ -136,12 +136,14 @@ function M.render_monitor(ctx, model)
   end
   ensure_completion(ctx)
   local mon = devices.monitor
-  local ready, detected_w, detected_h = monitor_scada.ensure(mon)
+  local requested_scale = (ctx.config and ctx.config.ui_scale) or 1.0
+  local ready, detected_w, detected_h, scada_parent =
+    monitor_scada.ensure(mon, requested_scale)
   scada_ready = ready
   if not ready then
     current_mon = mon
     bound_monitor_name = devices.monitor_name
-    monitor_scada.render_size_error(mon, detected_w, detected_h)
+    monitor_scada.render_size_error(mon, detected_w, detected_h, requested_scale)
     return true
   end
   current_mon = mon
@@ -171,7 +173,9 @@ function M.render_monitor(ctx, model)
   if monitor_router.set_monitor_name then
     monitor_router:set_monitor_name(devices.monitor_name)
   end
-  local render_target, binding_changed = render_surface:bind(mon, devices.monitor_name)
+  local binding_name = tostring(devices.monitor_name or "monitor")
+    .. "@ui_scale=" .. tostring(requested_scale)
+  local render_target, binding_changed = render_surface:bind(scada_parent, binding_name)
   if binding_changed and monitor_router.invalidate_layout then
     monitor_router:invalidate_layout()
   end
@@ -188,13 +192,31 @@ function M.render_monitor(ctx, model)
   return result
 end
 
+local function localize_pointer_event(event)
+  if type(event) ~= "table" then return event, true end
+  local kind = event[1]
+  if kind ~= "monitor_touch" and kind ~= "mouse_click" then return event, true end
+  local lx, ly, inside = monitor_scada.touch_to_local(current_mon, event[3], event[4])
+  if not inside then return nil, false end
+  local localized = {}
+  for i = 1, #event do localized[i] = event[i] end
+  localized[3], localized[4] = lx, ly
+  return localized, true
+end
+
 function M.handle_input(event)
   if not scada_ready then return false end
   local kind = event and event[1]
   if kind == "monitor_touch" or kind == "mouse_click" or kind == "key" or kind == "char" then
     ui_diag_extra.pointer_events_received = ui_diag_extra.pointer_events_received + 1
   end
-  if monitor_router and monitor_router:handle_input(event) then
+  local routed_event, inside = localize_pointer_event(event)
+  if (kind == "monitor_touch" or kind == "mouse_click") and not inside then
+    log_touch_diag(event, "outside_scada_viewport")
+    return false
+  end
+  routed_event = routed_event or event
+  if monitor_router and monitor_router:handle_input(routed_event) then
     -- Covers both a footer prev/next hit AND a silently swallowed touch
     -- from a monitor other than the one FUEL is bound to (name mismatch --
     -- see router:monitor_touch_matches() in core/ui_router.lua). Can't
@@ -208,7 +230,7 @@ function M.handle_input(event)
   end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
-    local x, y = event and event[3], event and event[4]
+    local x, y = routed_event and routed_event[3], routed_event and routed_event[4]
     ui_diag_extra.page_handler_calls = ui_diag_extra.page_handler_calls + 1
     local consumed = page.handle_touch(x, y) == true
     log_touch_diag(event, consumed and "page_handler" or "page_handler_unconsumed")
@@ -230,9 +252,11 @@ end
 
 function M.handle_touch(x, y)
   if not scada_ready then return false end
+  local local_x, local_y, inside = monitor_scada.touch_to_local(current_mon, x, y)
+  if not inside then return false end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
-    local consumed = page.handle_touch(x, y) == true
+    local consumed = page.handle_touch(local_x, local_y) == true
     if consumed and monitor_router then
       if monitor_router.invalidate_content then monitor_router:invalidate_content() else monitor_router.last_snapshot = nil end
     end

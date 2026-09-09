@@ -32,8 +32,9 @@ assert 'scada_layout.attach(instance' in completion
 
 monitor_ui = (ROOT / 'xreactor/nodes/fuel/monitor_ui.lua').read_text(encoding='utf-8')
 main_lua = (ROOT / 'xreactor/nodes/fuel/main.lua').read_text(encoding='utf-8')
-assert 'local FUEL_MONITOR_SCALE = 1.0' in main_lua
-assert 'monitor_scada.ensure(mon)' in monitor_ui
+assert 'local FUEL_MONITOR_SCALE = config.ui_scale or 1.0' in main_lua
+assert 'monitor_scada.ensure(mon, requested_scale)' in monitor_ui
+assert 'monitor_scada.touch_to_local' in monitor_ui
 assert 'monitor_scada.footer(target, center)' in monitor_ui
 
 # Shared router must preserve optional y2 and hit the full visible rectangle.

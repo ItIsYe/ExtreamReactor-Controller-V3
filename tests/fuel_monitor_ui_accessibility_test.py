@@ -7,9 +7,9 @@ layout = Path('xreactor/nodes/fuel/scada_layout.lua').read_text(encoding='utf-8'
 router_scada = Path('xreactor/nodes/fuel/router_scada.lua').read_text(encoding='utf-8')
 ui_router = Path('xreactor/core/ui_router.lua').read_text(encoding='utf-8')
 
-assert 'local FUEL_MONITOR_SCALE = 1.0' in main
-assert 'local FUEL_MONITOR_SCALE = 0.5' not in main
-assert 'monitor_scada.ensure(mon)' in monitor_ui
+assert 'local FUEL_MONITOR_SCALE = config.ui_scale or 1.0' in main
+assert 'monitor_scada.ensure(mon, requested_scale)' in monitor_ui
+assert 'monitor_scada.touch_to_local' in monitor_ui
 assert 'return monitor_scada.footer(target, center)' in monitor_ui
 assert 'FALLBACK_UI_SCALE' not in monitor_ui
 assert 'MIN_LARGE_WIDTH' not in monitor_ui
@@ -18,6 +18,9 @@ assert 'MIN_LARGE_HEIGHT' not in monitor_ui
 assert 'local TARGET_W = 82' in monitor_scada
 assert 'local TARGET_H = 40' in monitor_scada
 assert 'local TARGET_SCALE = 1.0' in monitor_scada
+assert 'local COMPACT_SCALE = 0.5' in monitor_scada
+assert 'local EXPECTED_W_HALF = 164' in monitor_scada
+assert 'local EXPECTED_H_HALF = 81' in monitor_scada
 assert 'mux.button(mon, 2, 38, 22, "<< ZURUECK", "LIMITED", 3)' in monitor_scada
 assert 'mux.button(mon, 59, 38, 22, "WEITER >>", "LIMITED", 3)' in monitor_scada
 

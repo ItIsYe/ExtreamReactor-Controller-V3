@@ -84,6 +84,9 @@ local DEFAULT_CONFIG = {
   heartbeat_interval = 2,
   discovery_interval = 15,
   status_interval = 5,
+  -- FUEL Advanced Monitor: supported values are 1.0 and 0.5.
+  -- 0.5 keeps the same logical 82x40 SCADA surface in a centered viewport.
+  ui_scale = 1.0,
   channels = { control = constants.channels.CONTROL, status = constants.channels.STATUS },
   comms = {
     ack_timeout_s = 3.0, max_retries = 4, backoff_base_s = 0.6, backoff_cap_s = 6.0,
@@ -184,7 +187,7 @@ local master_alerts = {}
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
 local fuel_ui = fuel_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
-local FUEL_MONITOR_SCALE = 1.0
+local FUEL_MONITOR_SCALE = config.ui_scale or 1.0
 
 local function warn_once(key, message)
   support_runtime.warn_once(devices, function(msg, level) utils.log(CONFIG.LOG_PREFIX, msg, level) end, key, message)

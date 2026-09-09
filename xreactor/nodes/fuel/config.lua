@@ -9,6 +9,7 @@ local CONFIG = {
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
+  DEFAULT_UI_SCALE = 1.0, -- FUEL monitor: 1.0 normal, 0.5 physically smaller/centered.
   DEFAULT_CONTROL_CHANNEL = 6500, -- Control channel for MASTER commands.
   DEFAULT_STATUS_CHANNEL = 6501, -- Status channel for telemetry.
   DEFAULT_COMMS_ACK_TIMEOUT = 3.0, -- Seconds before retrying a command.
@@ -145,4 +146,5 @@ local CONFIG = {
 -- Muss NACH dem Tabellenkonstruktor stehen -- CONFIG existiert innerhalb
 -- des eigenen Konstruktors noch nicht (klassische Lua-Falle).
 CONFIG.logistics = CONFIG.DEFAULT_LOGISTICS
+CONFIG.ui_scale = CONFIG.DEFAULT_UI_SCALE
 return CONFIG

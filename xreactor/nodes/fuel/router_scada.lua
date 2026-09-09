@@ -103,7 +103,7 @@ local function draw_list(self, target, w, h)
   draw_header_state(target, w, self, u)
   draw_top_controls(target, u)
 
-  mux.card(target, 2, 9, 79, 23, { title = "REAKTOR ROUTEN", status = #u.reactors > 0 and "OK" or "WARNING", icon = "reactor" })
+  mux.card(target, 2, 9, 79, 24, { title = "REAKTOR ROUTEN", status = #u.reactors > 0 and "OK" or "WARNING", icon = "reactor" })
   mux.table_header(target, 4, 10, 75, {
     { label = "#", width = 4 }, { label = "REAKTOR", width = 18 },
     { label = "SCHWELLE / MENGE / ME / COOL / ROUTE", width = 43 }, { label = "AKTION", width = 10 },
@@ -214,7 +214,7 @@ local function draw_learn(self, target, w, h)
   clear_rect_refs(u)
   draw_header_state(target, w, self, u, "REAKTOR EINLERNEN")
   local candidates = learnable_reactors(self)
-  mux.card(target, 2, 5, 79, 27, { title = "AKTIVE RT-MELDUNGEN", status = #candidates > 0 and "OK" or "WARNING", icon = "network" })
+  mux.card(target, 2, 5, 79, 28, { title = "AKTIVE RT-MELDUNGEN", status = #candidates > 0 and "OK" or "WARNING", icon = "network" })
   u.learn_scroll = clamp(u.learn_scroll, 0, math.max(0, #candidates - PICKER_VISIBLE))
   local y = 8
   for i = u.learn_scroll + 1, math.min(#candidates, u.learn_scroll + PICKER_VISIBLE) do
@@ -248,7 +248,7 @@ local function draw_chest_pick(self, target, w, h)
   clear_rect_refs(u)
   draw_header_state(target, w, self, u, "EXPORT-KISTE WAEHLEN")
   local names = peripheral_names()
-  mux.card(target, 2, 5, 79, 27, { title = "ERKANNTE PERIPHERALS", status = #names > 0 and "OK" or "WARNING", icon = "output" })
+  mux.card(target, 2, 5, 79, 28, { title = "ERKANNTE PERIPHERALS", status = #names > 0 and "OK" or "WARNING", icon = "output" })
   u.chest_scroll = clamp(u.chest_scroll, 0, math.max(0, #names - PICKER_VISIBLE))
   local y = 8
   for i = u.chest_scroll + 1, math.min(#names, u.chest_scroll + PICKER_VISIBLE) do
@@ -295,8 +295,8 @@ local function draw_path(self, target, w, h)
     u.teaching and "EINLERNEN: AN - HEBEL AM VENTIL UMLEGEN" or "EINLERNEN: AUS - ANTIPPEN ZUM AKTIVIEREN",
     u.teaching and "OK" or "LIMITED", 3)
 
-  mux.card(target, 2, 9, 38, 22, { title = "AKTUELLE KETTE", status = path_count(editing) > 0 and "OK" or "WARNING", icon = "network" })
-  mux.card(target, 43, 9, 38, 22, { title = "VENTIL ANFUEGEN", status = "LIMITED", icon = "output" })
+  mux.card(target, 2, 9, 38, 23, { title = "AKTUELLE KETTE", status = path_count(editing) > 0 and "OK" or "WARNING", icon = "network" })
+  mux.card(target, 43, 9, 38, 23, { title = "VENTIL ANFUEGEN", status = "LIMITED", icon = "output" })
 
   u.path_scroll = clamp(u.path_scroll, 0, math.max(0, path_count(editing) - PATH_VISIBLE))
   local py = 12

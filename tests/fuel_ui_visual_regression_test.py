@@ -7,8 +7,9 @@ layout = (repo / 'xreactor/nodes/fuel/scada_layout.lua').read_text(encoding='utf
 router = (repo / 'xreactor/nodes/fuel/router_scada.lua').read_text(encoding='utf-8')
 monitor_scada = (repo / 'xreactor/nodes/fuel/monitor_scada.lua').read_text(encoding='utf-8')
 
-assert 'local FUEL_MONITOR_SCALE = 1.0' in main
-assert 'monitor_scada.ensure(mon)' in monitor
+assert 'local FUEL_MONITOR_SCALE = config.ui_scale or 1.0' in main
+assert 'monitor_scada.ensure(mon, requested_scale)' in monitor
+assert 'monitor_scada.touch_to_local' in monitor
 assert 'render_size_error' in monitor_scada
 assert 'KEIN altes Fallback-Layout' in monitor_scada
 

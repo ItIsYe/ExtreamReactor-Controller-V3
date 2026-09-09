@@ -9,6 +9,15 @@ end
 function M.normalize(config_values, defaults, add_warning, utils)
   non_rt_config.apply_common(config_values, defaults, add_warning, utils)
 
+  local ui_scale = tonumber(config_values.ui_scale)
+  if ui_scale ~= 0.5 and ui_scale ~= 1.0 then
+    config_values.ui_scale = tonumber(defaults.ui_scale) or 1.0
+    add_warning("ui_scale invalid; supported values are 1.0 and 0.5; defaulting to "
+      .. tostring(config_values.ui_scale))
+  else
+    config_values.ui_scale = ui_scale
+  end
+
   if config_values.storage_bus ~= nil and type(config_values.storage_bus) ~= "string" then
     config_values.storage_bus = defaults.storage_bus
     add_warning("storage_bus invalid; defaulting to " .. tostring(defaults.storage_bus))
