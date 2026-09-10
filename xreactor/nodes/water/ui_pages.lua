@@ -62,25 +62,35 @@ function M.new(opts)
     local clusters = p.clusters or {}
     local banner, key, filling, draining = water_state(model, clusters)
 
-    mux.banner(mon, 2, 5, w - 3, "> " .. banner, key, nil)
+    -- Gleiches Muster wie nodes/rt/mockup_pages.lua's render_overview():
+    -- ohne Skalierung standen alle Bloecke auf fixen Zeilennummern, und ein
+    -- Monitor groesser als das ~19-Zeilen-Referenzlayout blieb im unteren
+    -- Teil einfach leer.
+    local content_top = 5
+    local content_bottom = math.max(content_top + 19, h - 2)
+    local content_h = content_bottom - content_top
+    local scale = math.max(1.0, content_h / 19)
+    local function y_at(offset) return content_top + math.floor(offset * scale) end
+
+    mux.banner(mon, 2, y_at(0), w - 3, "> " .. banner, key, nil)
 
     if w >= 54 then
       local gap = 1
       local cw = math.floor((w - 4 - gap * 2) / 3)
-      mux.metric_card(mon, 2, 7, cw, 4, { label = "GESAMT", value = short(total, "mB"), status = key, icon = "water" })
-      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "TANKS", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" })
-      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
+      mux.metric_card(mon, 2, y_at(2), cw, 4, { label = "GESAMT", value = short(total, "mB"), status = key, icon = "water" })
+      mux.metric_card(mon, 2 + cw + gap, y_at(2), cw, 4, { label = "TANKS", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, y_at(2), cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
     else
-      mux.kpi_strip(mon, 2, 7, w - 3, {
+      mux.kpi_strip(mon, 2, y_at(2), w - 3, {
         { label = "GESAMT", value = short(total), status = key, icon = "water" },
         { label = "TANKS", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" },
         { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
       })
     end
 
-    section_arrow(mon, 2, 12, w - 3, "GESAMT FUELLSTAND", key, "water")
-    mux.outlined_progress(mon, 2, 14, w - 3, ratio or 0, key, ratio and string.format("%.0f%%", ratio * 100) or "n/a")
-    mux.data_row(mon, 2, 15, w - 3, { label = short(total, "mB") .. " / " .. short(target, "mB"), value = "TARGET", status = "text", icon = "storage" })
+    section_arrow(mon, 2, y_at(7), w - 3, "GESAMT FUELLSTAND", key, "water")
+    mux.outlined_progress(mon, 2, y_at(9), w - 3, ratio or 0, key, ratio and string.format("%.0f%%", ratio * 100) or "n/a")
+    mux.data_row(mon, 2, y_at(10), w - 3, { label = short(total, "mB") .. " / " .. short(target, "mB"), value = "TARGET", status = "text", icon = "storage" })
 
     if h >= 20 then
       local cw = math.floor((w - 5 - 3) / 4)
@@ -91,14 +101,14 @@ function M.new(opts)
         { label = "LAST SCAN", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" },
       }
       for i, item in ipairs(items) do
-        mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 17, cw, 4, item)
+        mux.metric_card(mon, 2 + (i - 1) * (cw + 1), y_at(12), cw, 4, item)
       end
     end
 
     if h >= 25 then
-      section_arrow(mon, 2, 22, w - 3, "TANK SNAPSHOT", "LIMITED", "storage")
+      section_arrow(mon, 2, y_at(17), w - 3, "TANK SNAPSHOT", "LIMITED", "storage")
       local b = buffers[1]
-      mux.data_row(mon, 2, 24, w - 3, { label = b and tostring(b.id or "TANK 1") or "KEIN TANK", value = b and short(b.level, "mB") or "-", status = b and "OK" or "WARNING", icon = "storage" })
+      mux.data_row(mon, 2, y_at(19), w - 3, { label = b and tostring(b.id or "TANK 1") or "KEIN TANK", value = b and short(b.level, "mB") or "-", status = b and "OK" or "WARNING", icon = "storage" })
     end
 
     return mux.footer_nav(mon, h, w, { center = "WATER OVERVIEW" })

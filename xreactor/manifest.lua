@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 655,
-  manifest_id = "manifest-v655",
+  manifest_version = 656,
+  manifest_id = "manifest-v656",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "8e03be10", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "761d58d8", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -165,13 +165,13 @@ return {
     { path = "nodes/energy/status_payload.lua", size_bytes = 9098, hash = "f01b2d8b", required_for={"ENERGY"} },
     { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 6118, hash = "04b90706", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_model.lua", size_bytes = 4152, hash = "e44f676b", required_for={"ENERGY"} },
-    { path = "nodes/energy/ui_pages.lua", size_bytes = 19742, hash = "a0795dcf", required_for={"ENERGY"} },
+    { path = "nodes/energy/ui_pages.lua", size_bytes = 20318, hash = "9feb81df", required_for={"ENERGY"} },
     },
     water = {
     { path = "nodes/water/config.lua", size_bytes = 3884, hash = "1804d0e7", required_for={"WATER"} },
     { path = "nodes/water/config_normalizer.lua", size_bytes = 2642, hash = "f7ad6214", required_for={"WATER"} },
     { path = "nodes/water/main.lua", size_bytes = 26491, hash = "6560e8f9", required_for={"WATER"} },
-    { path = "nodes/water/ui_pages.lua", size_bytes = 10862, hash = "cfbbd586", required_for={"WATER"} },
+    { path = "nodes/water/ui_pages.lua", size_bytes = 11449, hash = "7278565f", required_for={"WATER"} },
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },
     fuel = {
@@ -203,7 +203,7 @@ return {
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2955, hash = "2e70a592", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/feed_router.lua", size_bytes = 15364, hash = "1705bcdc", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/main.lua", size_bytes = 25383, hash = "3f80a780", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11485, hash = "40f047a9", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 12284, hash = "f3722d21", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 2788, hash = "a7168614", required_for={"VALVE"} },

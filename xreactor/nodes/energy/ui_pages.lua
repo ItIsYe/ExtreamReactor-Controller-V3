@@ -85,26 +85,37 @@ function M.new(opts)
     local total = model.total or {}
     local banner, key = storage_banner(model)
     local trend, trend_key = trend_label(total)
-    mux.banner(mon, 2, 5, w - 3, "> " .. banner, key, nil)
+
+    -- Gleiches Muster wie nodes/rt/mockup_pages.lua's render_overview():
+    -- ohne Skalierung standen alle Bloecke auf fixen Zeilennummern, und ein
+    -- Monitor groesser als das ~19-Zeilen-Referenzlayout blieb im unteren
+    -- Teil einfach leer.
+    local content_top = 5
+    local content_bottom = math.max(content_top + 19, h - 2)
+    local content_h = content_bottom - content_top
+    local scale = math.max(1.0, content_h / 19)
+    local function y_at(offset) return content_top + math.floor(offset * scale) end
+
+    mux.banner(mon, 2, y_at(0), w - 3, "> " .. banner, key, nil)
 
     local gap = 1
     if w >= 54 then
       local cw = math.floor((w - 4 - gap * 2) / 3)
-      mux.metric_card(mon, 2, 7, cw, 4, { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" })
-      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "INPUT", value = format_energy(total.input), unit = "RF/t", status = "LIMITED", icon = "input" })
-      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "OUTPUT", value = format_energy(total.output), unit = "RF/t", status = "OK", icon = "output" })
+      mux.metric_card(mon, 2, y_at(2), cw, 4, { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" })
+      mux.metric_card(mon, 2 + cw + gap, y_at(2), cw, 4, { label = "INPUT", value = format_energy(total.input), unit = "RF/t", status = "LIMITED", icon = "input" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, y_at(2), cw, 4, { label = "OUTPUT", value = format_energy(total.output), unit = "RF/t", status = "OK", icon = "output" })
     else
-      mux.kpi_strip(mon, 2, 7, w - 3, {
+      mux.kpi_strip(mon, 2, y_at(2), w - 3, {
         { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" },
         { label = "INPUT", value = format_energy(total.input), status = "LIMITED", icon = "input" },
         { label = "OUTPUT", value = format_energy(total.output), status = "OK", icon = "output" },
       })
     end
 
-    section_arrow(mon, 2, 12, w - 3, "ENERGY STORAGE", key, "storage")
-    mux.outlined_progress(mon, 2, 14, w - 3, total.percent or 0, key, format_percent(total.percent))
+    section_arrow(mon, 2, y_at(7), w - 3, "ENERGY STORAGE", key, "storage")
+    mux.outlined_progress(mon, 2, y_at(9), w - 3, total.percent or 0, key, format_percent(total.percent))
     if h >= 16 then
-      mux.data_row(mon, 2, 15, w - 3, { label = format_energy(total.stored) .. " / " .. format_energy(total.capacity), value = "RF", status = "text", icon = "storage" })
+      mux.data_row(mon, 2, y_at(10), w - 3, { label = format_energy(total.stored) .. " / " .. format_energy(total.capacity), value = "RF", status = "text", icon = "storage" })
     end
 
     if h >= 20 then
@@ -130,7 +141,7 @@ function M.new(opts)
         { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
       }
       for i, item in ipairs(items) do
-        mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 17, cw, 4, item)
+        mux.metric_card(mon, 2 + (i - 1) * (cw + 1), y_at(12), cw, 4, item)
       end
     end
 

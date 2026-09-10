@@ -70,25 +70,38 @@ function M.new(opts)
     local key = p.standby and "LIMITED" or model.status == "OK" and "OK" or "WARNING"
     local banner = p.standby and "AUFBEREITUNG STANDBY" or model.status == "OK" and "AUFBEREITUNG NORMAL" or "AUFBEREITUNG WARNING"
 
-    mux.banner(mon, 2, 5, w - 3, "> " .. banner, key, nil)
+    -- Auf einem Monitor, der groesser ist als das urspruengliche Referenz-
+    -- Layout (~19 Content-Zeilen ab Zeile 5), blieb der untere Teil des
+    -- Bildschirms schlicht leer -- alle Bloecke standen auf fixen
+    -- Zeilennummern statt sich proportional zu verteilen. Gleiches Muster
+    -- wie nodes/rt/mockup_pages.lua's render_overview(): scale bleibt bei
+    -- 1.0 (Original-Abstaende) auf kleinen Monitoren, waechst nur wenn
+    -- mehr Platz da ist.
+    local content_top = 5
+    local content_bottom = math.max(content_top + 19, h - 2)
+    local content_h = content_bottom - content_top
+    local scale = math.max(1.0, content_h / 19)
+    local function y_at(offset) return content_top + math.floor(offset * scale) end
+
+    mux.banner(mon, 2, y_at(0), w - 3, "> " .. banner, key, nil)
 
     if w >= 54 then
       local gap = 1
       local cw = math.floor((w - 4 - gap * 2) / 3)
-      mux.metric_card(mon, 2, 7, cw, 4, { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" })
-      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = active > 0 and "OK" or "LIMITED", icon = "recycle" })
-      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
+      mux.metric_card(mon, 2, y_at(2), cw, 4, { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" })
+      mux.metric_card(mon, 2 + cw + gap, y_at(2), cw, 4, { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = active > 0 and "OK" or "LIMITED", icon = "recycle" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, y_at(2), cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
     else
-      mux.kpi_strip(mon, 2, 7, w - 3, {
+      mux.kpi_strip(mon, 2, y_at(2), w - 3, {
         { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" },
         { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = "OK", icon = "recycle" },
         { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
       })
     end
 
-    section_arrow(mon, 2, 12, w - 3, "PUFFER AUSLASTUNG", key, "storage")
-    mux.outlined_progress(mon, 2, 14, w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
-    mux.data_row(mon, 2, 15, w - 3, { label = short(stored) .. " / " .. short(capacity), value = "BUFFER", status = "text", icon = "storage" })
+    section_arrow(mon, 2, y_at(7), w - 3, "PUFFER AUSLASTUNG", key, "storage")
+    mux.outlined_progress(mon, 2, y_at(9), w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
+    mux.data_row(mon, 2, y_at(10), w - 3, { label = short(stored) .. " / " .. short(capacity), value = "BUFFER", status = "text", icon = "storage" })
 
     if h >= 20 then
       local cw = math.floor((w - 5 - 3) / 4)
@@ -98,13 +111,13 @@ function M.new(opts)
         { label = "ROUTEN", value = string.format("%d/%d", routes_active, routes_total), status = routes_active > 0 and "OK" or "LIMITED", icon = "network" },
         { label = "MODE", value = p.standby and "STANDBY" or "ACTIVE", status = key, icon = "config" },
       }
-      for i, item in ipairs(items) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 17, cw, 4, item) end
+      for i, item in ipairs(items) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), y_at(12), cw, 4, item) end
     end
 
     if h >= 25 then
-      section_arrow(mon, 2, 22, w - 3, "VERARBEITUNGSLINIEN", "LIMITED", "recycle")
+      section_arrow(mon, 2, y_at(17), w - 3, "VERARBEITUNGSLINIEN", "LIMITED", "recycle")
       local b = buffers[1]
-      mux.data_row(mon, 2, 24, w - 3, { label = b and tostring(b.id or "LINE 1") or "KEINE LINIE", value = b and tostring(b.process_state or "unknown"):upper() or "-", status = b and state_key(b.process_state) or "WARNING", icon = "recycle" })
+      mux.data_row(mon, 2, y_at(19), w - 3, { label = b and tostring(b.id or "LINE 1") or "KEINE LINIE", value = b and tostring(b.process_state or "unknown"):upper() or "-", status = b and state_key(b.process_state) or "WARNING", icon = "recycle" })
     end
 
     return mux.footer_nav(mon, h, w, { center = "REPROCESSING" })
