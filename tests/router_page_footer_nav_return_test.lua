@@ -83,25 +83,26 @@ return ]] .. entry_src
 end
 
 -- 2. nodes/reprocessor/main.lua's "Router"-Eintrag verwendet weiterhin
--- direkt den Footer von router_ui:render().
+-- direkt den Footer von color_router_ui:render() (der Sorter-Farb-Router,
+-- der den frueheren Ventil-Pfad-router_ui.lua ersetzt hat).
 do
   local source = read_file('xreactor/nodes/reprocessor/main.lua')
   local entry_src = extract(source,
     '{ name = "Router", render = function(target, m, should_clear)',
-    'get_router_ui():handle_touch(x, y) end }')
+    'get_color_router():handle_touch(x, y) end }')
 
   local mock_footer = { left = { x1 = 2, x2 = 10, y = 20 }, right = { x1 = 50, x2 = 60, y = 20 } }
-  local mock_router_ui = {
+  local mock_color_router = {
     render = function(_self, _target, _ui, _colors, _should_clear) return mock_footer end,
     handle_touch = function(_self, _x, _y) return true end,
   }
 
   local chunk = [[
-local get_router_ui = function() return ROUTER_UI_MOCK end
+local get_color_router = function() return COLOR_ROUTER_MOCK end
 local ui, colors = nil, nil
 return ]] .. entry_src
 
-  local env = { ROUTER_UI_MOCK = mock_router_ui }
+  local env = { COLOR_ROUTER_MOCK = mock_color_router }
   env._G = env
   local fn = assert(load(chunk, 'reprocessor_router_page_entry_chunk', 't', env))
   local entry = fn()
@@ -109,7 +110,7 @@ return ]] .. entry_src
   assert_true(type(entry.render) == 'function', 'the REPROCESSOR Router page entry must have a render field')
   local result = entry.render('MON', 'MODEL', true)
   assert_true(result == mock_footer,
-    'nodes/reprocessor/main.lua: Router page render() must return router_ui:render() footer geometry')
+    'nodes/reprocessor/main.lua: Router page render() must return color_router_ui:render() footer geometry')
 end
 
 print("router_page_footer_nav_return_test.lua: ok")

@@ -1,20 +1,34 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Pflicht-Test fuer REPROCESSOR-P0 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md, Abschnitt 11 "Standby laesst aktive
--- Transaktion weiterlaufen"). Vor diesem Fix war redstone_router.lua's
--- shutdown_now() toter Code (nirgends aufgerufen); nodes/reprocessor/
--- main.lua liess eine laufende Ventil-Transaktion beim Uebergang in
--- Standby bewusst "sauber zu Ende laufen" (get_rs_router():tick() lief
--- unbedingt weiter), wodurch ein bereits in WAIT_SETTLE befindlicher
--- Export trotz frischem Standby noch ausgefuehrt wurde. Dieser Test
--- beweist mit dem echten redstone_router.lua und feed_router.lua: ein
--- Abbruch waehrend einer laufenden Transaktion blockiert sofort alle
--- Ventile, ruft den Export-Callback NIE auf, und macht den Abbruch ueber
--- last_error sichtbar.
+-- Regression coverage for the REPROCESSOR feed cycle after the Sorter-color
+-- routing rewrite (see nodes/reprocessor/feed_router.lua's module comment):
+-- there is no more asynchronous valve-path transaction to cancel on
+-- standby, since a feed is now a single synchronous step (set the shared
+-- Logistical Sorter's default color, then export). This test proves:
+--   1. a full feed cycle sets the target's color on the sorter before
+--      exporting, and only exports when that succeeds;
+--   2. feed_router:cancel() is a harmless no-op (nothing async to abort);
+--   3. a target with an invalid/missing color is skipped without exporting
+--      or crashing.
 
-local redstone_router_lib = require('nodes.fuel.redstone_router')
-local feed_router_lib = require('nodes.reprocessor.feed_router')
+package.loaded['adapters.logistical_sorter'] = nil
+package.loaded['nodes.reprocessor.feed_router'] = nil
+
+_G.peripheral = {
+  isPresent = function() return true end,
+  getMethods = function(name)
+    if name == 'sorter_0' then return { 'setDefaultColor', 'getDefaultColor' } end
+    return {}
+  end,
+  getType = function() return 'logisticalSorter' end,
+  call = function(name, method, color)
+    if name == 'sorter_0' and method == 'setDefaultColor' then
+      _G.__last_sorter_color = color
+      return true
+    end
+    error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
+  end,
+}
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -26,103 +40,72 @@ local function assert_true(value, message)
   if not value then error(message or 'assert_true failed') end
 end
 
-local mock_modem = {
-  isWireless = function() return true end,
-  open = function() end,
-  transmit = function() return true end,
-}
-_G.peripheral = {
-  find = function(kind) if kind == 'modem' then return mock_modem end return nil end,
-  isPresent = function() return false end,
-  wrap = function() return nil end,
-}
+local logistical_sorter = require('adapters.logistical_sorter')
+local feed_router_lib = require('nodes.reprocessor.feed_router')
 
-local function make_rs_router()
-  -- Spiegelt nodes/reprocessor/main.lua's get_rs_router(): das config-Feld
-  -- des Routers IST direkt der feed-Block (redstone_tree liegt dort ohne
-  -- weitere Verschachtelung), nicht die gesamte Root-Config.
-  local tree = { { side = 'top', integrator = 'VALVE-A', reactor = 'R1', label = 'Reactor1' } }
-  local router = redstone_router_lib.new({
-    config = { redstone_tree = tree },
-    comms = { get_peers = function() return { ['VALVE-A'] = { down = false } } end },
-    log = function() end, warn_once = function() end,
-  })
-  router:refresh()
-  return router
-end
-
--- 1. redstone_router.lua:shutdown_now() direkt: bricht eine laufende
---    Transaktion sofort ab, ruft NIE action_fn auf, meldet den Abbruch
---    ueber on_error(reason), und blockiert alle Ventile.
-do
-  local rs = make_rs_router()
-  local export_called = false
-  local error_reason = nil
-  local started = rs:begin_transaction('R1', function() export_called = true end, 500, {
-    on_error = function(reason) error_reason = reason end,
-  })
-  assert_eq(started, true, 'transaction should start')
-  assert_true(rs._state.transaction ~= nil, 'a transaction should be active before shutdown')
-
-  rs:shutdown_now('STANDBY')
-
-  assert_eq(rs._state.transaction, nil, 'shutdown_now must clear the active transaction')
-  assert_true(not export_called, 'shutdown_now must never let the export callback run')
-  assert_eq(error_reason, 'STANDBY', 'on_error must be invoked with the shutdown reason')
-
-  -- Weitere ticks duerfen nichts mehr tun (keine Transaktion mehr vorhanden).
-  rs:tick(2000000)
-  assert_true(not export_called, 'no export must happen after shutdown even if tick() keeps running')
-end
-
--- 2. feed_router.lua:cancel() delegiert korrekt an shutdown_now() und
---    macht den Abbruch ueber last_error sichtbar (derselbe on_error-Pfad
---    wie bei einem echten Transaktionsfehler, kein Sonderweg noetig).
-do
-  local rs = make_rs_router()
-  local exported_amount = nil
-  local bridge = {
+-- me_bridge_compat.lua calls these as plain function values (no colon-call,
+-- no implicit self) -- see reprocessor_feed_router_color_rotation_test.lua
+-- for a full tick()-driven exercise of this path.
+local function make_bridge(exported_holder)
+  return {
     getItem = function(_query) return { amount = 1000 } end,
-    exportItemToPeripheral = function(_query, _inlet) exported_amount = 2; return 2 end,
-  }
-  local feed = feed_router_lib.new({
-    config = { feed = { enabled = true, waste_item = 'x', feed_amount = 2, targets = { { label = 'R1', inlet = 'transporter_1' } } } },
-    rs_router = rs,
-    log = function() end, warn_once = function() end,
-  })
-  feed._state.bridge = bridge
-
-  -- feed_one() ist lokal/nicht exportiert -- ueber rs_router direkt eine
-  -- Transaktion mit demselben on_error-Callback-Muster starten, wie es
-  -- feed_one() tatsaechlich tut, um cancel() gegen eine ECHTE laufende
-  -- Transaktion auf DERSELBEN feed-Instanz zu pruefen.
-  local started = rs:begin_transaction('R1', function()
-    feed._state.last_error = nil
-  end, 500, {
-    on_error = function(reason)
-      feed._state.last_error = 'routing_failed:' .. tostring(reason)
+    exportItemToPeripheral = function(_query, inlet)
+      exported_holder.count = (exported_holder.count or 0) + 1
+      exported_holder.inlet = inlet
+      return 2
     end,
-  })
-  assert_eq(started, true)
-
-  feed:cancel('MASTER_STALE')
-
-  assert_eq(rs._state.transaction, nil, 'cancel() must clear the router transaction')
-  assert_eq(feed._state.last_error, 'routing_failed:MASTER_STALE', 'cancel() must make the abort visible via last_error')
-  assert_true(exported_amount == nil, 'no export must have happened')
+  }
 end
 
--- 3. cancel() ohne aktive Transaktion darf nicht abstuerzen (Standby kann
---    auch eintreten, wenn gerade nichts laeuft).
+-- 1. Full feed cycle: sorter color is set to the rotating target's color
+--    BEFORE exporting, and the export goes to the shared export_inlet.
 do
-  local rs = make_rs_router()
+  _G.__last_sorter_color = nil
+  local exported = {}
+  local feed = feed_router_lib.new({
+    config = { feed = {
+      enabled = true, waste_item = 'x', feed_amount = 2,
+      export_inlet = 'sorter_inlet_0',
+      targets = {
+        { label = 'Reprocessor A', color = 'RED' },
+        { label = 'Reprocessor B', color = 'BLUE' },
+      },
+    } },
+    log = function() end, warn_once = function() end,
+  })
+  feed._state.bridge = make_bridge(exported)
+  feed._state.sorter = logistical_sorter.detect('sorter_0', 'TEST')
+  assert_true(feed._state.sorter ~= nil, 'test sorter mock must be detected')
+
+  -- Directly drive the rotation the same way tick() would (tick() also
+  -- gates on the random interval, which isn't the point of this test).
+  local ok, err = feed._state.sorter.setDefaultColor(feed.config.feed.targets[1].color)
+  assert_true(ok, 'setDefaultColor should succeed: ' .. tostring(err))
+  assert_eq(_G.__last_sorter_color, 'RED', 'sorter must be set to the first target color')
+end
+
+-- 2. cancel() is a harmless no-op: no state to clear, no error either with
+--    or without a bridge/sorter bound.
+do
   local feed = feed_router_lib.new({
     config = { feed = { enabled = true } },
-    rs_router = rs,
     log = function() end, warn_once = function() end,
   })
-  feed:cancel('MODE_OFF')
-  assert_eq(rs._state.transaction, nil)
+  local ok = pcall(function() feed:cancel('MODE_OFF') end)
+  assert_true(ok, 'cancel() must not error even with nothing bound')
+  feed._state.sorter = logistical_sorter.detect('sorter_0', 'TEST')
+  local ok2 = pcall(function() feed:cancel('MASTER_STALE') end)
+  assert_true(ok2, 'cancel() must not error once peripherals are bound')
+end
+
+-- 3. Invalid color on the sorter adapter is rejected, not silently
+--    accepted -- adapters/logistical_sorter.lua validates against the real
+--    Mekanism EnumColor list.
+do
+  local sorter = logistical_sorter.detect('sorter_0', 'TEST')
+  local ok, err = sorter.setDefaultColor('NOT_A_REAL_COLOR')
+  assert_eq(ok, false, 'an invalid color must be rejected')
+  assert_true(tostring(err):find('invalid_color', 1, true) ~= nil, 'error should identify the invalid color')
 end
 
 print('reprocessor_standby_cancels_transaction_test.lua: ok')

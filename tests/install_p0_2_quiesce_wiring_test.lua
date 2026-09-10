@@ -56,13 +56,16 @@ do
   assert_contains(src, "return rs_router:poll_quiesce()", "fuel/main.lua")
 end
 
--- ── REPROCESSOR: enter_standby() ist bereits idempotent, wiederverwendet ───
+-- ── REPROCESSOR: enter_standby() ist bereits idempotent, wiederverwendet.
+--    Routing ist seit dem Sorter-Farb-Umbau (nodes/reprocessor/
+--    feed_router.lua) ein einzelner synchroner Schritt pro Feed -- es gibt
+--    keine asynchrone Ventil-Transaktion mehr, die per begin_quiesce()/
+--    poll_quiesce() bestaetigt werden muesste. ───────────────────────────
 do
   local src = read("nodes/reprocessor/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "reprocessor/main.lua")
   assert_contains(src, 'enter_standby("UPDATE_QUIESCE")', "reprocessor/main.lua")
-  assert_contains(src, 'rs_router:begin_quiesce("UPDATE_QUIESCE")', "reprocessor/main.lua")
-  assert_contains(src, "return standby == true and rs_router:poll_quiesce()", "reprocessor/main.lua")
+  assert_not_contains(src, "rs_router", "reprocessor/main.lua")
 end
 
 -- ── WATER: alle Cluster ueber set_rs_output() erzwungen aus, echtes true/false

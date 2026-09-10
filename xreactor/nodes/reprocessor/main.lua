@@ -35,9 +35,8 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.reprocessor.role_descriptor")
 local config_normalizer = require("nodes.reprocessor.config_normalizer")
-local redstone_router_lib = require("nodes.fuel.redstone_router")
-local router_ui_lib = require("nodes.fuel.router_ui")
 local feed_router_lib = require("nodes.reprocessor.feed_router")
+local color_router_ui_lib = require("nodes.reprocessor.color_router_ui")
 local reproc_ui_pages = require("nodes.reprocessor.ui_pages")
 
 local DEFAULT_CONFIG = {
@@ -81,33 +80,25 @@ CONFIG.CONFIG_PATH = REPROC_USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- /xreactor_config/reproc_routes.lua (die vom Router-Editor geschriebene
--- kanonische Routenquelle) muss beim Start geladen werden, sonst gehen
--- gespeicherte Routen bei jedem Neustart verloren.
-local routing_load_status = { ok = true, source = "config" }
+-- /xreactor_config/reproc_targets.lua (die vom Farb-Router-Editor
+-- geschriebene kanonische Zielliste, siehe color_router_ui.lua) muss VOR
+-- config_normalizer.normalize() geladen werden, damit dessen Farb-
+-- Validierung (config_normalizer.lua) auch auf frisch geladene Ziele
+-- greift, statt nur auf das, was schon in reprocessor.lua stand.
 do
-  local routes_path = "/xreactor_config/reproc_routes.lua"
-  if fs.exists(routes_path) then
-    local ok_load, content = pcall(dofile, routes_path)
+  local targets_path = "/xreactor_config/reproc_targets.lua"
+  if fs.exists(targets_path) then
+    local ok_load, content = pcall(dofile, targets_path)
     if not ok_load or type(content) ~= "table" then
-      routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
-      add_config_warning("reproc_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+      add_config_warning("reproc_targets.lua konnte nicht geladen werden, Ziele bleiben leer: " .. tostring(content))
     else
-      local validation = redstone_router_lib.validate_tree(content)
-      if not validation.ok then
-        local fe = validation.errors[1]
-        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
-        add_config_warning("reproc_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
-      else
-        config.feed = config.feed or {}
-        config.feed.redstone_tree = content
-        routing_load_status = { ok = true, source = routes_path }
-      end
+      config.feed = config.feed or {}
+      config.feed.targets = content
     end
   end
 end
+config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
@@ -121,8 +112,7 @@ local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.ro
 local reproc_health = health.new({})
 local buffers = {}
 local router
-local rs_router
-local router_ui_instance
+local color_router_instance
 local devices = {
   monitor = nil, monitor_name = nil, discovery_failed = false, registry_summary = nil,
   registry_load_error = nil, proto_mismatch = false, last_scan_ts = nil,
@@ -298,10 +288,10 @@ local function render_monitor()
           handle_touch = function(x, y) return reproc_ui.handle_diagnostics_touch(current_mon, x, y) end },
         -- Muss den Rueckgabewert von render() durchreichen (identisch zu
         -- nodes/fuel/monitor_ui.lua) -- sonst zeichnet ui_router.lua seinen
-        -- eigenen generischen Page-Indikator ueber router_ui.lua's echten
-        -- ZURUECK/WEITER-Buttons, deren Tap dann ins Leere liefe.
-        { name = "Router", render = function(target, m, should_clear) return get_router_ui():render(target, ui, colors, should_clear) end,
-          handle_touch = function(x, y) return get_router_ui():handle_touch(x, y) end }
+        -- eigenen generischen Page-Indikator ueber color_router_ui.lua's
+        -- echten ZURUECK/WEITER-Buttons, deren Tap dann ins Leere liefe.
+        { name = "Router", render = function(target, m, should_clear) return get_color_router():render(target, ui, colors, should_clear) end,
+          handle_touch = function(x, y) return get_color_router():handle_touch(x, y) end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
       key_next = { [keys.right] = true, [keys.pageDown] = true }
@@ -376,67 +366,33 @@ local function process_buffers()
   end
 end
 
-local function get_rs_router()
-  if not rs_router then
-    -- config.feed (nicht die Root-Config) uebergeben, da REPROCESSOR seine
-    -- Route unter config.feed.redstone_tree definiert, nicht unter
-    -- config.logistics.redstone_tree/config.redstone_tree wie FUEL.
-    -- comms=comms ist noetig, damit refresh()'s self.comms:get_peers()
-    -- einen konfigurierten Integrator als erreichbaren Wireless-VALVE-Node
-    -- erkennen kann. get_rs_router() ist ein Lazy-Singleton -- "comms" ist
-    -- zur Laufzeit als Upvalue bereits gesetzt.
-    rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
-  end
-  return rs_router
-end
-
 get_feed_router = function()
   if not router then
-    router = feed_router_lib.new({ config = config, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, rs_router = get_rs_router() })
+    router = feed_router_lib.new({ config = config, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end })
   end
   return router
 end
 
--- Bricht eine laufende Transaktion beim UEBERGANG in den Standby sofort ab
--- (feed_router:cancel() -> redstone_router:shutdown_now(), blockiert alle
--- Ventile) statt sie durchlaufen zu lassen -- sonst koennte eine Transaktion
--- in WAIT_SETTLE/HOLD_OPEN trotz frisch eingetretenem Standby noch den
--- Exportcallback ausfuehren. Nur beim tatsaechlichen Uebergang false->true
--- aktiv (kein wiederholter shutdown_now() jeden Tick im Standby).
+-- feed_router:cancel() ist inzwischen ein No-Op (siehe feed_router.lua's
+-- Modulkommentar -- kein Ventil-Pfad, keine asynchrone Transaktion mehr,
+-- die abgebrochen werden muesste), bleibt aber als Aufruf stehen fuer den
+-- Fall, dass ein Feed-Zyklus spaeter doch wieder mehrstufig wird.
 local function enter_standby(reason)
   if standby then return end
   standby = true
   get_feed_router():cancel(reason)
-  utils.log("REPROC", "Standby aktiviert (" .. tostring(reason) .. ") -- laufende Ventil-Transaktion abgebrochen, alle Ventile blockiert", "WARN")
+  utils.log("REPROC", "Standby aktiviert (" .. tostring(reason) .. ")", "WARN")
 end
 
-local function get_router_ui()
-  if not router_ui_instance then
-    router_ui_instance = router_ui_lib.new({
-      redstone_router = get_rs_router(), config_path = "/xreactor_config/reproc_routes.lua",
-      routing_load_status = routing_load_status,
+local function get_color_router()
+  if not color_router_instance then
+    color_router_instance = color_router_ui_lib.new({
+      config = config, config_path = "/xreactor_config/reproc_targets.lua",
+      write_config = utils.write_config,
       log = function(level, msg) utils.log("REPROC", msg, level) end,
-      get_reactors = function()
-        local list, seen = {}, {}
-        local fd = config.feed or {}
-        for _, entry in ipairs(fd.targets or {}) do
-          local label = entry.label or entry.inlet or "?"
-          local id = entry.label or label
-          if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
-        end
-        if #list == 0 then
-          for _, name in ipairs(peripheral.getNames() or {}) do
-            local ptype = tostring(peripheral.getType(name) or ""):lower()
-            if ptype:find("reprocessor") or name:lower():find("reprocessor") then
-              if not seen[name] then seen[name] = true; list[#list + 1] = { id = name, label = name } end
-            end
-          end
-        end
-        return list
-      end,
     })
   end
-  return router_ui_instance
+  return color_router_instance
 end
 
 local function handle_command(message)
@@ -466,33 +422,6 @@ local function init()
     end
   })
   services:add(comms)
-  -- Gleiche Verdrahtung wie bei FUEL: der dedizierte Ventilkanal (6504)
-  -- laeuft ausserhalb von comms_service.
-  services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
-    if not event or event[1] ~= "modem_message" then return end
-    local channel, message = event[3], event[5]
-    if channel ~= constants.channels.VALVE then return end
-    if type(message) == "table" and message.type == "VALVE_ACK" then
-      get_rs_router():handle_valve_ack(message)
-    end
-  end })
-  local last_valve_retry_check_ms = 0
-  services:add({ name = "valve_ack_retry", tick = function()
-    local now = os.epoch and os.epoch("utc") or 0
-    if now - last_valve_retry_check_ms < 1000 then return end
-    last_valve_retry_check_ms = now
-    get_rs_router():check_pending_acks()
-  end })
-  -- "Weg 3"-Route-Teach-in -- identisch zu nodes/fuel/main.lua's
-  -- Verdrahtung, da router_ui.lua/redstone_router.lua geteilt werden.
-  services:add({ name = "valve_teach_listener", wants_events = true, tick = function(_self, dt, event)
-    if not event or event[1] ~= "modem_message" then return end
-    local channel, message = event[3], event[5]
-    if channel ~= constants.channels.VALVE then return end
-    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
-      router_ui_instance:handle_teach_pulse(message.src)
-    end
-  end })
   local discovery_stability_cache = discovery_stability.new({})
   slow_services:add(discovery_service.new({
     registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
@@ -529,13 +458,17 @@ end
 
 init()
 -- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
--- loop()/run_slow_loop()): "fast" traegt UI/Touch/Ventil-ACKs/Teach-in UND
--- die Stale-Pruefung + get_rs_router():tick() (guenstig, muss unbedingt
--- jeden Zyklus laufen). "slow" traegt Discovery/Telemetry UND process_
--- buffers()/get_feed_router():tick() (die eigentliche Feed-/Export-Arbeit,
--- kann laut Feldberichten lange blockierende Peripherie-Calls machen) --
--- damit blockiert ein langsamer Feed-Zyklus nicht mehr UI/Touch/Ventil-
--- Sicherheit.
+-- loop()/run_slow_loop()): "fast" traegt UI/Touch. "slow" traegt Discovery/
+-- Telemetry UND process_buffers()/get_feed_router():tick() (die eigentliche
+-- Feed-/Export-Arbeit, kann laut Feldberichten lange blockierende
+-- Peripherie-Calls machen) -- damit blockiert ein langsamer Feed-Zyklus
+-- nicht mehr UI/Touch. Farb-Routing (feed_router.lua) ist ein einzelner
+-- synchroner Schritt pro Feed (Sorter-Farbe setzen, exportieren) -- anders
+-- als beim frueheren Ventil-Pfad-System gibt es keine mehrstufige
+-- Transaktion mehr, die separat pro Zyklus vorangetrieben werden muesste,
+-- also auch kein eigenes Quiesce-Polling mehr noetig: enter_standby() allein
+-- reicht, ein Feed-Zyklus ist entweder schon fertig oder wurde noch gar
+-- nicht gestartet.
 local quiesce_handshake = _G.__xreactor_update_handshake
 local ok, result = xpcall(function()
   parallel.waitForAny(
@@ -546,16 +479,10 @@ local ok, result = xpcall(function()
           -- Stale-Pruefung VOR process_buffers()/feed-Arbeit, damit ein gerade
           -- abgelaufenes MASTER-Timeout sofort wirkt statt erst ab dem naechsten Zyklus.
           if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then enter_standby("MASTER_STALE") end
-          -- Treibt die asynchrone Ventil-Transaktion voran -- laeuft unbedingt
-          -- jeden Zyklus; im Standby ist es dank enter_standby()'s sofortigem
-          -- shutdown_now() nur noch ein billiger No-Op (keine Transaktion mehr vorhanden).
-          get_rs_router():tick()
         end,
         quiesce_opts = quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
           enter_standby("UPDATE_QUIESCE")
-          local rs_router = get_rs_router()
-          rs_router:begin_quiesce("UPDATE_QUIESCE")
-          return standby == true and rs_router:poll_quiesce()
+          return true
         end } or nil,
       })
     end,

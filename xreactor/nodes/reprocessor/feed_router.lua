@@ -6,26 +6,38 @@
 -- feed_amount (Standard: 2) Cyanite befüllt — das Minimum damit der
 -- Reprocessor überhaupt zu arbeiten beginnt.
 --
--- Routing nutzt dieselbe Baum-Topologie wie die Fuel-Node (redstone_router):
--- ein Ventil-Pfad wird geöffnet, das Item exportiert, dann wird der Pfad
--- wieder blockiert. So bekommt nur EIN Reprocessor pro Zyklus Material.
+-- Routing läuft über einen Mekanism Logistical Sorter statt über eine
+-- Ventil-Baum-Topologie: alle Exporte gehen an denselben export_inlet
+-- (der Sorter-Eingang), und vor jedem Export wird die Sorter-Default-
+-- Farbe (adapters/logistical_sorter.lua) auf die des aktuellen Ziels
+-- gesetzt. Farbige Mekanism Logistical Transporter transportieren das
+-- Item dann zum passenden Reprocessor. Dadurch entfällt die
+-- Pfad-öffnen/liefern/schließen-Zustandsmaschine komplett — ein Feed ist
+-- ein einziger synchroner Schritt (Farbe setzen, exportieren).
 --
 -- Config (config.feed):
 --   enabled            = true/false
 --   me_bridge          = "me_bridge"
+--   sorter             = "logistical_sorter_0"  -- Logistical Sorter, dessen
+--                                                  Default-Farbe pro Feed
+--                                                  gesetzt wird
+--   export_inlet       = "mekanism:logistical_transporter_0"
+--                                                -- gemeinsamer Export-
+--                                                  Eingang (Sorter-Seite)
 --   waste_item         = "bigreactors:cyanite_ingot"
 --   feed_amount        = 2          -- Items pro Befüllung
 --   interval_min_s     = 20         -- zufälliges Intervall: min..max Sekunden
 --   interval_max_s     = 60
---   valve_open_ms      = 2000
 --   discovery_interval = 60
 --   targets = {
---     { label = "Reprocessor A", inlet = "mekanism:transporter_2" },
---     { label = "Reprocessor B", inlet = "mekanism:transporter_3" },
+--     { label = "Reprocessor A", color = "RED" },
+--     { label = "Reprocessor B", color = "BLUE" },
 --   }
---   redstone_tree = { ... }  -- siehe nodes/fuel/redstone_router.lua
+--   -- gültige Farben: adapters/logistical_sorter.lua's sorter.COLORS
+--   -- (Mekanism EnumColor) -- per Router-UI zugewiesen, siehe
+--   -- nodes/reprocessor/color_router_ui.lua.
 
-local redstone_router_lib = require("nodes.fuel.redstone_router")
+local logistical_sorter = require("adapters.logistical_sorter")
 local me_bridge_compat = require("core.me_bridge_compat")
 
 local M = {}
@@ -51,14 +63,11 @@ function M.new(opts)
     config    = opts.config or {},
     log       = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
-    rs_router = opts.rs_router or redstone_router_lib.new({
-      config    = opts.config,
-      log       = opts.log,
-      warn_once = opts.warn_once,
-    }),
     _state = {
       bridge          = nil,
       bridge_name     = nil,
+      sorter          = nil,
+      sorter_name     = nil,
       last_refresh    = 0,
       next_feed_ts    = 0,   -- os.epoch("utc") wann der nächste Feed-Versuch ist
       target_index    = 1,   -- rotierender Index durch die targets-Liste
@@ -92,8 +101,22 @@ local function find_me_bridge_by_methods()
   return nil
 end
 
+-- Gleiche Fallback-Logik wie find_me_bridge_by_methods(), fuer den
+-- Logistical Sorter: adapters/logistical_sorter.lua's Methoden-Check
+-- entscheidet, nicht der Peripherie-Name.
+local function find_sorter_by_methods()
+  for _, name in ipairs(peripheral.getNames() or {}) do
+    local adapter = logistical_sorter.detect(name, "REPROC")
+    if adapter then
+      return name, adapter
+    end
+  end
+  return nil
+end
+
 function M:refresh_peripherals()
   local cfg = self.config.feed or {}
+
   local name = cfg.me_bridge or "me_bridge"
   local found_name = nil
   if peripheral.isPresent(name) then
@@ -117,13 +140,36 @@ function M:refresh_peripherals()
     self.warn_once("bridge_abs", "FeedRouter: ME-Bridge absent: " .. name)
     self._state.bridge = nil
   end
-  self.rs_router:refresh()
+
+  local sorter_name = cfg.sorter
+  local sorter_adapter = nil
+  if type(sorter_name) == "string" and sorter_name ~= "" and peripheral.isPresent(sorter_name) then
+    sorter_adapter = logistical_sorter.detect(sorter_name, "REPROC")
+  end
+  if not sorter_adapter then
+    local found_sorter_name, found_adapter = find_sorter_by_methods()
+    if found_adapter then
+      sorter_name, sorter_adapter = found_sorter_name, found_adapter
+    end
+  end
+  if sorter_adapter then
+    self._state.sorter = sorter_adapter
+    self._state.sorter_name = sorter_name
+  else
+    self.warn_once("sorter_abs", "FeedRouter: Logistical Sorter nicht gefunden: " .. tostring(cfg.sorter))
+    self._state.sorter = nil
+  end
+
   self._state.last_refresh = os.epoch("utc")
 end
 
 -- ---- feed cycle -------------------------------------------------------------
 
--- Führt eine Befüllung für genau EIN Target durch (Rotation durch die Liste).
+-- Führt eine Befüllung für genau EIN Target durch (Rotation durch die Liste):
+-- Sorter-Default-Farbe auf die des Ziels setzen, dann exportieren. Beide
+-- Schritte sind einzelne synchrone Peripherie-Calls -- anders als beim
+-- frueheren Ventil-Pfad-System gibt es keine mehrstufige Transaktion mehr,
+-- die ueber mehrere tick()-Aufrufe laufen muesste.
 local function feed_one(self, cfg)
   local targets = cfg.targets or {}
   if #targets == 0 then
@@ -137,14 +183,26 @@ local function feed_one(self, cfg)
   local target = targets[idx]
   self._state.target_index = idx + 1
 
-  if not target or not target.inlet then
-    self.warn_once("bad_target:" .. tostring(idx), "FeedRouter: target ohne inlet, übersprungen")
+  if not target or not target.color then
+    self.warn_once("bad_target:" .. tostring(idx), "FeedRouter: target ohne Farbe, übersprungen")
     return
   end
 
   local bridge = self._state.bridge
   if not bridge then
     self.warn_once("no_bridge", "FeedRouter: keine ME-Bridge verfügbar, Feed übersprungen")
+    return
+  end
+
+  local sorter = self._state.sorter
+  if not sorter then
+    self.warn_once("no_sorter", "FeedRouter: kein Logistical Sorter verfügbar, Feed übersprungen")
+    return
+  end
+
+  local export_inlet = cfg.export_inlet
+  if type(export_inlet) ~= "string" or export_inlet == "" then
+    self.warn_once("no_export_inlet", "FeedRouter: kein export_inlet konfiguriert, Feed übersprungen")
     return
   end
 
@@ -160,51 +218,38 @@ local function feed_one(self, cfg)
     return
   end
 
-  -- Asynchrone Zustandsmaschine (begin_transaction() + tick() in
-  -- redstone_router.lua, von M:tick() regelmaessig aufgerufen) statt
-  -- blockierendem route_and_act(). "busy" tritt praktisch nur auf, wenn
-  -- eine vorherige Befuellung noch nicht abgeschlossen ist -- wird dann
-  -- einfach uebersprungen, das naechste Intervall versucht es erneut.
-  local started, reason = self.rs_router:begin_transaction(target.label, function()
-    local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, target.inlet)
-    local err = nil
-    if not ok then err = result; result = nil end
-    local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
-      or (type(result) == "number" and result or 0)
-    if exported and exported > 0 then
-      self._state.total_feeds = self._state.total_feeds + 1
-      self._state.last_feed_ts = os.epoch("utc")
-      self._state.last_target = target.label
-      self._state.last_error = nil
-      self.log("INFO", string.format(
-        "FeedRouter: %s fed with %d/%d %s", target.label, exported, amount, item))
-    else
-      self._state.last_error = tostring(err or "export failed")
-      self.warn_once("feed_fail:" .. tostring(target.label),
-        "FeedRouter: feed failed for " .. tostring(target.label) .. ": " .. tostring(err))
-    end
-  end, cfg.valve_open_ms, {
-    -- Muss last_error explizit setzen, wenn die Transaktion VOR dem Export
-    -- abbricht (Ventil-ACK-Fehler, Phasen-Timeout) -- sonst bliebe
-    -- last_error stumm auf dem letzten, moeglicherweise veralteten Wert
-    -- stehen, obwohl diese Befuellung tatsaechlich gescheitert ist.
-    on_error = function(reason)
-      self._state.last_error = "routing_failed:" .. tostring(reason)
-      self.warn_once("feed_route_fail:" .. tostring(target.label),
-        "FeedRouter: Routing-Transaktion fuer " .. tostring(target.label) .. " abgebrochen (" .. tostring(reason) .. ")")
-    end,
-  })
-  if not started then
-    self.warn_once("router_busy:" .. tostring(reason),
-      "FeedRouter: Befuellung fuer " .. tostring(target.label) .. " uebersprungen (" .. tostring(reason) .. ")")
+  local color_ok, color_err = sorter.setDefaultColor(target.color)
+  if not color_ok then
+    self._state.last_error = "sorter_color_failed:" .. tostring(color_err)
+    self.warn_once("sorter_color_fail:" .. tostring(target.label),
+      "FeedRouter: Sorter-Farbe fuer " .. tostring(target.label) .. " (" .. tostring(target.color)
+        .. ") konnte nicht gesetzt werden: " .. tostring(color_err))
+    return
+  end
+
+  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, export_inlet)
+  local err = nil
+  if not ok then err = result; result = nil end
+  local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
+    or (type(result) == "number" and result or 0)
+  if exported and exported > 0 then
+    self._state.total_feeds = self._state.total_feeds + 1
+    self._state.last_feed_ts = os.epoch("utc")
+    self._state.last_target = target.label
+    self._state.last_error = nil
+    self.log("INFO", string.format(
+      "FeedRouter: %s fed with %d/%d %s (color=%s)", target.label, exported, amount, item, tostring(target.color)))
+  else
+    self._state.last_error = tostring(err or "export failed")
+    self.warn_once("feed_fail:" .. tostring(target.label),
+      "FeedRouter: feed failed for " .. tostring(target.label) .. ": " .. tostring(err))
   end
 end
 
--- Bricht eine laufende Ventil-Transaktion sofort ab (z.B. beim Uebergang in
--- Standby/MASTER-Timeout). shutdown_now() ruft dabei tx.on_error() auf,
--- was automatisch last_error setzt -- der Abbruch bleibt fuer Diagnose/UI sichtbar.
-function M:cancel(reason)
-  self.rs_router:shutdown_now(reason)
+-- Es gibt keine asynchrone Transaktion mehr, die abgebrochen werden
+-- muesste (siehe Modulkommentar oben) -- bleibt als No-Op fuer die main.lua-
+-- Schnittstelle (enter_standby() ruft dies weiterhin auf) erhalten.
+function M:cancel(_reason)
 end
 
 function M:tick()
@@ -247,6 +292,7 @@ function M:get_summary()
     next_feed_in_s = self._state.next_feed_ts > 0 and math.max(0, math.floor((self._state.next_feed_ts - now) / 1000)) or nil,
     last_error     = self._state.last_error,
     target_count   = #(cfg.targets or {}),
+    sorter_bound   = self._state.sorter ~= nil,
   }
 end
 

@@ -1,4 +1,5 @@
 local non_rt_config = require("core.non_rt_config")
+local logistical_sorter = require("adapters.logistical_sorter")
 
 local M = {}
 
@@ -25,6 +26,12 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(fd.me_bridge) ~= "string" then
     fd.me_bridge = d.me_bridge or "me_bridge"
   end
+  if type(fd.sorter) ~= "string" then
+    fd.sorter = d.sorter or "logistical_sorter_0"
+  end
+  if type(fd.export_inlet) ~= "string" or fd.export_inlet == "" then
+    fd.export_inlet = d.export_inlet or "mekanism:logistical_transporter_0"
+  end
   if type(fd.waste_item) ~= "string" then
     fd.waste_item = d.waste_item or "bigreactors:cyanite_ingot"
   end
@@ -37,20 +44,19 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(fd.interval_max_s) ~= "number" or fd.interval_max_s < fd.interval_min_s then
     fd.interval_max_s = math.max(d.interval_max_s or 60, fd.interval_min_s)
   end
-  if type(fd.valve_open_ms) ~= "number" or fd.valve_open_ms <= 0 then
-    fd.valve_open_ms = d.valve_open_ms or 2000
-  end
   if type(fd.discovery_interval) ~= "number" or fd.discovery_interval <= 0 then
     fd.discovery_interval = d.discovery_interval or 60
   end
   if type(fd.targets) ~= "table" then fd.targets = {} end
-  if type(fd.redstone_tree) ~= "table" then fd.redstone_tree = {} end
   for i, t in ipairs(fd.targets) do
-    if not t.inlet then
-      add_warning(string.format("feed.targets[%d] missing inlet", i))
-    end
     if not t.label then
       add_warning(string.format("feed.targets[%d] missing label", i))
+    end
+    if not logistical_sorter.is_valid_color(t.color) then
+      add_warning(string.format("feed.targets[%d] (%s) invalid/missing color; feeding for this target will be skipped until fixed",
+        i, tostring(t.label or "?")))
+    else
+      t.color = t.color:upper()
     end
   end
 end

@@ -31,32 +31,28 @@ local CONFIG = {
   DEFAULT_FEED = {
     enabled            = false,
     me_bridge          = "me_bridge",
+    -- Logistical Sorter, dessen Default-Farbe pro Feed auf die des
+    -- aktuellen Ziels gesetzt wird (adapters/logistical_sorter.lua).
+    -- Leer/Name nicht gefunden -> Fallback-Suche per Methodensignatur,
+    -- genau wie bei me_bridge.
+    sorter             = "logistical_sorter_0",
+    -- Gemeinsamer Export-Eingang (Sorter-Seite) -- ALLE Exporte gehen
+    -- hierher, die Sorter-Farbe entscheidet, welcher farbige Logistical
+    -- Transporter das Item danach zum jeweiligen Reprocessor traegt.
+    export_inlet       = "mekanism:logistical_transporter_0",
     waste_item         = "bigreactors:cyanite_ingot",
     feed_amount        = 2,      -- Items pro Befüllung (Minimum zum Arbeiten)
     interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befüllungen
     interval_max_s     = 60,     -- Höchst-Wartezeit zwischen Befüllungen (zufällig dazwischen)
-    valve_open_ms       = 2000,  -- Wie lange das Ventil offen bleibt
     discovery_interval = 60,
     --
-    -- targets: eine Eintrag pro Reprocessor-Inlet (kein reactor_port nötig!)
+    -- targets: ein Eintrag pro Reprocessor
     --   label = Anzeigename
-    --   inlet = Transporter/Chest direkt am Reprocessor-Eingang
-    -- { label = "Reprocessor A", inlet = "mekanism:transporter_2" },
+    --   color = Sorter-Farbe fuer diesen Reprocessor (Mekanism EnumColor,
+    --           siehe adapters/logistical_sorter.lua's COLORS) -- per
+    --           Router-UI zuweisbar (nodes/reprocessor/color_router_ui.lua)
+    -- { label = "Reprocessor A", color = "RED" },
     targets            = {},
-    --
-    -- redstone_tree: gleiches Format wie bei der Fuel-Node (siehe
-    -- nodes/fuel/config.lua) -- eine flache Route pro Ziel mit geordnetem
-    -- 'path' aus VALVE-Node-IDs. Mekanism Pipes müssen auf "High Redstone =
-    -- Interrupt" stehen.
-    -- { reactor = "Reprocessor A", label = "Reprocessor A",
-    --   path = { "VALVE-1", "VALVE-2" } },
-    -- { reactor = "Reprocessor B", label = "Reprocessor B",
-    --   path = { "VALVE-1", "VALVE-3" } },
-    --   -- ^ VALVE-1 ist hier ein gemeinsames Trunk-Ventil ("Arm A") vor
-    --   -- beiden Reprocessor-Zweigen -- einfach in beiden Pfaden
-    --   -- wiederholt, keine Verschachtelung noetig.
-    -- Hinweis: "reactor"-Feld referenziert hier den target.label.
-    redstone_tree      = {},
   },
 }
 -- "feed" muss als separate Zuweisung NACH dem CONFIG-Tabellenkonstruktor
