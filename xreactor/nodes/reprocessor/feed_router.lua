@@ -36,12 +36,14 @@
 --   -- gültige Farben: adapters/logistical_sorter.lua's sorter.COLORS
 --   -- (Mekanism EnumColor) -- per Router-UI zugewiesen, siehe
 --   -- nodes/reprocessor/color_router_ui.lua.
---   chest = { enabled = false, color = nil }
+--   chest = { enabled = false, target = nil }
 --   -- Optionale zweite Sammel-Kiste für rohes Cyanit (für den Fall, dass
 --   -- man Cyanit unverarbeitet haben möchte statt es an einen Reprocessor
---   -- zu liefern) -- eigener An/Aus-Schalter + eigene Sorter-Farbe, läuft
---   -- auf ihrem eigenen zufälligen Intervall, UNABHÄNGIG von der
---   -- Reprocessor-Rotation oben.
+--   -- zu liefern) -- eigener An/Aus-Schalter, läuft auf ihrem eigenen
+--   -- zufälligen Intervall, UNABHÄNGIG von der Reprocessor-Rotation oben.
+--   -- Läuft NICHT über den Sorter/eine Farbe -- "target" ist der Name der
+--   -- Kisten-Peripherie direkt, und wird per ME-Bridge/Wired-Modem-Export
+--   -- direkt dorthin geliefert (siehe feed_chest()).
 
 local logistical_sorter = require("adapters.logistical_sorter")
 local me_bridge_compat = require("core.me_bridge_compat")
@@ -260,32 +262,22 @@ local function feed_one(self, cfg)
 end
 
 -- Befüllt die optionale Sammel-Kiste (config.feed.chest) mit rohem Cyanit --
--- gleicher Mechanismus wie feed_one() (Sorter-Farbe setzen, dann
--- exportieren), aber ein fest benanntes "Ziel" statt eines rotierenden
--- Index, und ein eigener Fehler-/Zaehlerstatus.
+-- ANDERS als feed_one(): kein Sorter, keine Farbe -- der ME-Bridge-Export
+-- geht per Wired-Modem-Netzwerk DIREKT an chest.target (eigene
+-- Peripherie-Auswahl, siehe color_router_ui.lua). Das ist die einzige
+-- Peripherie-Anforderung: die Kiste muss per Wired Modem am selben
+-- ME-Netzwerk hängen wie die ME-Bridge.
 local function feed_chest(self, cfg)
   local chest = cfg.chest
   if not chest or chest.enabled ~= true then return end
-  if not chest.color then
-    self.warn_once("chest_no_color", "FeedRouter: Kiste aktiv, aber keine Farbe gesetzt, übersprungen")
+  if type(chest.target) ~= "string" or chest.target == "" then
+    self.warn_once("chest_no_target", "FeedRouter: Kiste aktiv, aber kein Ziel-Peripheral gesetzt, übersprungen")
     return
   end
 
   local bridge = self._state.bridge
   if not bridge then
     self.warn_once("chest_no_bridge", "FeedRouter: keine ME-Bridge verfügbar, Kiste übersprungen")
-    return
-  end
-
-  local sorter = self._state.sorter
-  if not sorter then
-    self.warn_once("chest_no_sorter", "FeedRouter: kein Logistical Sorter verfügbar, Kiste übersprungen")
-    return
-  end
-
-  local export_inlet = cfg.export_inlet
-  if type(export_inlet) ~= "string" or export_inlet == "" then
-    self.warn_once("chest_no_export_inlet", "FeedRouter: kein export_inlet konfiguriert, Kiste übersprungen")
     return
   end
 
@@ -300,15 +292,7 @@ local function feed_chest(self, cfg)
     return
   end
 
-  local color_ok, color_err = sorter.setDefaultColor(chest.color)
-  if not color_ok then
-    self._state.chest_last_error = "sorter_color_failed:" .. tostring(color_err)
-    self.warn_once("chest_sorter_color_fail",
-      "FeedRouter: Sorter-Farbe für Kiste (" .. tostring(chest.color) .. ") konnte nicht gesetzt werden: " .. tostring(color_err))
-    return
-  end
-
-  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, export_inlet)
+  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, chest.target)
   local err = nil
   if not ok then err = result; result = nil end
   local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
@@ -318,7 +302,7 @@ local function feed_chest(self, cfg)
     self._state.chest_last_feed_ts = os.epoch("utc")
     self._state.chest_last_error = nil
     self.log("INFO", string.format(
-      "FeedRouter: Kiste befüllt mit %d/%d %s (color=%s)", exported, amount, item, tostring(chest.color)))
+      "FeedRouter: Kiste (%s) befüllt mit %d/%d %s", tostring(chest.target), exported, amount, item))
   else
     self._state.chest_last_error = tostring(err or "export failed")
     self.warn_once("chest_feed_fail", "FeedRouter: Befüllung der Kiste fehlgeschlagen: " .. tostring(err))

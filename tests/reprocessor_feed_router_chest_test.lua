@@ -4,13 +4,17 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- (config.feed.chest): a second, independently-toggled export destination
 -- for raw Cyanit, on its own random-interval schedule, completely separate
 -- from the Reprocessor-target rotation (see color_router_ui.lua's KISTE
--- toggle). Proves:
+-- toggle). UNLIKE the reprocessor targets, the chest does NOT go through
+-- the Sorter/a color -- it is exported directly via the ME bridge to
+-- chest.target (a peripheral reached over the wired-modem network), so no
+-- sorter binding is required at all. Proves:
 --   1. a disabled chest never feeds, even while targets keep rotating;
---   2. an enabled chest feeds on its own schedule even with ZERO
---      reprocessor targets configured -- i.e. genuinely independent of the
---      rotation, not just another rotating target;
---   3. an enabled chest with no color assigned is skipped with a warning,
---      not silently fed or crashed;
+--   2. an enabled chest feeds directly to its target peripheral on its own
+--      schedule even with ZERO reprocessor targets AND no sorter bound --
+--      i.e. genuinely independent of the sorter-color routing, not just
+--      another rotating target;
+--   3. an enabled chest with no target peripheral assigned is skipped
+--      with a warning, not silently fed or crashed;
 --   4. get_summary() reports the chest's own counters separately from the
 --      reprocessor rotation's.
 
@@ -63,8 +67,8 @@ local function make_bridge()
   }
 end
 
--- 1. Chest disabled: targets rotate normally, chest never fires and never
---    shows up in the sorter color calls.
+-- 1. Chest disabled: targets rotate normally via the sorter, chest never
+--    fires and never appears in the sorter color calls.
 local warnings = {}
 local feed = feed_router_lib.new({
   config = { feed = {
@@ -72,7 +76,7 @@ local feed = feed_router_lib.new({
     interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
     export_inlet = 'sorter_inlet_0',
     targets = { { label = 'Reprocessor A', color = 'RED' } },
-    chest = { enabled = false, color = nil },
+    chest = { enabled = false, target = nil },
   } },
   log = function() end,
   warn_once = function(key, msg) warnings[key] = msg end,
@@ -85,31 +89,21 @@ feed:tick() -- arms both timers
 now_ms = now_ms + 11000
 feed:tick() -- target A feeds
 assert_eq(#export_calls, 1, 'target A should feed even with chest disabled')
-assert_eq(sorter_calls[#sorter_calls], 'RED')
+assert_eq(export_calls[1].inlet, 'sorter_inlet_0')
 
 now_ms = now_ms + 11000
 feed:tick()
 assert_eq(#export_calls, 2, 'target A should feed again on rotation wrap')
-for _, c in ipairs(sorter_calls) do
-  assert_true(c ~= 'YELLOW', 'a disabled chest must never set its color on the sorter')
-end
 local summary_disabled = feed:get_summary()
 assert_eq(summary_disabled.chest_enabled, false)
 assert_eq(summary_disabled.chest_total_feeds, 0, 'a disabled chest must never count a feed')
 
--- 2. Chest enabled with ZERO reprocessor targets: the chest must still
---    feed on its own schedule -- proves it is not merely another rotating
---    target but a genuinely independent path.
+-- 2. Chest enabled with ZERO reprocessor targets AND no sorter bound at
+--    all: the chest must still feed directly to its own target peripheral
+--    on its own schedule -- proves it does not depend on the sorter/color
+--    routing in any way, just the ME bridge.
 local warnings2 = {}
 local export_calls2 = {}
-local sorter_calls2 = {}
-_G.peripheral.call = function(name, method, color)
-  if name == 'sorter_0' and method == 'setDefaultColor' then
-    sorter_calls2[#sorter_calls2 + 1] = color
-    return
-  end
-  error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
-end
 
 local feed2 = feed_router_lib.new({
   config = { feed = {
@@ -117,7 +111,7 @@ local feed2 = feed_router_lib.new({
     interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
     export_inlet = 'sorter_inlet_0',
     targets = {},
-    chest = { enabled = true, color = 'YELLOW' },
+    chest = { enabled = true, target = 'chest_0' },
   } },
   log = function() end,
   warn_once = function(key, msg) warnings2[key] = msg end,
@@ -129,7 +123,7 @@ feed2._state.bridge = {
     return 2
   end,
 }
-feed2._state.sorter = logistical_sorter.detect('sorter_0', 'TEST')
+feed2._state.sorter = nil -- deliberately unbound: chest export must not need it
 feed2._state.last_refresh = now_ms
 
 feed2:tick() -- first tick only arms the chest timer, no feed yet
@@ -137,9 +131,8 @@ assert_eq(#export_calls2, 0, 'first tick must only arm the chest interval, not f
 
 now_ms = now_ms + 11000
 feed2:tick()
-assert_eq(#export_calls2, 1, 'an enabled chest must feed on its own schedule with zero targets configured')
-assert_eq(sorter_calls2[#sorter_calls2], 'YELLOW', 'sorter must be set to the chest color before feeding it')
-assert_eq(export_calls2[1].inlet, 'sorter_inlet_0')
+assert_eq(#export_calls2, 1, 'an enabled chest must feed directly to its target with zero reprocessor targets and no sorter bound')
+assert_eq(export_calls2[1].inlet, 'chest_0', 'the chest export must go straight to chest.target, not the shared sorter export_inlet')
 
 local summary_enabled = feed2:get_summary()
 assert_eq(summary_enabled.chest_enabled, true)
@@ -147,8 +140,8 @@ assert_eq(summary_enabled.chest_total_feeds, 1)
 assert_true(summary_enabled.chest_last_feed_ts ~= nil)
 assert_eq(summary_enabled.total_feeds, 0, 'the reprocessor rotation counter must stay unaffected by chest feeds')
 
--- 3. Chest enabled but no color assigned: skipped with a dedicated
---    warning, no export attempt, no crash.
+-- 3. Chest enabled but no target peripheral assigned: skipped with a
+--    dedicated warning, no export attempt, no crash.
 local warnings3 = {}
 local export_calls3 = {}
 local feed3 = feed_router_lib.new({
@@ -157,7 +150,7 @@ local feed3 = feed_router_lib.new({
     interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
     export_inlet = 'sorter_inlet_0',
     targets = {},
-    chest = { enabled = true, color = nil },
+    chest = { enabled = true, target = nil },
   } },
   log = function() end,
   warn_once = function(key, msg) warnings3[key] = msg end,
@@ -169,14 +162,14 @@ feed3._state.bridge = {
     return 2
   end,
 }
-feed3._state.sorter = logistical_sorter.detect('sorter_0', 'TEST')
+feed3._state.sorter = nil
 feed3._state.last_refresh = now_ms
 
 feed3:tick()
 now_ms = now_ms + 11000
 local ok = pcall(function() feed3:tick() end)
-assert_true(ok, 'a colorless chest must not crash the tick')
-assert_eq(#export_calls3, 0, 'a colorless chest must never export')
-assert_true(warnings3['chest_no_color'] ~= nil, 'a colorless enabled chest must produce a dedicated warning')
+assert_true(ok, 'a targetless chest must not crash the tick')
+assert_eq(#export_calls3, 0, 'a targetless chest must never export')
+assert_true(warnings3['chest_no_target'] ~= nil, 'a targetless enabled chest must produce a dedicated warning')
 
 print('reprocessor_feed_router_chest_test.lua: ok')

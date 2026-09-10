@@ -81,9 +81,12 @@ assert_eq(ui.export_inlet, 'chest_0', 'working copy must load export_inlet from 
 assert_eq(ui.chest_enabled, false, 'chest must default to disabled when absent from config.feed')
 assert_eq(ui.dirty, false, 'freshly loaded working copy must not be dirty')
 
--- Toggle the collector chest on: no color cycler buttons before, present
--- after (they only render while the chest is enabled).
-assert_true(find_button(ui, 'chest_color_next') == nil, 'no chest color cycler while the chest is disabled')
+-- Toggle the collector chest on: no target-picker button before, present
+-- after (it only renders while the chest is enabled). The chest goes
+-- straight to a peripheral over the wired modem -- no sorter/color
+-- involved, so any detected peripheral (including a plain chest) is a
+-- valid pick, same pool as the export-inlet picker.
+assert_true(find_button(ui, 'chest_target_open') == nil, 'no chest target picker while the chest is disabled')
 local chest_toggle_btn = find_button(ui, 'chest_toggle')
 assert_true(chest_toggle_btn ~= nil, 'expected a KISTE toggle button')
 assert_true(ui:handle_touch(chest_toggle_btn.x1, chest_toggle_btn.y) == true)
@@ -91,11 +94,22 @@ assert_eq(ui.chest_enabled, true, 'toggling must enable the chest')
 assert_eq(ui.dirty, true, 'toggling the chest must mark the working copy dirty')
 
 ui:render(mon, nil, nil, true)
-local chest_next_btn = find_button(ui, 'chest_color_next')
-assert_true(chest_next_btn ~= nil, 'expected a chest color cycler once the chest is enabled')
-assert_true(ui:handle_touch((chest_next_btn.x1 + chest_next_btn.x2) / 2, chest_next_btn.y) == true)
-assert_true(ui.chest_color ~= nil, 'cycling forward from an unset chest color must select a real color')
+local chest_target_open_btn = find_button(ui, 'chest_target_open')
+assert_true(chest_target_open_btn ~= nil, 'expected a ZIEL button for the chest once it is enabled')
+assert_true(ui:handle_touch(chest_target_open_btn.x1, chest_target_open_btn.y) == true)
+assert_eq(ui.mode, 'pick_chest')
 
+ui:render(mon, nil, nil, true)
+local pick_chest_target = nil
+for _, btn in ipairs(ui.buttons) do
+  if btn.action == 'pick_chest_choose' and btn.name == 'chest_0' then pick_chest_target = btn end
+end
+assert_true(pick_chest_target ~= nil, 'expected chest_0 as a pickable chest-target candidate')
+assert_true(ui:handle_touch(pick_chest_target.x1, pick_chest_target.y) == true)
+assert_eq(ui.mode, 'list', 'choosing a chest target must return to the list page')
+assert_eq(ui.chest_target, 'chest_0', 'choosing a chest target must update the working copy')
+
+ui:render(mon, nil, nil, true)
 -- Open the sorter picker, verify only real sorters are listed (not the
 -- chest), and pick the other sorter.
 local sorter_open_btn = find_button(ui, 'sorter_open')
@@ -177,7 +191,7 @@ assert_eq(written.data.sorter, 'sorter_1', 'the persisted file must contain the 
 assert_eq(written.data.export_inlet, 'chest_0', 'the persisted file must contain the chosen export inlet')
 assert_eq(#written.data.targets, 2, 'the persisted file must contain both targets')
 assert_eq(written.data.chest.enabled, true, 'the persisted file must contain the chest toggle state')
-assert_eq(written.data.chest.color, ui.chest_color, 'the persisted file must contain the chosen chest color')
+assert_eq(written.data.chest.target, 'chest_0', 'the persisted file must contain the chosen chest target')
 assert_eq(#config.feed.targets, 2, 'save must apply the working copy to config.feed.targets immediately')
 assert_eq(config.feed.sorter, 'sorter_1', 'save must apply the chosen sorter to config.feed immediately')
 assert_eq(config.feed.chest.enabled, true, 'save must apply the chest toggle to config.feed immediately')

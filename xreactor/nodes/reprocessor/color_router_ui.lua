@@ -67,7 +67,7 @@ function M.new(opts)
     write_config = write_config,
     config_path = opts.config_path or "/xreactor_config/reproc_targets.lua",
     log = opts.log or function() end,
-    mode = "list", -- "list" | "pick_sorter" | "pick_inlet"
+    mode = "list", -- "list" | "pick_sorter" | "pick_inlet" | "pick_chest"
     scroll = 0,
     picker_scroll = 0,
     dirty = false,
@@ -75,7 +75,7 @@ function M.new(opts)
     sorter_name = nil,
     export_inlet = nil,
     chest_enabled = false,
-    chest_color = nil,
+    chest_target = nil,
     buttons = {},
   }, { __index = M })
   self:_load_working_copy()
@@ -94,7 +94,7 @@ function M:_load_working_copy()
   self.export_inlet = fd.export_inlet
   local chest = fd.chest or {}
   self.chest_enabled = chest.enabled == true
-  self.chest_color = chest.color
+  self.chest_target = chest.target
   self.dirty = false
 end
 
@@ -109,6 +109,9 @@ function M:render(mon, _ui, _colors, should_clear)
   elseif self.mode == "pick_inlet" then
     return self:_render_picker(mon, w, h, "EXPORT-ZIEL WAEHLEN",
       peripheral_names(), "Keine Peripherals gefunden.", "pick_inlet_choose")
+  elseif self.mode == "pick_chest" then
+    return self:_render_picker(mon, w, h, "KISTEN-ZIEL WAEHLEN",
+      peripheral_names(), "Keine Peripherals gefunden.", "pick_chest_choose")
   end
 
   mux.header(mon, {
@@ -139,8 +142,9 @@ function M:render(mon, _ui, _colors, should_clear)
   self.buttons[#self.buttons + 1] = inlet_btn
 
   -- Optionale zweite Sammel-Kiste fuer rohes Cyanit -- eigener An/Aus-
-  -- Schalter + eigene Sorter-Farbe, laeuft unabhaengig von der
-  -- Reprocessor-Rotation unten (feed_router.lua's feed_chest()).
+  -- Schalter + eigene Ziel-Peripherie (per Wired Modem direkt am
+  -- ME-Netzwerk), laeuft unabhaengig von der Reprocessor-Rotation unten
+  -- (feed_router.lua's feed_chest()) und OHNE Sorter/Farbe.
   mux.text(mon, 2, 5, "KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
   local chest_toggle_btn = mux.button(mon, 19, 5, 10,
     self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
@@ -148,16 +152,11 @@ function M:render(mon, _ui, _colors, should_clear)
   self.buttons[#self.buttons + 1] = chest_toggle_btn
 
   if self.chest_enabled then
-    local chest_prev_btn = mux.button(mon, 31, 5, 3, "<", "LIMITED", 1)
-    chest_prev_btn.action = "chest_color_prev"
-    self.buttons[#self.buttons + 1] = chest_prev_btn
-
-    mux.text(mon, 35, 5, mux.fit(tostring(self.chest_color or "KEINE FARBE"), 14),
-      self.chest_color and colorset.get("OK") or colorset.get("WARNING"), colorset.get("background"))
-
-    local chest_next_btn = mux.button(mon, 50, 5, 3, ">", "LIMITED", 1)
-    chest_next_btn.action = "chest_color_next"
-    self.buttons[#self.buttons + 1] = chest_next_btn
+    local chest_target_btn = mux.button(mon, 31, 5, w - 33,
+      "ZIEL: " .. tostring(self.chest_target or "NICHT GESETZT"),
+      self.chest_target and "OK" or "WARNING", 1)
+    chest_target_btn.action = "chest_target_open"
+    self.buttons[#self.buttons + 1] = chest_target_btn
   end
 
   local list_top = 8
@@ -298,17 +297,14 @@ function M:_apply_action(btn)
     self.chest_enabled = not self.chest_enabled
     self.dirty = true
     return true
-  elseif btn.action == "chest_color_prev" or btn.action == "chest_color_next" then
-    local idx = color_index(self.chest_color)
-    if btn.action == "chest_color_prev" then
-      idx = idx - 1
-      if idx < 1 then idx = #COLORS end
-    else
-      idx = idx + 1
-      if idx > #COLORS then idx = 1 end
-    end
-    self.chest_color = COLORS[idx]
+  elseif btn.action == "chest_target_open" then
+    self.mode = "pick_chest"
+    self.picker_scroll = 0
+    return true
+  elseif btn.action == "pick_chest_choose" then
+    self.chest_target = btn.name
     self.dirty = true
+    self.mode = "list"
     return true
   elseif btn.action == "color_prev" or btn.action == "color_next" then
     local t = self.targets[btn.index]
@@ -348,7 +344,7 @@ function M:_save()
   for i, t in ipairs(self.targets) do
     targets_out[i] = { label = t.label, color = t.color }
   end
-  local chest_out = { enabled = self.chest_enabled, color = self.chest_color }
+  local chest_out = { enabled = self.chest_enabled, target = self.chest_target }
   local out = { sorter = self.sorter_name, export_inlet = self.export_inlet, targets = targets_out, chest = chest_out }
   local ok, err = self.write_config(self.config_path, out)
   if not ok then

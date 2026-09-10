@@ -61,15 +61,12 @@ function M.normalize(config_values, defaults, add_warning, utils)
   end
 
   -- chest: optionale zweite Sammel-Kiste fuer rohes Cyanit, laeuft
-  -- unabhaengig von der Reprocessor-Rotation (siehe feed_router.lua).
+  -- unabhaengig von der Reprocessor-Rotation, direkt per ME-Bridge/Wired-
+  -- Modem-Export ohne Sorter/Farbe (siehe feed_router.lua).
   if type(fd.chest) ~= "table" then fd.chest = {} end
   if fd.chest.enabled ~= true then fd.chest.enabled = false end
-  if fd.chest.enabled then
-    if not logistical_sorter.is_valid_color(fd.chest.color) then
-      add_warning("feed.chest ist aktiviert, hat aber keine gueltige Farbe; Befuellung der Kiste wird uebersprungen bis eine Farbe gesetzt ist")
-    else
-      fd.chest.color = fd.chest.color:upper()
-    end
+  if fd.chest.enabled and (type(fd.chest.target) ~= "string" or fd.chest.target == "") then
+    add_warning("feed.chest ist aktiviert, hat aber kein Ziel-Peripheral gesetzt; Befuellung der Kiste wird uebersprungen bis eines gesetzt ist")
   end
 end
 

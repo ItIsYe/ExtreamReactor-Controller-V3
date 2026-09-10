@@ -55,13 +55,14 @@ local CONFIG = {
     targets            = {},
     -- chest: optionale zweite Sammel-Kiste fuer rohes Cyanit, unabhaengig
     -- von der Reprocessor-Rotation oben -- eigener An/Aus-Schalter + eigene
-    -- Sorter-Farbe, per Router-UI einstellbar
-    -- (nodes/reprocessor/color_router_ui.lua). Laeuft auf ihrem eigenen
-    -- zufaelligen Intervall, unabhaengig davon ob/wann Reprocessoren
-    -- befuellt werden.
+    -- Ziel-Peripherie, per Router-UI einstellbar
+    -- (nodes/reprocessor/color_router_ui.lua). Laeuft NICHT ueber den
+    -- Sorter/eine Farbe, sondern direkt per ME-Bridge/Wired-Modem-Export
+    -- an "target" -- eigenes zufaelliges Intervall, unabhaengig davon
+    -- ob/wann Reprocessoren befuellt werden.
     chest = {
       enabled = false,
-      color   = nil,
+      target  = nil,
     },
   },
 }
