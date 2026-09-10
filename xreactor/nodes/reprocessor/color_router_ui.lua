@@ -22,8 +22,17 @@ local colorset = require("shared.colors")
 local logistical_sorter = require("adapters.logistical_sorter")
 
 local COLORS = logistical_sorter.COLORS
-local MIN_W = 62
-local MIN_H = 16
+-- 51x19 ist die Standardgroesse des eingebauten Computer-Terminals
+-- (siehe nodes/valve/local_ui.lua) -- REPROCESSOR hat normalerweise KEINEN
+-- externen Monitor, laeuft also meistens direkt auf dem PC-Bildschirm
+-- (main.lua's term.current()-Fallback). Der Router muss deshalb bei 51x19
+-- vollstaendig bedienbar sein, nicht nur auf einem groesseren Monitor.
+local MIN_W = 51
+local MIN_H = 19
+-- Unterhalb dieser Breite passen SORTER/ZIEL nicht nebeneinander (lange
+-- Peripherie-Namen wie "mekanism:logistical_transporter_0" brauchen die
+-- volle Zeile) -- dann wird gestapelt statt nebeneinander gelegt.
+local COMPACT_W = 70
 local EXCLUDED_TYPES = { monitor = true, modem = true }
 
 local function color_index(color)
@@ -127,43 +136,83 @@ function M:render(mon, _ui, _colors, should_clear)
   end
 
   -- Sorter/Export-Ziel: beide per Picker aus den tatsaechlich erkannten
-  -- Peripherals waehlbar -- keine Config-Datei-Bearbeitung noetig.
-  local half_w = math.floor((w - 5) / 2)
-  local sorter_btn = mux.button(mon, 2, 3, half_w,
-    "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
-    self.sorter_name and "OK" or "WARNING", 1)
-  sorter_btn.action = "sorter_open"
-  self.buttons[#self.buttons + 1] = sorter_btn
+  -- Peripherals waehlbar -- keine Config-Datei-Bearbeitung noetig. Auf dem
+  -- 51 Zeichen breiten PC-Terminal (kein externer Monitor) passen lange
+  -- Peripherie-Namen nicht nebeneinander -- dann werden SORTER/ZIEL/KISTE
+  -- untereinander gestapelt statt nebeneinander gelegt (compact-Layout).
+  local compact = w < COMPACT_W
+  local kiste_y
 
-  local inlet_btn = mux.button(mon, 3 + half_w, 3, w - 3 - half_w,
-    "ZIEL: " .. tostring(self.export_inlet or "NICHT GESETZT"),
-    self.export_inlet and "OK" or "WARNING", 1)
-  inlet_btn.action = "inlet_open"
-  self.buttons[#self.buttons + 1] = inlet_btn
+  if compact then
+    local sorter_btn = mux.button(mon, 2, 3, w - 3,
+      "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
+      self.sorter_name and "OK" or "WARNING", 1)
+    sorter_btn.action = "sorter_open"
+    self.buttons[#self.buttons + 1] = sorter_btn
+
+    local inlet_btn = mux.button(mon, 2, 4, w - 3,
+      "ZIEL: " .. tostring(self.export_inlet or "NICHT GESETZT"),
+      self.export_inlet and "OK" or "WARNING", 1)
+    inlet_btn.action = "inlet_open"
+    self.buttons[#self.buttons + 1] = inlet_btn
+
+    kiste_y = 5
+    mux.text(mon, 2, kiste_y, "KISTE:", colorset.get("text"), colorset.get("background"))
+    local chest_toggle_btn = mux.button(mon, 9, kiste_y, w - 10,
+      self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
+    chest_toggle_btn.action = "chest_toggle"
+    self.buttons[#self.buttons + 1] = chest_toggle_btn
+  else
+    local half_w = math.floor((w - 5) / 2)
+    local sorter_btn = mux.button(mon, 2, 3, half_w,
+      "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
+      self.sorter_name and "OK" or "WARNING", 1)
+    sorter_btn.action = "sorter_open"
+    self.buttons[#self.buttons + 1] = sorter_btn
+
+    local inlet_btn = mux.button(mon, 3 + half_w, 3, w - 3 - half_w,
+      "ZIEL: " .. tostring(self.export_inlet or "NICHT GESETZT"),
+      self.export_inlet and "OK" or "WARNING", 1)
+    inlet_btn.action = "inlet_open"
+    self.buttons[#self.buttons + 1] = inlet_btn
+
+    kiste_y = 5
+    mux.text(mon, 2, kiste_y, "KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
+    local chest_toggle_btn = mux.button(mon, 19, kiste_y, 10,
+      self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
+    chest_toggle_btn.action = "chest_toggle"
+    self.buttons[#self.buttons + 1] = chest_toggle_btn
+
+    if self.chest_enabled then
+      local chest_target_btn = mux.button(mon, 31, kiste_y, w - 33,
+        "ZIEL: " .. tostring(self.chest_target or "NICHT GESETZT"),
+        self.chest_target and "OK" or "WARNING", 1)
+      chest_target_btn.action = "chest_target_open"
+      self.buttons[#self.buttons + 1] = chest_target_btn
+    end
+  end
 
   -- Optionale zweite Sammel-Kiste fuer rohes Cyanit -- eigener An/Aus-
   -- Schalter + eigene Ziel-Peripherie (per Wired Modem direkt am
   -- ME-Netzwerk), laeuft unabhaengig von der Reprocessor-Rotation unten
-  -- (feed_router.lua's feed_chest()) und OHNE Sorter/Farbe.
-  mux.text(mon, 2, 5, "KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
-  local chest_toggle_btn = mux.button(mon, 19, 5, 10,
-    self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
-  chest_toggle_btn.action = "chest_toggle"
-  self.buttons[#self.buttons + 1] = chest_toggle_btn
-
-  if self.chest_enabled then
-    local chest_target_btn = mux.button(mon, 31, 5, w - 33,
-      "ZIEL: " .. tostring(self.chest_target or "NICHT GESETZT"),
+  -- (feed_router.lua's feed_chest()) und OHNE Sorter/Farbe. Im compact-
+  -- Layout bekommt der ZIEL-Button eine eigene Zeile, da hier keine
+  -- Zeile mehr fuer AN/AUS + ZIEL nebeneinander reicht.
+  local list_top = kiste_y + 3
+  if compact and self.chest_enabled then
+    local chest_target_btn = mux.button(mon, 2, kiste_y + 1, w - 3,
+      "KISTEN-ZIEL: " .. tostring(self.chest_target or "NICHT GESETZT"),
       self.chest_target and "OK" or "WARNING", 1)
     chest_target_btn.action = "chest_target_open"
     self.buttons[#self.buttons + 1] = chest_target_btn
+    list_top = kiste_y + 4
   end
 
-  local list_top = 8
   local footer_row = h
   local action_row = footer_row - 2
   local list_bottom = action_row - 2
-  local visible_rows = math.max(1, math.floor((list_bottom - list_top) / 2) + 1)
+  local row_step = compact and 1 or 2
+  local visible_rows = math.max(1, math.floor((list_bottom - list_top) / row_step) + 1)
 
   self.scroll = math.max(0, math.min(self.scroll, math.max(0, #self.targets - visible_rows)))
   local first = self.scroll + 1
@@ -174,7 +223,16 @@ function M:render(mon, _ui, _colors, should_clear)
       { "Keine Reprocessoren konfiguriert.", "+ HINZUFUEGEN antippen." }, "WARNING")
   end
 
-  local color_col = w - 42
+  -- color_col-Layout ist fuer w=80 (breiter Monitor) ausgelegt; im
+  -- compact-Layout (schmales PC-Terminal) werden die Spalten enger
+  -- gepackt, damit Label/Pfeile/Loeschen-Button trotzdem ohne
+  -- Ueberlappung nebeneinander passen.
+  local color_col, color_w, next_off, del_x, del_w
+  if compact then
+    color_col, color_w, next_off, del_x, del_w = 22, 11, 16, w - 7, 6
+  else
+    color_col, color_w, next_off, del_x, del_w = w - 42, 12, 17, w - 8, 7
+  end
   local y = list_top
   for i = first, last do
     local t = self.targets[i]
@@ -185,17 +243,17 @@ function M:render(mon, _ui, _colors, should_clear)
     prev_btn.action, prev_btn.index = "color_prev", i
     self.buttons[#self.buttons + 1] = prev_btn
 
-    mux.text(mon, color_col + 4, y, mux.fit(tostring(t.color or "?"), 12), colorset.get("OK"), colorset.get("background"))
+    mux.text(mon, color_col + 4, y, mux.fit(tostring(t.color or "?"), color_w), colorset.get("OK"), colorset.get("background"))
 
-    local next_btn = mux.button(mon, color_col + 17, y, 3, ">", "LIMITED", 1)
+    local next_btn = mux.button(mon, color_col + next_off, y, 3, ">", "LIMITED", 1)
     next_btn.action, next_btn.index = "color_next", i
     self.buttons[#self.buttons + 1] = next_btn
 
-    local del_btn = mux.button(mon, w - 8, y, 7, "X", "WARNING", 1)
+    local del_btn = mux.button(mon, del_x, y, del_w, "X", "WARNING", 1)
     del_btn.action, del_btn.index = "delete", i
     self.buttons[#self.buttons + 1] = del_btn
 
-    y = y + 2
+    y = y + row_step
   end
 
   if #self.targets > visible_rows then
@@ -204,18 +262,33 @@ function M:render(mon, _ui, _colors, should_clear)
       colorset.get("muted"), colorset.get("background"))
   end
 
-  local add_btn = mux.button(mon, 2, action_row, 16, "+ HINZUFUEGEN", "LIMITED", 2)
-  add_btn.action = "add"
-  self.buttons[#self.buttons + 1] = add_btn
+  if compact then
+    local add_btn = mux.button(mon, 2, action_row, 15, "+ HINZUFUEGEN", "LIMITED", 1)
+    add_btn.action = "add"
+    self.buttons[#self.buttons + 1] = add_btn
 
-  local save_btn = mux.button(mon, w - 30, action_row, 14,
-    self.dirty and "SPEICHERN *" or "SPEICHERN", self.dirty and "LIMITED" or "OK", 2)
-  save_btn.action = "save"
-  self.buttons[#self.buttons + 1] = save_btn
+    local save_btn = mux.button(mon, 18, action_row, 12,
+      self.dirty and "SPEICHERN*" or "SPEICHERN", self.dirty and "LIMITED" or "OK", 1)
+    save_btn.action = "save"
+    self.buttons[#self.buttons + 1] = save_btn
 
-  local discard_btn = mux.button(mon, w - 14, action_row, 13, "VERWERFEN", "OFFLINE", 2)
-  discard_btn.action = "discard"
-  self.buttons[#self.buttons + 1] = discard_btn
+    local discard_btn = mux.button(mon, 31, action_row, w - 32, "VERWERFEN", "OFFLINE", 1)
+    discard_btn.action = "discard"
+    self.buttons[#self.buttons + 1] = discard_btn
+  else
+    local add_btn = mux.button(mon, 2, action_row, 16, "+ HINZUFUEGEN", "LIMITED", 2)
+    add_btn.action = "add"
+    self.buttons[#self.buttons + 1] = add_btn
+
+    local save_btn = mux.button(mon, w - 30, action_row, 14,
+      self.dirty and "SPEICHERN *" or "SPEICHERN", self.dirty and "LIMITED" or "OK", 2)
+    save_btn.action = "save"
+    self.buttons[#self.buttons + 1] = save_btn
+
+    local discard_btn = mux.button(mon, w - 14, action_row, 13, "VERWERFEN", "OFFLINE", 2)
+    discard_btn.action = "discard"
+    self.buttons[#self.buttons + 1] = discard_btn
+  end
 
   return mux.footer_nav(mon, footer_row, w, { center = "REPROC FARBEN" })
 end
