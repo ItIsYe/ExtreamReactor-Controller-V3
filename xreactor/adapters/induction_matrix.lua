@@ -339,11 +339,23 @@ function matrix.detect(name, log_prefix, opts)
     return nil
   end
   local method_set = to_set(methods)
-  if not is_matrix_method_set(method_set) then
+  local type_name = peripheral.getType(name) or "induction_matrix"
+  -- Mekanism's Induction Matrix PORT block (the one actually wired to the
+  -- network -- see wiki.aidancbrady.com/wiki/Induction_Port) only exposes
+  -- getMode/setMode plus the generic energy getters (getEnergy/getMaxEnergy)
+  -- itself; the cell/provider/port-count methods checked by
+  -- is_matrix_method_set() live on the multiblock structure and are only
+  -- present once/if the port's multiblock is fully formed. A port on a
+  -- not-fully-formed (or older-Mekanism) matrix therefore never matches the
+  -- method-set check and silently falls through to plain energy_storage
+  -- detection -- reported as "matrix missing" even though a real matrix is
+  -- attached. peripheral.getType() is a reliable second signal here: only
+  -- Mekanism's induction matrix blocks report a type containing "induction".
+  local type_is_induction = type(type_name) == "string" and type_name:lower():find("induction", 1, true) ~= nil
+  if not is_matrix_method_set(method_set) and not type_is_induction then
     return nil
   end
   local storage_adapter = energy_storage.detect(name, log_prefix)
-  local type_name = peripheral.getType(name) or "induction_matrix"
   local get_cells = resolve_component_method(method_set, {
     "getInstalledCells",
     "getCells",
