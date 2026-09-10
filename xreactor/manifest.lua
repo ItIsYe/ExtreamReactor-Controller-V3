@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 648,
-  manifest_id = "manifest-v648",
+  manifest_version = 649,
+  manifest_id = "manifest-v649",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "6182281b", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "80a7779c", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -85,7 +85,7 @@ return {
     { path = "master/runtime_ops_rt.lua", size_bytes = 17147, hash = "476e290a", required_for={"MASTER"} },
     { path = "master/startup_sequencer.lua", size_bytes = 11394, hash = "d90e5035", required_for={"MASTER"} },
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"} },
-    { path = "master/ui/alarms.lua", size_bytes = 7730, hash = "50e520ed", required_for={"MASTER"} },
+    { path = "master/ui/alarms.lua", size_bytes = 8685, hash = "a1aceb50", required_for={"MASTER"} },
     { path = "master/ui/alerts.lua", size_bytes = 28137, hash = "4bf57a50", required_for={"MASTER"} },
     { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"} },
     { path = "master/ui/multiview.lua", size_bytes = 17050, hash = "e01ba1a0", required_for={"MASTER"} },

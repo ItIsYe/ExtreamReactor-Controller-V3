@@ -56,12 +56,24 @@ local function sorted_alerts(active)
   return out, #pending, #acked
 end
 
-local hit_zones = {}   -- { id, y1, y2 } für Touch-ACK
-local footer_hit_zone = nil -- { y1, y2 } für Historie-Zeitfenster-Wechsel
+-- Diese Ansicht wird von einem einzigen ctx.alarms_ui-Modul fuer JEDE Session
+-- gerendert, die "Logs" zeigt -- primaerer Monitor und beliebig viele AUX-
+-- Monitore parallel (siehe init_runtime.lua's views.alarms). hit_zones/
+-- footer_hit_zone MUESSEN daher pro Monitor gefuehrt werden: als frueher ein
+-- einziges Modul-Level-Paar genutzt wurde, hat render() fuer Monitor B die
+-- gerade von Monitor A berechneten Touch-Zonen ueberschrieben, sodass ein
+-- Touch auf Monitor A anschliessend gegen Monitor B's (falsche) Zonen
+-- geprueft wurde -- ACK/MUTE reagierten dadurch auf AUX-Monitoren
+-- unzuverlaessig bis gar nicht, je nachdem welcher Monitor zuletzt gerendert
+-- hatte.
+local hit_zones_by_mon = setmetatable({}, { __mode = "k" })        -- mon -> { id, y1, y2 }[]
+local footer_hit_zone_by_mon = setmetatable({}, { __mode = "k" })  -- mon -> { y1, y2 } | nil
 
 local function render(mon, model)
-  hit_zones = {}
-  footer_hit_zone = nil
+  local hit_zones = {}
+  local footer_hit_zone = nil
+  hit_zones_by_mon[mon] = hit_zones
+  footer_hit_zone_by_mon[mon] = footer_hit_zone
   local active = model and model.active or {}
   local alerts, n_pending, n_acked = sorted_alerts(active)
 
@@ -93,6 +105,7 @@ local function render(mon, model)
   -- als eine praezise Teilzone im Text zu berechnen, und der Footer hat sonst
   -- keine andere Funktion.
   footer_hit_zone = { y1 = h, y2 = h }
+  footer_hit_zone_by_mon[mon] = footer_hit_zone
 
   -- ── Kein Alarm: grüner Bildschirm ─────────────────────────────────────────
   if #alerts == 0 then
@@ -163,10 +176,11 @@ end
 -- drei Positionsargumenten auf.
 local function handle_input(mon, x, y)
   if not y then return nil end
+  local footer_hit_zone = footer_hit_zone_by_mon[mon]
   if footer_hit_zone and y >= footer_hit_zone.y1 and y <= footer_hit_zone.y2 then
     return { type = "history_window_cycle" }
   end
-  for _, zone in ipairs(hit_zones) do
+  for _, zone in ipairs(hit_zones_by_mon[mon] or {}) do
     if y >= zone.y1 and y <= zone.y2 then
       return { type = "alarm_ack", alarm_id = zone.id }
     end
