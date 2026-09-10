@@ -6,10 +6,21 @@
 -- als abgeschlossen persistiert, damit sie nur einmal laeuft.
 local CURRENT_VERSION = 5
 
+-- Auto-generated per computer via os.getComputerID(), same pattern as
+-- installer/valve_naming.lua's "VALVE-<id>" and utils.normalize_node_id()'s
+-- own empty-value fallback -- guarantees a unique node_id out of the box
+-- across multiple RT computers, without requiring the operator to manually
+-- edit /xreactor_config/rt.lua (two RTs both defaulting to a fixed "RT-1"
+-- made the master unable to tell them apart). Only applies to a FRESH
+-- install: utils.load_config() only falls back to this default when
+-- /xreactor_config/rt.lua doesn't exist yet -- an already-configured RT's
+-- persisted node_id (even a manually-set "RT-1") is never touched.
+local DEFAULT_NODE_ID = "RT-" .. tostring(os and os.getComputerID and os.getComputerID() or 1)
+
 return {
   version = CURRENT_VERSION,
   role = "RT-NODE",
-  node_id = "RT-1",
+  node_id = DEFAULT_NODE_ID,
   debug_logging = true,
   reset_log_on_start = true,
   log_dir = "/disk/xreactor_logs",
