@@ -99,6 +99,7 @@ do
       config.feed.targets = content.targets or {}
       if content.sorter then config.feed.sorter = content.sorter end
       if content.export_inlet then config.feed.export_inlet = content.export_inlet end
+      if content.chest then config.feed.chest = content.chest end
     end
   end
 end

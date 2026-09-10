@@ -36,6 +36,12 @@
 --   -- gültige Farben: adapters/logistical_sorter.lua's sorter.COLORS
 --   -- (Mekanism EnumColor) -- per Router-UI zugewiesen, siehe
 --   -- nodes/reprocessor/color_router_ui.lua.
+--   chest = { enabled = false, color = nil }
+--   -- Optionale zweite Sammel-Kiste für rohes Cyanit (für den Fall, dass
+--   -- man Cyanit unverarbeitet haben möchte statt es an einen Reprocessor
+--   -- zu liefern) -- eigener An/Aus-Schalter + eigene Sorter-Farbe, läuft
+--   -- auf ihrem eigenen zufälligen Intervall, UNABHÄNGIG von der
+--   -- Reprocessor-Rotation oben.
 
 local logistical_sorter = require("adapters.logistical_sorter")
 local me_bridge_compat = require("core.me_bridge_compat")
@@ -75,6 +81,13 @@ function M.new(opts)
       total_feeds     = 0,
       last_feed_ts    = nil,
       last_error      = nil,
+      -- Unabhängiger Zyklus für die optionale Cyanit-Sammel-Kiste
+      -- (config.feed.chest) -- eigenes Intervall, eigener Fehlerstatus,
+      -- läuft parallel zur Reprocessor-Rotation oben.
+      next_chest_feed_ts = 0,
+      chest_total_feeds  = 0,
+      chest_last_feed_ts = nil,
+      chest_last_error   = nil,
     },
   }
   return setmetatable(self, { __index = M })
@@ -246,6 +259,72 @@ local function feed_one(self, cfg)
   end
 end
 
+-- Befüllt die optionale Sammel-Kiste (config.feed.chest) mit rohem Cyanit --
+-- gleicher Mechanismus wie feed_one() (Sorter-Farbe setzen, dann
+-- exportieren), aber ein fest benanntes "Ziel" statt eines rotierenden
+-- Index, und ein eigener Fehler-/Zaehlerstatus.
+local function feed_chest(self, cfg)
+  local chest = cfg.chest
+  if not chest or chest.enabled ~= true then return end
+  if not chest.color then
+    self.warn_once("chest_no_color", "FeedRouter: Kiste aktiv, aber keine Farbe gesetzt, übersprungen")
+    return
+  end
+
+  local bridge = self._state.bridge
+  if not bridge then
+    self.warn_once("chest_no_bridge", "FeedRouter: keine ME-Bridge verfügbar, Kiste übersprungen")
+    return
+  end
+
+  local sorter = self._state.sorter
+  if not sorter then
+    self.warn_once("chest_no_sorter", "FeedRouter: kein Logistical Sorter verfügbar, Kiste übersprungen")
+    return
+  end
+
+  local export_inlet = cfg.export_inlet
+  if type(export_inlet) ~= "string" or export_inlet == "" then
+    self.warn_once("chest_no_export_inlet", "FeedRouter: kein export_inlet konfiguriert, Kiste übersprungen")
+    return
+  end
+
+  local item   = cfg.waste_item or "bigreactors:cyanite_ingot"
+  local amount = tonumber(cfg.feed_amount) or 2
+
+  local me_info = safe_call(bridge, "getItem", { name = item })
+  local in_me = me_bridge_compat.item_amount(me_info)
+  if in_me < amount then
+    self.warn_once("chest_me_low", string.format(
+      "FeedRouter: ME hat nur %d %s (brauche %d) für Kiste — übersprungen", in_me, item, amount))
+    return
+  end
+
+  local color_ok, color_err = sorter.setDefaultColor(chest.color)
+  if not color_ok then
+    self._state.chest_last_error = "sorter_color_failed:" .. tostring(color_err)
+    self.warn_once("chest_sorter_color_fail",
+      "FeedRouter: Sorter-Farbe für Kiste (" .. tostring(chest.color) .. ") konnte nicht gesetzt werden: " .. tostring(color_err))
+    return
+  end
+
+  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, export_inlet)
+  local err = nil
+  if not ok then err = result; result = nil end
+  local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
+    or (type(result) == "number" and result or 0)
+  if exported and exported > 0 then
+    self._state.chest_total_feeds = self._state.chest_total_feeds + 1
+    self._state.chest_last_feed_ts = os.epoch("utc")
+    self._state.chest_last_error = nil
+    self.log("INFO", string.format(
+      "FeedRouter: Kiste befüllt mit %d/%d %s (color=%s)", exported, amount, item, tostring(chest.color)))
+  else
+    self._state.chest_last_error = tostring(err or "export failed")
+    self.warn_once("chest_feed_fail", "FeedRouter: Befüllung der Kiste fehlgeschlagen: " .. tostring(err))
+  end
+end
+
 -- Es gibt keine asynchrone Transaktion mehr, die abgebrochen werden
 -- muesste (siehe Modulkommentar oben) -- bleibt als No-Op fuer die main.lua-
 -- Schnittstelle (enter_standby() ruft dies weiterhin auf) erhalten.
@@ -262,6 +341,18 @@ function M:tick()
   local refresh_ms = (tonumber(cfg.discovery_interval) or 60) * 1000
   if now - self._state.last_refresh >= refresh_ms then
     self:refresh_peripherals()
+  end
+
+  -- Sammel-Kiste läuft auf ihrem eigenen zufälligen Intervall, unabhängig
+  -- von der Reprocessor-Rotation unten -- eigener Zeitplan, eigener Toggle.
+  local chest = cfg.chest
+  if chest and chest.enabled == true then
+    if self._state.next_chest_feed_ts == 0 then
+      self._state.next_chest_feed_ts = now + random_interval(cfg) * 1000
+    elseif now >= self._state.next_chest_feed_ts then
+      feed_chest(self, cfg)
+      self._state.next_chest_feed_ts = now + random_interval(cfg) * 1000
+    end
   end
 
   -- Zufälliges Intervall: beim ersten Tick sofort einen Timer setzen
@@ -293,6 +384,12 @@ function M:get_summary()
     last_error     = self._state.last_error,
     target_count   = #(cfg.targets or {}),
     sorter_bound   = self._state.sorter ~= nil,
+    chest_enabled       = cfg.chest ~= nil and cfg.chest.enabled == true,
+    chest_total_feeds   = self._state.chest_total_feeds,
+    chest_last_feed_ts  = self._state.chest_last_feed_ts,
+    chest_last_feed_age_s = self._state.chest_last_feed_ts and math.floor((now - self._state.chest_last_feed_ts) / 1000) or nil,
+    chest_next_feed_in_s = self._state.next_chest_feed_ts > 0 and math.max(0, math.floor((self._state.next_chest_feed_ts - now) / 1000)) or nil,
+    chest_last_error    = self._state.chest_last_error,
   }
 end
 

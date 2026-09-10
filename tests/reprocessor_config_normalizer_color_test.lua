@@ -48,6 +48,7 @@ local config = {
       { label = 'Reprocessor B', color = 'NOT_A_COLOR' }, -- invalid -> warn, left in place
       { label = 'Reprocessor C' },                      -- missing color -> warn, left in place
     },
+    chest = { enabled = true, color = 'yellow' },       -- enabled, lowercase -> must be uppercased
   },
 }
 
@@ -64,6 +65,37 @@ assert_eq(found_b, true, 'an invalid color must produce a warning naming targets
 assert_eq(found_c, true, 'a missing color must produce a warning naming targets[3]')
 assert_eq(config.feed.targets[2].color, 'NOT_A_COLOR', 'an invalid color is left in place, not silently rewritten')
 assert_eq(config.feed.targets[3].color, nil, 'a missing color stays nil, not defaulted to some color')
+
+assert_eq(config.feed.chest.color, 'YELLOW', 'an enabled chest with a valid lowercase color must be uppercased')
+
+-- An enabled chest with an invalid/missing color is warned about but left
+-- in place, exactly like a target -- feed_router.lua skips it at runtime.
+local config_bad_chest = {
+  version = 1, role = 'REPROCESSOR-NODE', node_id = 'REPROC-1',
+  debug_logging = false, reset_log_on_start = true, buffers = { 'chemical_tank_0' },
+  heartbeat_interval = 2, discovery_interval = 15, status_interval = 5,
+  comms = { ack_timeout_s = 3.0, max_retries = 4, backoff_base_s = 0.6, backoff_cap_s = 6.0,
+    dedupe_ttl_s = 30, dedupe_limit = 200, peer_timeout_s = 12.0, queue_limit = 200, drop_simulation = 0 },
+  channels = { control = 6500, status = 6501 },
+  feed = { targets = {}, chest = { enabled = true, color = nil } },
+}
+local warnings_chest = {}
+config_normalizer.normalize(config_bad_chest, defaults, function(msg) warnings_chest[#warnings_chest + 1] = msg end, utils)
+local found_chest_warning = false
+for _, w in ipairs(warnings_chest) do
+  if w:find('feed.chest') then found_chest_warning = true end
+end
+assert_eq(found_chest_warning, true, 'an enabled chest without a color must produce a dedicated warning')
+assert_eq(config_bad_chest.feed.chest.color, nil, 'a missing chest color stays nil, not defaulted to some color')
+
+-- A disabled/absent chest must not warn at all.
+local config_no_chest = { feed = { targets = {} } }
+local warnings_none = {}
+config_normalizer.normalize(config_no_chest, defaults, function(msg) warnings_none[#warnings_none + 1] = msg end, utils)
+assert_eq(config_no_chest.feed.chest.enabled, false, 'chest defaults to disabled when absent')
+for _, w in ipairs(warnings_none) do
+  assert_eq(w:find('feed.chest') == nil, true, 'a disabled chest must never produce a chest warning')
+end
 
 -- export_inlet/sorter defaults apply when missing.
 local config2 = { feed = { targets = {} } }

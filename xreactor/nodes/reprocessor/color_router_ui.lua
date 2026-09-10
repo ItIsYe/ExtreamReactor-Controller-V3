@@ -23,7 +23,7 @@ local logistical_sorter = require("adapters.logistical_sorter")
 
 local COLORS = logistical_sorter.COLORS
 local MIN_W = 62
-local MIN_H = 14
+local MIN_H = 16
 local EXCLUDED_TYPES = { monitor = true, modem = true }
 
 local function color_index(color)
@@ -74,6 +74,8 @@ function M.new(opts)
     targets = {},
     sorter_name = nil,
     export_inlet = nil,
+    chest_enabled = false,
+    chest_color = nil,
     buttons = {},
   }, { __index = M })
   self:_load_working_copy()
@@ -90,6 +92,9 @@ function M:_load_working_copy()
   self.targets = out
   self.sorter_name = fd.sorter
   self.export_inlet = fd.export_inlet
+  local chest = fd.chest or {}
+  self.chest_enabled = chest.enabled == true
+  self.chest_color = chest.color
   self.dirty = false
 end
 
@@ -133,7 +138,29 @@ function M:render(mon, _ui, _colors, should_clear)
   inlet_btn.action = "inlet_open"
   self.buttons[#self.buttons + 1] = inlet_btn
 
-  local list_top = 6
+  -- Optionale zweite Sammel-Kiste fuer rohes Cyanit -- eigener An/Aus-
+  -- Schalter + eigene Sorter-Farbe, laeuft unabhaengig von der
+  -- Reprocessor-Rotation unten (feed_router.lua's feed_chest()).
+  mux.text(mon, 2, 5, "KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
+  local chest_toggle_btn = mux.button(mon, 19, 5, 10,
+    self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
+  chest_toggle_btn.action = "chest_toggle"
+  self.buttons[#self.buttons + 1] = chest_toggle_btn
+
+  if self.chest_enabled then
+    local chest_prev_btn = mux.button(mon, 31, 5, 3, "<", "LIMITED", 1)
+    chest_prev_btn.action = "chest_color_prev"
+    self.buttons[#self.buttons + 1] = chest_prev_btn
+
+    mux.text(mon, 35, 5, mux.fit(tostring(self.chest_color or "KEINE FARBE"), 14),
+      self.chest_color and colorset.get("OK") or colorset.get("WARNING"), colorset.get("background"))
+
+    local chest_next_btn = mux.button(mon, 50, 5, 3, ">", "LIMITED", 1)
+    chest_next_btn.action = "chest_color_next"
+    self.buttons[#self.buttons + 1] = chest_next_btn
+  end
+
+  local list_top = 8
   local footer_row = h
   local action_row = footer_row - 2
   local list_bottom = action_row - 2
@@ -267,6 +294,22 @@ function M:_apply_action(btn)
     self.dirty = true
     self.mode = "list"
     return true
+  elseif btn.action == "chest_toggle" then
+    self.chest_enabled = not self.chest_enabled
+    self.dirty = true
+    return true
+  elseif btn.action == "chest_color_prev" or btn.action == "chest_color_next" then
+    local idx = color_index(self.chest_color)
+    if btn.action == "chest_color_prev" then
+      idx = idx - 1
+      if idx < 1 then idx = #COLORS end
+    else
+      idx = idx + 1
+      if idx > #COLORS then idx = 1 end
+    end
+    self.chest_color = COLORS[idx]
+    self.dirty = true
+    return true
   elseif btn.action == "color_prev" or btn.action == "color_next" then
     local t = self.targets[btn.index]
     if not t then return false end
@@ -305,7 +348,8 @@ function M:_save()
   for i, t in ipairs(self.targets) do
     targets_out[i] = { label = t.label, color = t.color }
   end
-  local out = { sorter = self.sorter_name, export_inlet = self.export_inlet, targets = targets_out }
+  local chest_out = { enabled = self.chest_enabled, color = self.chest_color }
+  local out = { sorter = self.sorter_name, export_inlet = self.export_inlet, targets = targets_out, chest = chest_out }
   local ok, err = self.write_config(self.config_path, out)
   if not ok then
     self.log("WARN", "color_router_ui: Speichern fehlgeschlagen: " .. tostring(err))
@@ -313,6 +357,7 @@ function M:_save()
   end
   self.config.feed = self.config.feed or {}
   self.config.feed.targets = targets_out
+  self.config.feed.chest = chest_out
   if self.sorter_name then self.config.feed.sorter = self.sorter_name end
   if self.export_inlet then self.config.feed.export_inlet = self.export_inlet end
   self.dirty = false

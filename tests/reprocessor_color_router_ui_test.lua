@@ -78,7 +78,23 @@ assert_true(type(footer) == 'table' and footer.left and footer.right,
 assert_eq(#ui.targets, 1)
 assert_eq(ui.sorter_name, 'sorter_0', 'working copy must load sorter from config.feed')
 assert_eq(ui.export_inlet, 'chest_0', 'working copy must load export_inlet from config.feed')
+assert_eq(ui.chest_enabled, false, 'chest must default to disabled when absent from config.feed')
 assert_eq(ui.dirty, false, 'freshly loaded working copy must not be dirty')
+
+-- Toggle the collector chest on: no color cycler buttons before, present
+-- after (they only render while the chest is enabled).
+assert_true(find_button(ui, 'chest_color_next') == nil, 'no chest color cycler while the chest is disabled')
+local chest_toggle_btn = find_button(ui, 'chest_toggle')
+assert_true(chest_toggle_btn ~= nil, 'expected a KISTE toggle button')
+assert_true(ui:handle_touch(chest_toggle_btn.x1, chest_toggle_btn.y) == true)
+assert_eq(ui.chest_enabled, true, 'toggling must enable the chest')
+assert_eq(ui.dirty, true, 'toggling the chest must mark the working copy dirty')
+
+ui:render(mon, nil, nil, true)
+local chest_next_btn = find_button(ui, 'chest_color_next')
+assert_true(chest_next_btn ~= nil, 'expected a chest color cycler once the chest is enabled')
+assert_true(ui:handle_touch((chest_next_btn.x1 + chest_next_btn.x2) / 2, chest_next_btn.y) == true)
+assert_true(ui.chest_color ~= nil, 'cycling forward from an unset chest color must select a real color')
 
 -- Open the sorter picker, verify only real sorters are listed (not the
 -- chest), and pick the other sorter.
@@ -160,8 +176,11 @@ assert_true(written ~= nil, 'save must call write_config')
 assert_eq(written.data.sorter, 'sorter_1', 'the persisted file must contain the chosen sorter')
 assert_eq(written.data.export_inlet, 'chest_0', 'the persisted file must contain the chosen export inlet')
 assert_eq(#written.data.targets, 2, 'the persisted file must contain both targets')
+assert_eq(written.data.chest.enabled, true, 'the persisted file must contain the chest toggle state')
+assert_eq(written.data.chest.color, ui.chest_color, 'the persisted file must contain the chosen chest color')
 assert_eq(#config.feed.targets, 2, 'save must apply the working copy to config.feed.targets immediately')
 assert_eq(config.feed.sorter, 'sorter_1', 'save must apply the chosen sorter to config.feed immediately')
+assert_eq(config.feed.chest.enabled, true, 'save must apply the chest toggle to config.feed immediately')
 
 -- Discard after a further edit must revert to the last-saved state.
 ui:render(mon, nil, nil, true)
