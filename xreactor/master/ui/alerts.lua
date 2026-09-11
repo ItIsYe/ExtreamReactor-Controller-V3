@@ -186,9 +186,10 @@ local function scope_short(scope)
 end
 
 local function badge_button(mon, state, key, x, y, label, status)
-  ui.badge(mon, x, y, label, status)
-  state.buttons[key] = { x1 = x, x2 = x + #(" " .. label .. " ") - 1, y = y }
-  return x + #(" " .. label .. " ") + 1
+  local w = #label + 2
+  ui.button(mon, x, y, w, label, status)
+  state.buttons[key] = { x1 = x, x2 = x + w - 1, y = y }
+  return x + w + 1
 end
 
 local function render_controls(mon, state, w)
@@ -279,7 +280,7 @@ local function render(mon, model)
   local search_text = "Search" .. (state.search_active and "*" or "") .. ": " .. (state.search ~= "" and state.search or "--")
   ui.text(mon, 4, search_y + 1, mux.fit(search_text, w - 12), colorset.get("text"), colorset.get("background"))
   local clear_x = w - 6
-  ui.badge(mon, clear_x, search_y + 1, "CLR", state.search ~= "" and "WARNING" or "OFFLINE")
+  ui.button(mon, clear_x, search_y + 1, (w - 2) - clear_x + 1, "CLR", state.search ~= "" and "WARNING" or "OFFLINE")
   state.buttons.search_focus = { x1 = 4, x2 = clear_x - 2, y = search_y + 1 }
   state.buttons.search_clear = { x1 = clear_x, x2 = w - 2, y = search_y + 1 }
 
@@ -421,8 +422,7 @@ local function render(mon, model)
     local can_ack = state.view == "active" and selected and not selected.acknowledged
 
     local function action_btn(key, x, y, bw, label, status, enabled, extra)
-      mux.card(mon, x, y, bw, 3, { status = status })
-      ui.text(mon, x + 2, y + 1, mux.fit(label, bw - 4), colorset.get(status), colorset.get("background"))
+      ui.button(mon, x, y, bw, mux.fit(label, bw), status, 3)
       if enabled then
         state.buttons[key] = { x1 = x, x2 = x + bw - 1, y1 = y, y2 = y + 2 }
         if extra then for k, v in pairs(extra) do state.buttons[key][k] = v end end
@@ -457,8 +457,10 @@ local function render(mon, model)
     if selected and not selected.acknowledged and state.view == "active" then
       x = badge_button(mon, state, "ack", x, ay, "ACK", "WARNING")
     else
-      ui.badge(mon, x, ay, selected and selected.acknowledged and "ACKED" or "ACK", "OFFLINE")
-      x = x + #(selected and selected.acknowledged and " ACKED " or " ACK ") + 1
+      local label = selected and selected.acknowledged and "ACKED" or "ACK"
+      local bw = #label + 2
+      ui.button(mon, x, ay, bw, label, "OFFLINE")
+      x = x + bw + 1
     end
     x = badge_button(mon, state, "ack_visible", x, ay, "ACK VIS", #visible_ids > 0 and state.view == "active" and "WARNING" or "OFFLINE")
     badge_button(mon, state, "ack_all", x, ay, "ACK ALL", #entries > 0 and state.view == "active" and "WARNING" or "OFFLINE")

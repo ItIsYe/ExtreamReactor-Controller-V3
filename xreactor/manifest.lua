@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 656,
-  manifest_id = "manifest-v656",
+  manifest_version = 657,
+  manifest_id = "manifest-v657",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "761d58d8", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "9738075f", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -40,7 +40,7 @@ return {
   { path = "core/startup_report.lua", size_bytes = 4228, hash = "f3adc4b4", always = true },
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d", required_for={"MASTER"} },
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948", required_for={"MASTER"} },
-  { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
+  { path = "core/ui.lua", size_bytes = 14307, hash = "806e947c", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/ui_router.lua", size_bytes = 17642, hash = "39518dbc", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/window_buffer.lua", size_bytes = 3681, hash = "1743677d", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/utils.lua", size_bytes = 33083, hash = "e37e6df6" },
@@ -85,19 +85,19 @@ return {
     { path = "master/runtime_ops_rt.lua", size_bytes = 17147, hash = "476e290a", required_for={"MASTER"} },
     { path = "master/startup_sequencer.lua", size_bytes = 11394, hash = "d90e5035", required_for={"MASTER"} },
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"} },
-    { path = "master/ui/alarms.lua", size_bytes = 8685, hash = "a1aceb50", required_for={"MASTER"} },
-    { path = "master/ui/alerts.lua", size_bytes = 28137, hash = "4bf57a50", required_for={"MASTER"} },
+    { path = "master/ui/alarms.lua", size_bytes = 8842, hash = "1f6aeb43", required_for={"MASTER"} },
+    { path = "master/ui/alerts.lua", size_bytes = 28046, hash = "c488a7fc", required_for={"MASTER"} },
     { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"} },
     { path = "master/ui/multiview.lua", size_bytes = 17050, hash = "e01ba1a0", required_for={"MASTER"} },
     { path = "master/ui/overview.lua", size_bytes = 13792, hash = "33054a4f", required_for={"MASTER"} },
     { path = "master/ui/resources.lua", size_bytes = 6869, hash = "a28f683a", required_for={"MASTER"} },
     { path = "master/ui/rt_dashboard.lua", size_bytes = 13651, hash = "4c1330dc", required_for={"MASTER"} },
-    { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"} },
+    { path = "master/ui/widgets.lua", size_bytes = 7625, hash = "c6b0eec7", required_for={"MASTER"} },
     { path = "master/ui/layout.lua", size_bytes = 5981, hash = "bbec1760", required_for={"MASTER"} },
     { path = "master/ui/maintenance.lua", size_bytes = 4360, hash = "17833cc1", required_for={"MASTER"} },
     { path = "master/ui/updates.lua", size_bytes = 4768, hash = "60c2f1b0", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 5870, hash = "8c265931", required_for={"MASTER"} },
-    { path = "master/ui/config_editor.lua", size_bytes = 6111, hash = "8d0407ad", required_for={"MASTER"} },
+    { path = "master/ui/config_editor.lua", size_bytes = 6199, hash = "777fb0e2", required_for={"MASTER"} },
     -- VALVE bewusst nicht in required_for: hat einen eigenen, fest
     -- eingebauten 1x1-Statusmonitor in nodes/valve/main.lua
     -- (render_status_monitor()), unabhaengig von diesem 1x3-Ampel-Modul.

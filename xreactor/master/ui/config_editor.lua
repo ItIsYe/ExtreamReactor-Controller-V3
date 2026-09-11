@@ -81,9 +81,12 @@ local function render(mon, model)
       if not s.toggle then
         mux.outlined_progress(mon, x + 2, y + 3, card_w - 4, clamp01(s.value, s.min, s.max), s.status, shown)
         local cy = y + card_h - 2
-        mux.data_row(mon, x + 2, cy, card_w - 4, { label = "[-]", value = "[+]", status = "LIMITED" })
-        hits[#hits + 1] = { type = s.type, delta = -s.delta, x1 = x + 2, x2 = x + 4, y1 = cy, y2 = cy }
-        hits[#hits + 1] = { type = s.type, delta = s.delta, x1 = x + card_w - 4, x2 = x + card_w - 2, y1 = cy, y2 = cy }
+        local btn_w = 3
+        local plus_x = x + card_w - 3 - btn_w
+        mux.button(mon, x + 2, cy, btn_w, "-", "LIMITED")
+        mux.button(mon, plus_x, cy, btn_w, "+", "LIMITED")
+        hits[#hits + 1] = { type = s.type, delta = -s.delta, x1 = x + 2, x2 = x + 1 + btn_w, y1 = cy, y2 = cy }
+        hits[#hits + 1] = { type = s.type, delta = s.delta, x1 = plus_x, x2 = plus_x + btn_w - 1, y1 = cy, y2 = cy }
       else
         local cy = y + 3
         mux.banner(mon, x + 2, cy, card_w - 4, s.display or "OFF", s.status, s.icon)

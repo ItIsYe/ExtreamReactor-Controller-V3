@@ -98,9 +98,11 @@ local function render(mon, model)
   local window_label = window_labels[window_key] or "alle"
   local history_count = model and model.history and #model.history or 0
   local footer = string.format(" %s | %d aktiv  %d quittiert | Hist:%s(%d) ", ts_now, n_pending, n_acked, window_label, history_count)
+  -- Solide OFFLINE-graue Leiste wie mux.footer_nav()'s Standard-Footer, statt
+  -- reinem Text auf Hintergrund -- macht sichtbar, dass die Zeile antippbar ist.
   ui.text(mon, 1, h,
     footer .. string.rep(" ", math.max(0, w - #footer)),
-    colorset.get("muted"), colorset.get("background"))
+    colorset.get("text"), colorset.get("OFFLINE"))
   -- Ganze Footer-Zeile als Touch-Zone fuer den Zeitfenster-Wechsel — einfacher
   -- als eine praezise Teilzone im Text zu berechnen, und der Footer hat sonst
   -- keine andere Funktion.

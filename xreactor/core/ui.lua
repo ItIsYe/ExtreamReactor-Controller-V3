@@ -211,6 +211,37 @@ function ui.badge(mon, x, y, text, status)
   ui.text(mon, x, y, " " .. text .. " ", colors.background, color)
 end
 
+-- Solide gefuellter Button-Block (Breite w, Hoehe h, zentrierter schwarzer
+-- Text auf Status-Farbe) -- Gegenstueck zu core/mockup_ui.lua's M.button(),
+-- fuer Touch-Ziele im aelteren core/ui.lua-Widget-System (Master AUX-UI),
+-- damit dort dieselbe solide Button-Optik wie auf den Node-Dashboards gilt.
+function ui.button(mon, x, y, w, text, status, h)
+  if not mon then return end
+  if not w or w <= 0 then return end
+  local height = math.max(1, math.floor(tonumber(h) or 1))
+  local snapshot = table.concat({ tostring(w), tostring(height), tostring(text), tostring(status) }, "|")
+  local key = ("button:%d:%d"):format(x, y)
+  if not is_dirty(mon, key, snapshot) then return end
+  local bg = colors.get(status) or colors.get("OK")
+  local fg = colors.get("background")
+  local label = tostring(text or "")
+  if #label > w then label = label:sub(1, w) end
+  local pad_left = math.floor((w - #label) / 2)
+  local mid_row = y + math.floor((height - 1) / 2)
+  redirect(mon, function()
+    term.setBackgroundColor(bg)
+    term.setTextColor(fg)
+    for row = y, y + height - 1 do
+      term.setCursorPos(x, row)
+      if row == mid_row then
+        term.write(string.rep(" ", pad_left) .. label .. string.rep(" ", w - pad_left - #label))
+      else
+        term.write(string.rep(" ", w))
+      end
+    end
+  end, "ui.button")
+end
+
 function ui.bigNumber(mon, x, y, label, value, unit, status)
   if not mon then return end
   local value_text = tostring(value or "")
