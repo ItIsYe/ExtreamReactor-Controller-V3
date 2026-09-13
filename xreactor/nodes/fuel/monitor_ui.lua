@@ -162,7 +162,7 @@ function M.render_monitor(ctx, model)
         { name = "Diagnostics", render = page_with_large_footer(fuel_ui.render_diagnostics, "FUEL DIAGNOSTICS"),
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
         { name = "Router", render = function(target, page_model, should_clear)
-            ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear)
+            ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear, true)
             return large_footer(target, "ROUTER")
           end,
           handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }

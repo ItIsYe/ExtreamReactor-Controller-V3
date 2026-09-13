@@ -315,7 +315,14 @@ end
 
 -- ---- top-level render ---------------------------------------------------------
 
-function M:render(target, ui, colors, should_clear)
+-- skip_footer: monitor_ui.lua's Seiten-Wrapper zeichnet fuer alle FUEL-
+-- Seiten (inkl. Router) bereits den grossen Doppelpfeil-Footer
+-- (monitor_scada.footer()) direkt nach diesem Aufruf -- ohne skip_footer
+-- zeichnete render() hier zusaetzlich einen zweiten, sichtbar doppelten
+-- mux.footer_nav()-Balken. Steht Reprocessor-Style-Aufrufern (Tests,
+-- Standalone-Rendering) weiterhin als eigener Footer mit Touch-Geometrie
+-- zur Verfuegung, wenn das Flag weggelassen wird.
+function M:render(target, ui, colors, should_clear, skip_footer)
   if should_clear == nil then should_clear = false end
   local w, h = ui.getSize(target)
   if not w or not h then
@@ -339,6 +346,7 @@ function M:render(target, ui, colors, should_clear)
   else
     self:_render_list(target, w, h); footer_center = "FUEL ROUTER"
   end
+  if skip_footer then return end
   return mux.footer_nav(target, h, w, { center = footer_center, inset = 3 })
 end
 
