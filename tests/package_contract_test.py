@@ -7,7 +7,7 @@ v=(R/'xreactor/nodes/valve/local_ui.lua').read_text(encoding='utf-8')
 h=(R/'xreactor/nodes/fuel/half_overview.lua').read_text(encoding='utf-8')
 assert 'Complete native 82x40 rewrite' in l and 'Complete native 82x40 rewrite' in r
 assert 'M.SUPPORTED_SCALES = { 1.0 }' in m and 'M.FOOTER_Y = 38' in m
-assert 'NICHT KONFIGURIERT' in l and 'local REACTORS_PER_PAGE = 16' in l
+assert 'NICHT KONFIGURIERT' in l and 'local REACTORS_PER_PAGE = 12' in l
 assert 'local button_w = 6' in r and '"EDIT", "LIMITED", 1' in r
 assert 'DISABLED_FIXED_SCALE_1' in h
 assert v.count('apply_valve(true, true)') == 1 and 'apply_valve(false' not in v

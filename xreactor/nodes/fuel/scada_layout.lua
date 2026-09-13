@@ -19,8 +19,15 @@ local colorset = require("shared.colors")
 local TARGET_W = 82
 local TARGET_H = 40
 local CONTENT_BOTTOM = 35
-local REACTORS_PER_PAGE = 16
-local REACTOR_ROWS_PER_COLUMN = 8
+-- 3 Zeilen pro Slot (Label, Balken, Luecke) statt vorher 2 (Label, Balken
+-- direkt gefolgt vom naechsten Label) -- die Reaktoren wirkten sonst
+-- zusammengequetscht, ohne jede visuelle Trennung zwischen zwei
+-- konfigurierten Eintraegen (Nutzer-Feedback 2026-09-13). Kapazitaet sinkt
+-- dafuer von 16 auf 12 Reaktoren/Seite (6 Zeilen x 2 Spalten) -- mit 7
+-- Zeilen wuerde die letzte Balkenzeile (y=33) die Pagination-Buttons
+-- weiter unten (ebenfalls y=33) ueberlappen.
+local REACTORS_PER_PAGE = 12
+local REACTOR_ROWS_PER_COLUMN = 6
 
 local function clamp(v, lo, hi)
   v = tonumber(v) or lo
@@ -217,7 +224,7 @@ local function overview(mon, model, should_clear, state)
     local col = slot > REACTOR_ROWS_PER_COLUMN and 2 or 1
     local row = (slot - 1) % REACTOR_ROWS_PER_COLUMN
     draw_reactor_slot(mon, col == 1 and left_x or right_x,
-      14 + row * 2, col_w, reactors[index], index)
+      14 + row * 3, col_w, reactors[index], index)
   end
 
   state.overview_prev, state.overview_next = nil, nil
