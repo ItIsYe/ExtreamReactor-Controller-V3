@@ -64,10 +64,23 @@ function M.build_status_payload(ctx)
     local ok_rs, value = pcall(ctx.get_rs_router)
     if ok_rs then rs_router = value end
   end
+
+  -- get_valve_status() re-allocates a fresh table across every known comms
+  -- peer (comms:get_peers()) and sorts every valve -- fetch it ONCE here and
+  -- hand it to operational_summary.enrich() too, instead of both this
+  -- function and enrich()'s internal route_context() each paying that cost
+  -- independently every status cycle (every 0.5s regardless of activity).
+  local valve_status = nil
+  if rs_router and rs_router.get_valve_status then
+    local ok_vs, value = pcall(rs_router.get_valve_status, rs_router)
+    if ok_vs then valve_status = value end
+  end
+
   payload.logistics = operational_summary.enrich(logistics, {
     config = config,
     fuel_status = logistics_router.fuel_status,
     rs_router = rs_router,
+    valve_status = valve_status,
   })
 
   payload.bindings = fuel_health.bindings
@@ -76,16 +89,13 @@ function M.build_status_payload(ctx)
   -- eine kompakte VALVE-Offline-Zusammenfassung sind Teil des Payloads,
   -- damit Header/Banner/Ampel und Diagnostics dieselbe Wahrheit verwenden.
   payload.routing_load_status = ctx.routing_load_status
-  if rs_router and rs_router.get_valve_status then
-    local ok_vs, valve_status = pcall(rs_router.get_valve_status, rs_router)
-    if ok_vs then
-      local offline, stale = 0, 0
-      for _, vs in ipairs(valve_status) do
-        if vs.online == false then offline = offline + 1
-        elseif vs.stale == true then stale = stale + 1 end
-      end
-      payload.valve_summary = { total = #valve_status, offline = offline, stale = stale }
+  if valve_status then
+    local offline, stale = 0, 0
+    for _, vs in ipairs(valve_status) do
+      if vs.online == false then offline = offline + 1
+      elseif vs.stale == true then stale = stale + 1 end
     end
+    payload.valve_summary = { total = #valve_status, offline = offline, stale = stale }
   end
   return payload
 end

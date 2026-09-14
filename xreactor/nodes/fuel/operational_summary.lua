@@ -37,7 +37,15 @@ local function config_for(config, reactor)
   return {}
 end
 
-local function route_context(rs_router)
+-- valve_status_override lets a caller that already fetched get_valve_status()
+-- this cycle (e.g. status_snapshot.lua, which also needs it for
+-- payload.valve_summary) pass that same list through instead of paying for
+-- another full comms:get_peers() + valve-list rebuild -- get_valve_status()
+-- allocates a fresh table across every known peer and sorts every valve, so
+-- calling it twice per status cycle doubles that cost for nothing (both
+-- calls return the same data in the same cycle). Falls back to fetching it
+-- itself when no override is given, unchanged for any other caller.
+local function route_context(rs_router, valve_status_override)
   if type(rs_router) ~= "table" then
     return { state = "ROUTING_NOT_CONFIGURED", routes = {}, valves = {} }
   end
@@ -55,12 +63,14 @@ local function route_context(rs_router)
   end
 
   local valves = {}
-  if type(rs_router.get_valve_status) == "function" then
+  local valve_list = valve_status_override
+  if valve_list == nil and type(rs_router.get_valve_status) == "function" then
     local ok, value = pcall(rs_router.get_valve_status, rs_router)
-    if ok and type(value) == "table" then
-      for _, valve in ipairs(value) do
-        if type(valve) == "table" and valve.id ~= nil then valves[tostring(valve.id)] = valve end
-      end
+    if ok and type(value) == "table" then valve_list = value end
+  end
+  if type(valve_list) == "table" then
+    for _, valve in ipairs(valve_list) do
+      if type(valve) == "table" and valve.id ~= nil then valves[tostring(valve.id)] = valve end
     end
   end
 
@@ -121,7 +131,7 @@ function M.enrich(summary, opts)
   summary.reactors = type(summary.reactors) == "table" and summary.reactors or {}
 
   local now = tonumber(opts.now_ms) or (os.epoch and os.epoch("utc") or 0)
-  local route_ctx = route_context(opts.rs_router)
+  local route_ctx = route_context(opts.rs_router, opts.valve_status)
   local counts = { configured = 0, ready = 0, blocked = 0, stale = 0, missing = 0 }
   local fuel_counts = { fresh = 0, stale = 0, missing = 0 }
 

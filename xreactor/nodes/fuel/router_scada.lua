@@ -352,8 +352,8 @@ local function known_valves(self)
   return out
 end
 
-local function valve_label(self, id)
-  for _, v in ipairs(known_valves(self)) do
+local function valve_label(valves, id)
+  for _, v in ipairs(valves) do
     if v.id == id then return v.label end
   end
   return tostring(id)
@@ -379,11 +379,17 @@ local function draw_path(self, target, _w, _h)
     title = "VENTIL ANFUEGEN", status = "LIMITED", icon = "output",
   })
 
+  -- known_valves() rebuilds+sorts the full valve peer list from a fresh
+  -- comms:get_peers() snapshot -- fetch it ONCE for this render instead of
+  -- once per visible path row (valve_label()) plus once more for the
+  -- picker list below (was up to PATH_VISIBLE+1 = 8 full rebuilds/render).
+  local valves = known_valves(self)
+
   u.path_scroll = clamp(u.path_scroll, 0, math.max(0, path_count(editing) - PATH_VISIBLE))
   local py = 11
   for i = u.path_scroll + 1, math.min(path_count(editing), u.path_scroll + PATH_VISIBLE) do
     local id = editing.path[i]
-    mux.text(target, 4, py, mux.fit(tostring(i) .. ". " .. valve_label(self, id), 29),
+    mux.text(target, 4, py, mux.fit(tostring(i) .. ". " .. valve_label(valves, id), 29),
       colorset.get("text"), colorset.get("background"))
     local btn = mux.button(target, 35, py, 3, "X", "WARNING", 1)
     btn.index = i
@@ -394,7 +400,6 @@ local function draw_path(self, target, _w, _h)
     mux.text(target, 4, 12, "(noch kein Ventil)", colorset.get("muted"), colorset.get("background"))
   end
 
-  local valves = known_valves(self)
   u.picker_scroll = clamp(u.picker_scroll, 0, math.max(0, #valves - VALVE_VISIBLE))
   local vy = 11
   for i = u.picker_scroll + 1, math.min(#valves, u.picker_scroll + VALVE_VISIBLE) do
