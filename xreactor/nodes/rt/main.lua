@@ -664,14 +664,35 @@ local function build_command_ctx()
     protocol = protocol, constants = constants, STATE = STATE,
     TARGET_RPM = CONFIG.TARGET_RPM,
     targets = ctx and ctx.targets or {},
-    node_state_machine = node_state_machine,
+    -- build_command_ctx() runs (init() line ~948) BEFORE configure_state_
+    -- machine() assigns the node_state_machine upvalue (init() line ~1012)
+    -- -- a direct `node_state_machine = node_state_machine` field here would
+    -- snapshot a permanent nil into this ctx table forever. Only a closure
+    -- sees the value configure_state_machine() assigns later.
+    get_node_state_machine = function() return node_state_machine end,
     apply_mode = function(mode)
       state_handlers.apply_mode({
         STATE = STATE, config = config, log = log,
+        constants = constants,
         is_master_connected = is_master_connected,
         get_current_state = current_state,
         set_current_state = function(v) current_state_value = v end,
         get_node_state_machine = function() return node_state_machine end,
+        -- Only reachable via SET_MODE("SAFE"), never observed in practice
+        -- (MASTER always uses SET_SETPOINTS' desired_node_state=EMERGENCY
+        -- for that), but state_handlers.apply_mode()'s SAFE branch calls
+        -- these unconditionally -- wire them so that path can't crash on
+        -- a missing function either, matching configure_state_machine()'s
+        -- state_ctx below.
+        apply_safe_controls = function()
+          module_lifecycle.apply_safe_controls(make_lifecycle_ctx())
+        end,
+        set_reactors_active = function(active, reason)
+          module_lifecycle.set_reactors_active(make_lifecycle_ctx(), active, reason)
+        end,
+        set_turbines_active = function(active, reason)
+          module_lifecycle.set_turbines_active(make_lifecycle_ctx(), active, reason)
+        end,
       }, mode)
     end,
     -- MASTER-ausgeloeste STARTUP_STAGE/REQUEST_STARTUP_MODULE-Kommandos brauchen

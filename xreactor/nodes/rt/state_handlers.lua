@@ -1,5 +1,13 @@
 local M = {}
 
+-- Fallback for callers that omit ctx.constants (e.g. main.lua's apply_mode
+-- closure previously did -- production crash: "attempt to index a nil
+-- value" at the (ctx.constants or constants).node_states lookups below,
+-- since this module never required its own constants and the bare name
+-- was simply an undefined global). Callers should still pass ctx.constants
+-- explicitly where practical; this is the safety net, not the primary path.
+local constants = require("shared.constants")
+
 local function has_off_modules(modules, kind)
   for _, module in pairs(modules or {}) do
     if module.type == kind and module.state == "OFF" then

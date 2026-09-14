@@ -23,6 +23,21 @@ local function get_learning(ctx)
   return ctx.capacity_learning
 end
 
+-- Support both direct field (test mocks, e.g. rt_command_shutdown_transition_
+-- test.lua) and getter (main.lua's real ctx). main.lua's build_command_ctx()
+-- is called before node_state_machine is actually assigned (configure_
+-- state_machine() runs later in init()), so a direct `node_state_machine =
+-- node_state_machine` field on that ctx snapshots a permanent nil -- only a
+-- closure (get_node_state_machine) sees the real, later-assigned value.
+-- Without this, transition_mode() crashed on every MODE command with
+-- "attempt to index field 'node_state_machine' (a nil value)".
+local function get_machine(ctx)
+  if ctx.get_node_state_machine then
+    return ctx.get_node_state_machine()
+  end
+  return ctx.node_state_machine
+end
+
 -- Prüft ob das Capacity-Learning eine gültige Messung hat.
 -- Erst dann darf der Master Prozentvorgaben senden (sonst wäre
 -- power_percent relativ zu einer unbekannten Kapazität sinnlos).
@@ -102,7 +117,7 @@ local function set_setpoints(command, ctx, record)
     targets.assignment_state = tostring(value.assignment_state)
   end
   local desired_state = value.desired_node_state
-  local machine = ctx.node_state_machine
+  local machine = get_machine(ctx)
   local states = ctx.get_states()
   if desired_state and not states[desired_state] then
     return record({ ok = false, error = "invalid desired_node_state", reason_code = "INVALID_STATE", desired_node_state = desired_state })
@@ -162,8 +177,9 @@ local function transition_mode(command, ctx)
     return
   end
   local states = ctx.get_states()
-  if states[command.value] then
-    ctx.node_state_machine:transition(command.value)
+  local machine = get_machine(ctx)
+  if states[command.value] and machine then
+    machine:transition(command.value)
   end
 end
 

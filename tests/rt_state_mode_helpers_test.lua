@@ -100,4 +100,34 @@ end)
 assert_true(not build_ok and tostring(build_err):find('state handler context missing function: is_master_connected', 1, true) ~= nil,
   'state handler build must reject contexts without is_master_connected')
 
+-- Regression test (production log 2026-09-14, disk6.zip): main.lua's
+-- build_command_ctx() apply_mode closure omitted ctx.constants entirely,
+-- and this module never required its own -- (ctx.constants or constants)
+-- crashed with "attempt to index a nil value" on every MASTER/SAFE mode
+-- transition via the MODE command. Must be a harmless no-crash now that
+-- the module requires its own fallback.
+local no_constants_transitions = {}
+local no_constants_machine_state = constants.node_states.OFF
+local no_constants_current_state = 'AUTONOM'
+local no_constants_ctx = {
+  STATE = { INIT = 'INIT', MASTER = 'MASTER', AUTONOM = 'AUTONOM', SAFE = 'SAFE' },
+  -- constants field deliberately omitted here.
+  log = function() end,
+  get_current_state = function() return no_constants_current_state end,
+  set_current_state = function(value) no_constants_current_state = value end,
+  get_node_state_machine = function()
+    return {
+      state = function() return no_constants_machine_state end,
+      transition = function(_, next_state)
+        table.insert(no_constants_transitions, next_state)
+        no_constants_machine_state = next_state
+      end,
+    }
+  end,
+}
+local ok_master = pcall(handlers.apply_mode, no_constants_ctx, no_constants_ctx.STATE.MASTER)
+assert_true(ok_master, 'apply_mode(MASTER) must not crash when ctx.constants is missing')
+assert_eq(no_constants_transitions[#no_constants_transitions], constants.node_states.STARTUP,
+  'apply_mode(MASTER) must still transition to STARTUP from OFF without ctx.constants')
+
 print('rt_state_mode_helpers_test.lua: ok')
