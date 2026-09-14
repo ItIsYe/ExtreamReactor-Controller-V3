@@ -63,4 +63,44 @@ do
   assert(r:scan() == nil)
 end
 
+-- 6) autodetect_chest_name: exactly one candidate (not excluded, has
+--    .list()) -> returns its name.
+do
+  local api = {
+    getNames = function() return { 'minecraft:chest_5', 'Mekanism_sorter_0', 'modem_0' } end,
+    wrap = function(name)
+      if name == 'minecraft:chest_5' then return { list = function() return {} end } end
+      if name == 'Mekanism_sorter_0' then return { setAutoMode = function() end } end
+      return { isWireless = function() return true end }
+    end,
+  }
+  local name, candidates = hop_reporter.autodetect_chest_name(api, { 'Mekanism_sorter_0', 'modem_0' })
+  assert(name == 'minecraft:chest_5')
+  assert(#candidates == 1)
+end
+
+-- 7) autodetect_chest_name: multiple inventory candidates -> nil, but the
+--    full candidate list is still returned for logging.
+do
+  local api = {
+    getNames = function() return { 'minecraft:chest_5', 'minecraft:chest_6' } end,
+    wrap = function() return { list = function() return {} end } end,
+  }
+  local name, candidates = hop_reporter.autodetect_chest_name(api, {})
+  assert(name == nil)
+  assert(#candidates == 2)
+end
+
+-- 8) autodetect_chest_name: no inventory-capable peripheral -> nil, empty
+--    candidate list.
+do
+  local api = {
+    getNames = function() return { 'modem_0' } end,
+    wrap = function() return { isWireless = function() return true end } end,
+  }
+  local name, candidates = hop_reporter.autodetect_chest_name(api, {})
+  assert(name == nil)
+  assert(#candidates == 0)
+end
+
 print('valve_hop_reporter_test.lua: ok')

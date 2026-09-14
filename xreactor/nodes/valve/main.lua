@@ -168,9 +168,28 @@ else
     .. tostring(valve_modem_error or "kein Wireless Modem"), "ERROR")
 end
 
-local hop_reporter = hop_reporter_lib.new({ hop_chest = config.hop_chest })
+-- Auto-Erkennung NUR wenn config.hop_chest nicht gesetzt ist UND genau eine
+-- (Sorter/Wireless-Modem ausgenommene) Inventory-Peripherie gefunden wird --
+-- bei mehreren Kandidaten wird bewusst nicht geraten, nur geloggt, damit der
+-- Nutzer manuell in der Config waehlen kann (siehe hop_reporter.lua).
+local hop_chest_name = config.hop_chest
+if hop_chest_name == nil then
+  local sorter_name = controller.sorter_resolved_name or config.sorter_name
+  local detected, candidates = hop_reporter_lib.autodetect_chest_name(
+    peripheral, { sorter_name, valve_modem_name })
+  if detected then
+    hop_chest_name = detected
+    utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste automatisch erkannt: " .. tostring(detected), "INFO")
+  elseif #candidates > 1 then
+    utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste nicht eindeutig (" .. #candidates
+      .. " Kandidaten: " .. table.concat(candidates, ", ")
+      .. ") -- bitte hop_chest manuell in " .. CONFIG.CONFIG_PATH .. " setzen", "WARN")
+  end
+end
+
+local hop_reporter = hop_reporter_lib.new({ hop_chest = hop_chest_name })
 if hop_reporter:is_enabled() then
-  utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste erkannt: " .. tostring(config.hop_chest), "INFO")
+  utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste erkannt: " .. tostring(hop_chest_name), "INFO")
 elseif config.hop_chest ~= nil then
   utils.log(CONFIG.LOG_PREFIX, "hop_chest konfiguriert (" .. tostring(config.hop_chest)
     .. "), aber nicht erreichbar -- keine HOP_SCAN-Meldungen", "WARN")
@@ -214,9 +233,9 @@ local valve_ui = valve_local_ui.new({
   get_comms_diagnostics = function() return comms:get_diagnostics() end,
   get_hop_status = function()
     return {
-      configured = config.hop_chest ~= nil,
+      configured = hop_chest_name ~= nil,
       enabled = hop_reporter:is_enabled(),
-      chest = config.hop_chest,
+      chest = hop_chest_name,
       interval_s = tonumber(config.hop_scan_interval) or 4,
       last_scan_ms = last_hop_scan_ms,
       modem_ready = valve_modem ~= nil,

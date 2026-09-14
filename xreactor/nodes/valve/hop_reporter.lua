@@ -13,6 +13,38 @@
 local M = {}
 M.__index = M
 
+-- Auto-Erkennung NUR wenn eindeutig: liefert den Namen zurueck, wenn genau
+-- EINE Peripherie (ausser den ausgeschlossenen Namen -- Sorter, Wireless
+-- Modem) eine list()-Methode hat (= eine Kiste/Inventory). Bei 0 oder
+-- mehreren Kandidaten wird nil zurueckgegeben (plus die volle Kandidaten-
+-- liste zum Loggen) -- bewusst kein Raten bei Mehrdeutigkeit, das war
+-- genau das Risiko, das die bisherige "MUSS explizit gesetzt werden"-
+-- Regel vermeiden sollte (siehe Kopfkommentar). Rein lesend: wrapt nur zum
+-- Pruefen von .list, aendert nichts an der Peripherie.
+function M.autodetect_chest_name(peripheral_api, exclude_names)
+  local excluded = {}
+  for _, name in ipairs(exclude_names or {}) do
+    if type(name) == "string" then excluded[name] = true end
+  end
+  if not peripheral_api or type(peripheral_api.getNames) ~= "function" then
+    return nil, {}
+  end
+  local ok_names, names = pcall(peripheral_api.getNames)
+  if not ok_names or type(names) ~= "table" then return nil, {} end
+
+  local candidates = {}
+  for _, name in ipairs(names) do
+    if not excluded[name] then
+      local wrap_ok, wrapped = pcall(peripheral_api.wrap, name)
+      if wrap_ok and wrapped and type(wrapped.list) == "function" then
+        candidates[#candidates + 1] = name
+      end
+    end
+  end
+  if #candidates == 1 then return candidates[1], candidates end
+  return nil, candidates
+end
+
 function M.new(opts)
   opts = opts or {}
   local peripheral_api = opts.peripheral_api or peripheral
