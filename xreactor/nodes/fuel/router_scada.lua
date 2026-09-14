@@ -58,6 +58,23 @@ local function clear_rect_refs(u)
   u.teach_btn = nil
 end
 
+-- Jede draw_*()-Funktion zeichnet nur die Elemente IHRES Modus (list/edit/
+-- learn/chest_pick/path) -- ohne dies wuerde beim Moduswechsel (z.B. Liste
+-- -> Bearbeiten -> Ventilkette) alter Inhalt stehen bleiben, den der neue
+-- Modus nicht ueberschreibt (z.B. SPEICHERN/VERWERFEN bei y=33 aus der
+-- Liste neben FERTIG/LOESCHEN/ABBRECHEN bei y=31 im Bearbeiten-Modus --
+-- sieht wie ueberlappende Buttons aus). Der uebergeordnete should_clear-
+-- Parameter (core/ui_router.lua) cleart nur beim Wechsel der 4 Hauptseiten
+-- Overview/Details/Diagnostics/Router, nicht bei diesen internen Modi.
+-- Deshalb hier zusaetzlich: einmal cleared, sobald sich der Modus seit dem
+-- letzten Render geaendert hat.
+local function clear_on_mode_change(u, target, mode_name)
+  if u._scada_mode ~= mode_name then
+    mux.clear(target)
+    u._scada_mode = mode_name
+  end
+end
+
 local function draw_size_error(target, w, h)
   mux.clear(target)
   mux.header(target, {
@@ -115,6 +132,7 @@ end
 local function draw_list(self, target, w, _h)
   local u = self._ui
   clear_rect_refs(u)
+  clear_on_mode_change(u, target, "list")
   draw_header_state(target, self, u)
   top_controls(target, u)
 
@@ -190,6 +208,7 @@ local function draw_edit(self, target, _w, _h)
   clear_rect_refs(u)
   local editing = u.editing
   if not editing then u.mode = "list"; return draw_list(self, target, TARGET_W, TARGET_H) end
+  clear_on_mode_change(u, target, "edit")
   draw_header_state(target, self, u,
     "REAKTOR BEARBEITEN: " .. tostring(editing.label or editing.reactor_id or "?"))
 
@@ -255,6 +274,7 @@ end
 local function draw_learn(self, target, _w, _h)
   local u = self._ui
   clear_rect_refs(u)
+  clear_on_mode_change(u, target, "learn")
   draw_header_state(target, self, u, "REAKTOR EINLERNEN")
   local candidates = learnable_reactors(self)
   mux.card(target, 2, 5, 79, 26, {
@@ -294,6 +314,7 @@ end
 local function draw_chest_pick(self, target, _w, _h)
   local u = self._ui
   clear_rect_refs(u)
+  clear_on_mode_change(u, target, "chest_pick")
   draw_header_state(target, self, u, "EXPORT-KISTE WAEHLEN")
   local names = peripheral_names()
   mux.card(target, 2, 5, 79, 26, {
@@ -343,6 +364,7 @@ local function draw_path(self, target, _w, _h)
   clear_rect_refs(u)
   local editing = u.editing
   if not editing then u.mode = "list"; return draw_list(self, target, TARGET_W, TARGET_H) end
+  clear_on_mode_change(u, target, "path")
   draw_header_state(target, self, u,
     "VENTILKETTE: " .. tostring(editing.label or editing.reactor_id or "?"))
 
@@ -411,23 +433,43 @@ function M.attach(router)
   router._scada_rewrite_attached = true
 
   router._render_list = function(self, target, w, h)
-    if w ~= TARGET_W or h ~= TARGET_H then clear_rect_refs(self._ui); return draw_size_error(target, w, h) end
+    if w ~= TARGET_W or h ~= TARGET_H then
+      clear_rect_refs(self._ui)
+      self._ui._scada_mode = nil
+      return draw_size_error(target, w, h)
+    end
     return draw_list(self, target, w, h)
   end
   router._render_edit = function(self, target, w, h)
-    if w ~= TARGET_W or h ~= TARGET_H then clear_rect_refs(self._ui); return draw_size_error(target, w, h) end
+    if w ~= TARGET_W or h ~= TARGET_H then
+      clear_rect_refs(self._ui)
+      self._ui._scada_mode = nil
+      return draw_size_error(target, w, h)
+    end
     return draw_edit(self, target, w, h)
   end
   router._render_learn = function(self, target, w, h)
-    if w ~= TARGET_W or h ~= TARGET_H then clear_rect_refs(self._ui); return draw_size_error(target, w, h) end
+    if w ~= TARGET_W or h ~= TARGET_H then
+      clear_rect_refs(self._ui)
+      self._ui._scada_mode = nil
+      return draw_size_error(target, w, h)
+    end
     return draw_learn(self, target, w, h)
   end
   router._render_chest_pick = function(self, target, w, h)
-    if w ~= TARGET_W or h ~= TARGET_H then clear_rect_refs(self._ui); return draw_size_error(target, w, h) end
+    if w ~= TARGET_W or h ~= TARGET_H then
+      clear_rect_refs(self._ui)
+      self._ui._scada_mode = nil
+      return draw_size_error(target, w, h)
+    end
     return draw_chest_pick(self, target, w, h)
   end
   router._render_path = function(self, target, w, h)
-    if w ~= TARGET_W or h ~= TARGET_H then clear_rect_refs(self._ui); return draw_size_error(target, w, h) end
+    if w ~= TARGET_W or h ~= TARGET_H then
+      clear_rect_refs(self._ui)
+      self._ui._scada_mode = nil
+      return draw_size_error(target, w, h)
+    end
     return draw_path(self, target, w, h)
   end
   return router
