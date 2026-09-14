@@ -171,11 +171,29 @@ local function summary_cards(mon, payload, logistics, reactors)
     colorset.get(logistics.export_chest and "muted" or "WARNING"), colorset.get("background"))
 end
 
+-- overview() only clears the screen on the very first render of the page
+-- (should_clear -- see draw_header()), not on every tick, so a reactor
+-- slot whose text SHRINKS between two renders (e.g. "NICHT KONFIGURIERT"
+-- -> "Reaktor 4" once it gets configured) must overwrite the full cell
+-- range itself, or the old text's tail keeps showing ("Reaktor 4NFIGURIERT"
+-- -- user report 2026-09-14). mux.fit() only truncates long text, it never
+-- pads short text, so every variable-length write in this function must be
+-- padded to its full fixed slot width explicitly.
+local function left_padded_fit(text, w)
+  local t = mux.fit(tostring(text or ""), w)
+  return t .. string.rep(" ", math.max(0, w - #t))
+end
+
+local function right_padded_fit(text, w)
+  local t = mux.fit(tostring(text or ""), w)
+  return string.rep(" ", math.max(0, w - #t)) .. t
+end
+
 local function draw_reactor_slot(mon, x, y, w, reactor, index)
   if type(reactor) ~= "table" then
-    mux.text(mon, x, y, mux.fit(string.format("%02d  NICHT KONFIGURIERT", index), w),
+    mux.text(mon, x, y, left_padded_fit(string.format("%02d  NICHT KONFIGURIERT", index), w),
       colorset.get("muted"), colorset.get("background"))
-    mux.text(mon, x + 2, y + 1, mux.fit("------------------------------", w - 2),
+    mux.text(mon, x + 2, y + 1, left_padded_fit("------------------------------", w - 2),
       colorset.get("muted"), colorset.get("background"))
     return
   end
@@ -185,17 +203,25 @@ local function draw_reactor_slot(mon, x, y, w, reactor, index)
   local pct_text = pct and string.format("%d%%", math.floor(pct + 0.5)) or "--%"
   local state = reactor_state_text(reactor)
   local right = pct_text .. " " .. state
+  -- Fixed slot width regardless of the actual status text's length (the
+  -- longest known state is "DATEN FEHLEN" -> "100% DATEN FEHLEN" = 17
+  -- chars) -- a FIXED width+position here, not one derived from #right,
+  -- is what makes the padding above actually clear the old content: if
+  -- the slot itself moved with the text length, shrinking text would
+  -- leave a gap where it used to start.
+  local right_w = 18
   local label = tostring(reactor.label or reactor.reactor_id or ("Reaktor " .. tostring(index)))
-  local left_w = math.max(8, w - #right - 2)
-  mux.text(mon, x, y, mux.fit(string.format("%02d %s", index, label), left_w),
+  local left_w = math.max(8, w - right_w - 1)
+  mux.text(mon, x, y, left_padded_fit(string.format("%02d %s", index, label), left_w),
     colorset.get(key), colorset.get("background"))
-  mux.text(mon, x + w - #right, y, right, colorset.get(key), colorset.get("background"))
+  mux.text(mon, x + w - right_w, y, right_padded_fit(right, right_w),
+    colorset.get(key), colorset.get("background"))
 
   local bar_w = 20
   mux.outlined_progress(mon, x + 2, y + 1, bar_w, (pct or 0) / 100, key, nil)
   local age = reactor.fuel_age_s ~= nil and (tostring(reactor.fuel_age_s) .. "s") or "--"
   mux.text(mon, x + 24, y + 1,
-    mux.fit(string.format("R%d  %s", route_count(reactor), age), math.max(5, w - 24)),
+    left_padded_fit(string.format("R%d  %s", route_count(reactor), age), math.max(5, w - 24)),
     colorset.get("muted"), colorset.get("background"))
 end
 
@@ -231,7 +257,7 @@ local function overview(mon, model, should_clear, state)
   local note = #reactors == 0 and "Router oeffnen und Reaktoren einlernen."
     or tostring(view.action or "")
   if note ~= "" then
-    mux.text(mon, 3, 31, mux.fit("HINWEIS: " .. note, 76),
+    mux.text(mon, 3, 31, left_padded_fit("HINWEIS: " .. note, 76),
       colorset.get(view.severity == "OK" and "muted" or "WARNING"), colorset.get("background"))
   end
 
@@ -283,8 +309,14 @@ local function details(mon, model, should_clear, state)
   if state.details_index < #reactors then
     state.details_next = mux.button(mon, 67, 6, 12, "REAKTOR >>", "LIMITED", 2)
   end
-  local center = mux.fit(label .. "  " .. tostring(state.details_index) .. "/" .. tostring(#reactors), 34)
-  mux.text(mon, math.floor((w - #center) / 2) + 1, 7, center,
+  -- Fixed-width centered slot (not sized to the actual text) so switching
+  -- reactors via << REAKTOR/REAKTOR >> (no should_clear, see overview()'s
+  -- comment above draw_reactor_slot) can't leave a shorter label's old
+  -- tail dangling past the new, shorter one.
+  local center_w = 34
+  local center_x = math.floor((w - center_w) / 2) + 1
+  mux.text(mon, center_x, 7,
+    left_padded_fit(label .. "  " .. tostring(state.details_index) .. "/" .. tostring(#reactors), center_w),
     colorset.get("text"), colorset.get("background"))
 
   local pct = fuel_pct(reactor)
@@ -297,9 +329,9 @@ local function details(mon, model, should_clear, state)
     colorset.get(reactor.fuel_data_state == "FRESH" and "muted" or "WARNING"), colorset.get("background"))
 
   mux.card(mon, 43, 9, 38, 7, { title = "STATUS", status = key, icon = key == "OK" and "ok" or "warning" })
-  mux.text(mon, 46, 11, mux.fit(reactor_state_text(reactor), 32), colorset.get(key), colorset.get("background"))
-  mux.text(mon, 46, 13, mux.fit("ROUTE " .. tostring(reactor.route_state or "?"), 32), colorset.get("muted"), colorset.get("background"))
-  mux.text(mon, 46, 14, mux.fit("QUELLE " .. tostring(reactor.fuel_source or "-"), 32), colorset.get("muted"), colorset.get("background"))
+  mux.text(mon, 46, 11, left_padded_fit(reactor_state_text(reactor), 32), colorset.get(key), colorset.get("background"))
+  mux.text(mon, 46, 13, left_padded_fit("ROUTE " .. tostring(reactor.route_state or "?"), 32), colorset.get("muted"), colorset.get("background"))
+  mux.text(mon, 46, 14, left_padded_fit("QUELLE " .. tostring(reactor.fuel_source or "-"), 32), colorset.get("muted"), colorset.get("background"))
 
   local request = reactor.request_below and string.format("%d%%", math.floor(reactor.request_below * 100 + 0.5)) or "?"
   local fill = reactor.fill_amount and tostring(reactor.fill_amount) or "?"
@@ -334,12 +366,17 @@ local function details(mon, model, should_clear, state)
   mux.card(mon, 51, 23, 30, 6, {
     title = "LETZTE LIEFERUNG", status = reactor.last_item and "OK" or "LIMITED", icon = "fuel",
   })
-  mux.text(mon, 54, 25, mux.fit(last_delivery_text(reactor), 24),
+  mux.text(mon, 54, 25, left_padded_fit(last_delivery_text(reactor), 24),
     colorset.get(reactor.last_item and "text" or "muted"), colorset.get("background"))
-  if reactor.last_delivery_age_s ~= nil then
-    mux.text(mon, 54, 27, mux.fit("vor " .. tostring(reactor.last_delivery_age_s) .. "s", 24),
-      colorset.get("muted"), colorset.get("background"))
-  end
+  -- Always pad row 27, even when the current reactor has no delivery age --
+  -- otherwise a previous reactor's "vor Ns" text would keep showing under
+  -- a reactor that has none (switching via << REAKTOR/REAKTOR >>, no
+  -- should_clear -- same ghosting class as draw_reactor_slot above).
+  mux.text(mon, 54, 27,
+    reactor.last_delivery_age_s ~= nil
+      and left_padded_fit("vor " .. tostring(reactor.last_delivery_age_s) .. "s", 24)
+      or string.rep(" ", 24),
+    colorset.get("muted"), colorset.get("background"))
 
   mux.card(mon, 2, 30, 79, 6, { title = "SCADA DATEN", status = view.severity or key, icon = "network" })
   mux.data_row(mon, 5, 32, 73, { label = "REACTOR ID", value = tostring(reactor.reactor_id or "MISSING"), status = reactor.reactor_id and "text" or "WARNING", icon = "reactor" })
