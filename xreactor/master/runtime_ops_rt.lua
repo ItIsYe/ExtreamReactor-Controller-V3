@@ -276,9 +276,17 @@ function M.check_timeouts(runtime)
   for _, node_id in ipairs(stale_nodes) do
     local node = runtime.state.nodes[node_id]
     if node and node.status == runtime.libs.constants.status_levels.OFFLINE then
-      runtime.log(("Node stale purged from managed set: %s"):format(tostring(node_id)), "INFO")
-      node.managed = false
-      node.active = false
+      -- Actually remove the entry (not just flag it managed=false/active=false
+      -- as before) -- runtime.state.nodes is iterated in full every tick by
+      -- ui_controller.lua, rt_sync.lua, alert_rules.lua, housekeeping.lua and
+      -- every AUX monitor's view, so a node that stays "purged" but never
+      -- removed keeps costing full-table-iteration time forever. Only
+      -- reachable after node_offline_purge_after_ms (default 120s) of
+      -- confirmed offline status, so this is a long-gone node, not a
+      -- transient blip -- same retention-then-delete pattern comms.lua
+      -- already uses for its own peer table (peer_retention_s).
+      runtime.log(("Node stale purged: %s"):format(tostring(node_id)), "INFO")
+      runtime.state.nodes[node_id] = nil
     end
   end
 end
