@@ -93,6 +93,33 @@ function M.apply_profile(runtime, name)
   end
 end
 
+-- Root Cause (2026-09-17, Log-Beleg): message_handlers.lua ruft
+-- retry_pending_profile() bei JEDER eingehenden STATUS-Nachricht auf,
+-- sobald irgendein RT-Knoten ein rt.capacity_max > 0 meldet UND
+-- power_target noch 0 ist -- ohne selbst zu pruefen, ob dieser Knoten
+-- gerade ueberhaupt verfuegbar/gelernt ist (das prueft nur estimate_
+-- base_power() unten, ueber node_available()+capacity_ready). Ein Knoten,
+-- der frueher einmal erfolgreich gelernt hatte und seitdem offline/stale
+-- ist, behaelt sein zwischengespeichertes capacity_max>0 -- der Trigger
+-- bleibt dadurch dauerhaft erfuellt, obwohl estimate_base_power() (das
+-- diesen Knoten korrekt als nicht verfuegbar ausschliesst) weiterhin 0
+-- liefert. Ergebnis im Log: "Profile applied: BASELOAD" + "target
+-- unchanged at 0.00" alle ~2 Sekunden, ueber mehrere Minuten am Stueck --
+-- bei ueber einem Dutzend RT-/anderen Knoten, die alle paar Sekunden
+-- STATUS senden, praktisch ein Dauerlauf ohne jede Pause. Das kostet auf
+-- JEDER dieser Wiederholungen eine komplette estimate_base_power()-
+-- Iteration ueber alle Knoten und trug nachweislich zu "Service manager
+-- tick slow"-Meldungen im selben Zeitfenster bei -- ein sich selbst
+-- verstaerkender Kreislauf (langsamer Tick -> mehr Peer-down-Faelle ->
+-- noch mehr retry-ausloesende STATUS-Nachrichten).
+--
+-- Fix: Mindestabstand zwischen zwei tatsaechlichen Retry-Versuchen, statt
+-- bei jeder einzelnen qualifizierenden STATUS-Nachricht sofort erneut zu
+-- versuchen. pending_profile_retry bleibt dabei gesetzt (kein Datenverlust
+-- der Retry-Absicht) -- es wird nur nicht mehr auf jede Nachricht sofort
+-- reagiert.
+local PROFILE_RETRY_MIN_INTERVAL_MS = 5000
+
 function M.retry_pending_profile(runtime)
   local pending = runtime.state.pending_profile_retry
   if not pending then return end
@@ -101,6 +128,12 @@ function M.retry_pending_profile(runtime)
     runtime.state.pending_profile_retry = nil
     return
   end
+  local now = os.epoch and os.epoch("utc") or 0
+  local last = tonumber(runtime.state.last_profile_retry_ts) or 0
+  if now - last < PROFILE_RETRY_MIN_INTERVAL_MS then
+    return
+  end
+  runtime.state.last_profile_retry_ts = now
   runtime.log(("Profile retry: %s (power_target war 0)"):format(tostring(pending)), "INFO")
   runtime.state.pending_profile_retry = nil
   M.apply_profile(runtime, pending)
