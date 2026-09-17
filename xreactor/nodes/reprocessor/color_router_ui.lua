@@ -50,11 +50,37 @@ local function left_padded_fit(text, width)
   return fitted .. string.rep(" ", width - #fitted)
 end
 
-local function color_index(color)
-  for i, c in ipairs(COLORS) do
+-- Alle echten Sorter-Farben OHNE "NONE" -- NONE ist der Sorter-eigene
+-- "keine Farbe gesetzt"-Zustand, keine echte Routing-Farbe, taucht daher
+-- auf der FARBEN-Verwaltungsseite gar nicht auf.
+local REAL_COLORS = {}
+for _, c in ipairs(COLORS) do
+  if c ~= "NONE" then REAL_COLORS[#REAL_COLORS + 1] = c end
+end
+
+-- Nur die vom Betreiber als "aktiv" markierten Farben (color_router_ui's
+-- FARBEN-Seite) werden beim Durchklicken (< / >) einer Ziel-Farbe
+-- angeboten -- eine deaktivierte Farbe ist im Sorter zwar weiterhin eine
+-- gueltige Farbe (adapters/logistical_sorter.lua's COLORS bleibt die
+-- vollstaendige, ungekuerzte Liste), soll aber nicht mehr durchgeklickt
+-- werden koennen. Reihenfolge folgt REAL_COLORS, nicht der Aktivierungs-
+-- Reihenfolge.
+local function active_color_list(self)
+  local out = {}
+  for _, c in ipairs(REAL_COLORS) do
+    if self.active_colors[c] then out[#out + 1] = c end
+  end
+  return out
+end
+
+-- 0 = Farbe ist nicht (mehr) aktiv -- z.B. weil sie nach der Zuweisung
+-- deaktiviert wurde. color_prev/color_next behandeln das wie "vor dem
+-- ersten/nach dem letzten Eintrag", statt abzustuerzen.
+local function active_color_index(active_list, color)
+  for i, c in ipairs(active_list) do
     if c == color then return i end
   end
-  return 1
+  return 0
 end
 
 -- All peripherals that could plausibly be the SORTER-KISTE -- same
@@ -91,10 +117,11 @@ function M.new(opts)
     write_config = write_config,
     config_path = opts.config_path or "/xreactor_config/reproc_targets.lua",
     log = opts.log or function() end,
-    -- "list" | "pick_sorter" | "pick_sorter_chest"
+    -- "list" | "pick_sorter" | "pick_sorter_chest" | "colors"
     mode = "list",
     scroll = 0,
     picker_scroll = 0,
+    colors_scroll = 0,
     dirty = false,
     targets = {},
     sorter_name = nil,
@@ -103,6 +130,10 @@ function M.new(opts)
     -- Sorter physisch sitzt und in die die ME-Bridge exportiert (config.
     -- feed.sorter_chest). Eine einzelne Peripherie, keine Liste.
     sorter_chest_target = nil,
+    -- active_colors: welche der REAL_COLORS per FARBEN-Seite aktiviert
+    -- sind -- nur diese werden beim Durchklicken einer Ziel-Farbe (< / >)
+    -- angeboten.
+    active_colors = {},
     buttons = {},
   }, { __index = M })
   self:_load_working_copy()
@@ -120,6 +151,16 @@ function M:_load_working_copy()
   self.sorter_name = fd.sorter
   self.feed_enabled = fd.enabled == true
   self.sorter_chest_target = fd.sorter_chest
+  -- Ohne gespeicherte Liste sind alle echten Farben aktiv -- entspricht
+  -- dem bisherigen Verhalten (jede Farbe durchklickbar), bis der
+  -- Betreiber auf der FARBEN-Seite gezielt welche deaktiviert.
+  local active = {}
+  if type(fd.active_colors) == "table" then
+    for _, c in ipairs(fd.active_colors) do active[c] = true end
+  else
+    for _, c in ipairs(REAL_COLORS) do active[c] = true end
+  end
+  self.active_colors = active
   self.dirty = false
 end
 
@@ -147,6 +188,8 @@ function M:render(mon, _ui, _colors, should_clear)
   elseif self.mode == "pick_sorter_chest" then
     return self:_render_picker(mon, w, h, "SORTER-KISTE WAEHLEN",
       peripheral_names(), "Keine Peripherals gefunden.", "pick_sorter_chest_choose")
+  elseif self.mode == "colors" then
+    return self:_render_colors(mon, w, h)
   end
 
   mux.header(mon, {
@@ -190,8 +233,17 @@ function M:render(mon, _ui, _colors, should_clear)
   sorter_chest_btn.action = "sorter_chest_open"
   self.buttons[#self.buttons + 1] = sorter_chest_btn
 
+  -- Verwaltung, welche Sorter-Farben ueberhaupt zur Auswahl stehen (< / >
+  -- an den Zielen unten) -- eigene Unterseite, siehe _render_colors().
+  local active_count = #active_color_list(self)
+  local colors_btn = mux.button(mon, 2, 6, w - 3,
+    "FARBEN (" .. tostring(active_count) .. "/" .. tostring(#REAL_COLORS) .. " aktiv)",
+    active_count > 0 and "OK" or "WARNING", 1)
+  colors_btn.action = "colors_open"
+  self.buttons[#self.buttons + 1] = colors_btn
+
   local compact = w < COMPACT_W
-  local list_top = 8
+  local list_top = 9
 
   local footer_row = h
   local action_row = footer_row - 2
@@ -318,6 +370,49 @@ function M:_render_picker(mon, w, h, title, names, empty_message, choose_action)
   return mux.footer_nav(mon, footer_row, w, { center = "REPROC FARBEN" })
 end
 
+-- FARBEN-Seite: jede der 18 echten Sorter-Farben (REAL_COLORS, ohne NONE)
+-- als eigene Zeile mit AN/AUS-Umschalter -- Antippen einer Zeile schaltet
+-- diese Farbe sofort aktiv/inaktiv (Arbeitskopie, erst SPEICHERN auf der
+-- Hauptseite persistiert es). Nur aktive Farben werden beim Durchklicken
+-- einer Ziel-Farbe (< / >) angeboten.
+function M:_render_colors(mon, w, h)
+  mux.header(mon, {
+    title = "SORTER-FARBEN AKTIV/INAKTIV", node_id = "SORTER-FARBEN", page = "Router", status = "LIMITED", icon = "network",
+  })
+
+  local list_top = 3
+  local footer_row = h
+  local action_row = footer_row - 2
+  local list_bottom = action_row - 2
+  local visible_rows = math.max(1, list_bottom - list_top + 1)
+
+  self.colors_scroll = math.max(0, math.min(self.colors_scroll, math.max(0, #REAL_COLORS - visible_rows)))
+  local first = self.colors_scroll + 1
+  local last = math.min(#REAL_COLORS, self.colors_scroll + visible_rows)
+  local toggle_x, toggle_w = w - 9, 8
+  local y = list_top
+  for i = first, last do
+    local name = REAL_COLORS[i]
+    local is_active = self.active_colors[name] == true
+    mux.text(mon, 2, y, left_padded_fit(name, toggle_x - 3), colorset.get("text"), colorset.get("background"))
+    local toggle_btn = mux.button(mon, toggle_x, y, toggle_w, is_active and "AN" or "AUS", is_active and "OK" or "OFFLINE", 1)
+    toggle_btn.action, toggle_btn.name = "color_toggle", name
+    self.buttons[#self.buttons + 1] = toggle_btn
+    y = y + 1
+  end
+  if #REAL_COLORS > visible_rows then
+    mux.text(mon, 2, list_bottom + 1,
+      string.format("%d-%d von %d", first, last, #REAL_COLORS),
+      colorset.get("muted"), colorset.get("background"))
+  end
+
+  local back_btn = mux.button(mon, 2, action_row, 16, "ZURUECK", "OFFLINE", 2)
+  back_btn.action = "colors_back"
+  self.buttons[#self.buttons + 1] = back_btn
+
+  return mux.footer_nav(mon, footer_row, w, { center = "REPROC FARBEN" })
+end
+
 function M:handle_touch(x, y)
   x, y = tonumber(x), tonumber(y)
   if not x or not y then return false end
@@ -355,18 +450,29 @@ function M:_apply_action(btn)
     self.dirty = true
     self.mode = "list"
     return true
+  elseif btn.action == "colors_open" then
+    self.mode = "colors"
+    self.colors_scroll = 0
+    return true
+  elseif btn.action == "colors_back" then
+    self.mode = "list"
+    return true
+  elseif btn.action == "color_toggle" then
+    self.active_colors[btn.name] = not self.active_colors[btn.name]
+    self.dirty = true
+    return true
   elseif btn.action == "color_prev" or btn.action == "color_next" then
     local t = self.targets[btn.index]
     if not t then return false end
-    local idx = color_index(t.color)
+    local active_list = active_color_list(self)
+    if #active_list == 0 then return true end
+    local idx = active_color_index(active_list, t.color)
     if btn.action == "color_prev" then
-      idx = idx - 1
-      if idx < 1 then idx = #COLORS end
+      if idx <= 1 then idx = #active_list else idx = idx - 1 end
     else
-      idx = idx + 1
-      if idx > #COLORS then idx = 1 end
+      if idx == 0 or idx >= #active_list then idx = 1 else idx = idx + 1 end
     end
-    t.color = COLORS[idx]
+    t.color = active_list[idx]
     self.dirty = true
     return true
   elseif btn.action == "delete" then
@@ -374,7 +480,8 @@ function M:_apply_action(btn)
     self.dirty = true
     return true
   elseif btn.action == "add" then
-    self.targets[#self.targets + 1] = { label = "Reprocessor " .. tostring(#self.targets + 1), color = COLORS[1] }
+    local active_list = active_color_list(self)
+    self.targets[#self.targets + 1] = { label = "Reprocessor " .. tostring(#self.targets + 1), color = active_list[1] or COLORS[1] }
     self.dirty = true
     return true
   elseif btn.action == "save" then
@@ -393,9 +500,10 @@ function M:_save()
   for i, t in ipairs(self.targets) do
     targets_out[i] = { label = t.label, color = t.color }
   end
+  local active_colors_out = active_color_list(self)
   local out = {
     sorter = self.sorter_name, sorter_chest = self.sorter_chest_target,
-    enabled = self.feed_enabled, targets = targets_out,
+    enabled = self.feed_enabled, targets = targets_out, active_colors = active_colors_out,
   }
   local ok, err = self.write_config(self.config_path, out)
   if not ok then
@@ -407,6 +515,7 @@ function M:_save()
   self.config.feed.targets = targets_out
   self.config.feed.sorter_chest = self.sorter_chest_target
   self.config.feed.sorter = self.sorter_name
+  self.config.feed.active_colors = active_colors_out
 
   self.dirty = false
   self.log("INFO", "color_router_ui: " .. tostring(#targets_out) .. " Reprocessor-Ziel(e) gespeichert")

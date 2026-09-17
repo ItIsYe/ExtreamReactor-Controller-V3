@@ -39,6 +39,12 @@ function M.normalize(config_values, defaults, add_warning, utils)
   end
   if type(fd.targets) ~= "table" then fd.targets = {} end
 
+  -- active_colors: welche Sorter-Farben per Router-UI (FARBEN-Seite)
+  -- ueberhaupt zur Auswahl stehen -- reine UI-Praeferenz, feed_router.lua
+  -- liest sie nie (Targets tragen ihre zugewiesene Farbe direkt). Nur
+  -- grob absichern, dass ein korrupter Wert die Seite nicht crasht.
+  if type(fd.active_colors) ~= "table" then fd.active_colors = nil end
+
   -- sorter_chest (die SORTER-KISTE) ist das tatsaechliche ME-Bridge-
   -- Exportziel (siehe feed_router.lua) -- genau wie FUEL's logistics.
   -- export_chest (siehe nodes/fuel/config_normalizer.lua) muss ein

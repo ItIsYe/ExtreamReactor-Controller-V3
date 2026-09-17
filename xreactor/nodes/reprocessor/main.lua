@@ -109,6 +109,7 @@ do
       config.feed.sorter = content.sorter
       config.feed.sorter_chest = content.sorter_chest
       if content.enabled ~= nil then config.feed.enabled = content.enabled end
+      if content.active_colors ~= nil then config.feed.active_colors = content.active_colors end
     end
   end
 end
