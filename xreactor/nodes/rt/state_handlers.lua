@@ -231,24 +231,40 @@ function M.request_capacity_learning_startup_if_needed(ctx, reason)
   if learning and learning.ready == true then
     return false
   end
+  local ns = (ctx.constants or constants).node_states
   local machine_state = ctx.get_node_state_machine() and ctx.get_node_state_machine().state and ctx.get_node_state_machine():state() or nil
-  if machine_state ~= (ctx.constants or constants).node_states.RUNNING and machine_state ~= (ctx.constants or constants).node_states.OFF then
-    return false
-  end
-  local needs_turbine = has_off_modules(ctx.modules, "turbine")
-  local needs_reactor = has_off_modules(ctx.modules, "reactor")
-  if not needs_turbine and not needs_reactor then
+  -- LIMITED zaehlt jetzt auch: genau dort parkt MASTER einen Knoten, dessen
+  -- Kapazitaet noch unbekannt ist (node_capacity() liefert 0 solange
+  -- capacity_ready~=true, siehe master/rt_sync.lua -- der proportionale
+  -- Planer sortiert 0-Kapazitaet immer ans Ende und weist "standby"/"shed"
+  -- zu, was hier zu LIMITED wird). Ohne LIMITED hier blieb ein einmal so
+  -- geparkter Knoten fuer immer unklassifiziert: er erreichte nie wieder
+  -- RUNNING/OFF von selbst, um erneut zu lernen -- ein Deadlock, bestaetigt
+  -- 2026-09-17 ("Node in Kapazitaet-lernen, Reaktor aus").
+  if machine_state ~= ns.RUNNING and machine_state ~= ns.OFF and machine_state ~= ns.LIMITED then
     return false
   end
   if ctx.get_active_startup() then
     return false
   end
-  ctx.log("INFO", ("Autonomous capacity-learning startup requested reason=%s turbines_off=%s reactors_off=%s"):format(
+  -- KEIN has_off_modules()-Gate mehr (anders als request_startup_if_needed()
+  -- oben, von dem dieses Gate urspruenglich kopiert wurde): module.state
+  -- geht nach dem allerersten erfolgreichen Start NIE wieder auf "OFF"
+  -- zurueck (STARTING -> STABLE/RUNNING bleibt so, auch nach einem
+  -- scram() -- der setzt nur die Regelstaebe, nicht module.state, siehe
+  -- module_lifecycle.lua). Das Gate war also nach dem ersten Boot dauerhaft
+  -- false und blockierte jede weitere Lern-Anfrage fuer den Rest der
+  -- Laufzeit. learning.ready==false (oben bereits geprueft) ist bereits der
+  -- vollstaendige Grund, den Regelkreislauf (STARTUP -> adjust_reactors()/
+  -- adjust_turbines() auf jedem Tick) wieder anzustossen -- ob dabei ein
+  -- Modul per start_module() aus "OFF" hochgefahren wird oder ein bereits
+  -- aktives Modul einfach wieder Leistung bekommt, entscheiden startup_
+  -- on_enter()/on_tick() ohnehin unabhaengig davon selbst.
+  ctx.log("INFO", ("Autonomous capacity-learning startup requested reason=%s machine_state=%s"):format(
     tostring(reason or "unknown"),
-    tostring(needs_turbine),
-    tostring(needs_reactor)
+    tostring(machine_state)
   ))
-  ctx.get_node_state_machine():transition((ctx.constants or constants).node_states.STARTUP)
+  ctx.get_node_state_machine():transition(ns.STARTUP)
   return true
 end
 

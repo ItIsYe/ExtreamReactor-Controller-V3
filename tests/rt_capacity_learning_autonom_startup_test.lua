@@ -129,13 +129,52 @@ local ctx_busy = make_ctx({
 assert_eq(handlers.request_capacity_learning_startup_if_needed(ctx_busy, 'TEST'), false,
   'must not fire while a startup is already active')
 
--- 6) Never learned, but every module already running -- nothing to start.
+-- 6) Never learned, every module already RUNNING (not OFF) -- must still
+--    fire. This used to be gated on has_off_modules() (copied from the
+--    master-driven request_startup_if_needed() sibling), but module.state
+--    never reverts to "OFF" after a module's first successful start (see
+--    module_lifecycle.lua -- STARTING -> STABLE/RUNNING sticks, even across
+--    a scram(), which only drives the control rods). That made this gate
+--    permanently false after the very first boot, silently blocking every
+--    later relearn attempt for the rest of the node's runtime -- exactly
+--    the bug reported 2026-09-17 ("die nod ist in kapazitaet lerne aber
+--    raktor ist aus"): the master parks an unlearned (0-capacity, see
+--    master/rt_sync.lua) node in OFF/LIMITED, but this function could then
+--    never restart its control loop again to actually collect a sample.
+--    Restarting the control loop (STARTUP -> adjust_reactors()/
+--    adjust_turbines() each tick) is correct regardless of whether a
+--    module needs a cold start_module() call or is already active.
 local ctx_running = make_ctx({
   modules = { ['turbine:A'] = { type = 'turbine', state = 'RUNNING' },
               ['reactor:A'] = { type = 'reactor', state = 'RUNNING' } },
   capacity_learning = nil, current_state = STATE.MASTER,
 })
-assert_eq(handlers.request_capacity_learning_startup_if_needed(ctx_running, 'TEST'), false,
-  'must not fire when no module is OFF')
+assert_true(handlers.request_capacity_learning_startup_if_needed(ctx_running, 'TEST'),
+  'must fire even when every module is already RUNNING, not just when a module is OFF')
+assert_eq(ctx_running._transitions[1], constants.node_states.STARTUP,
+  'must transition to STARTUP to restart the control loop for relearning')
+
+-- 7) Never learned, machine_state == LIMITED (exactly where the master
+--    parks a 0-capacity/unlearned node via "standby"/"shed" assignment,
+--    see master/rt_sync.lua) -- must fire. Before this fix, LIMITED was not
+--    in the allowed machine_state list at all, so a node parked there could
+--    never restart its control loop to relearn -- a permanent deadlock.
+local ctx_limited = make_ctx({
+  modules = fresh_off_modules(), capacity_learning = nil,
+  current_state = STATE.MASTER, machine_state = constants.node_states.LIMITED,
+})
+assert_true(handlers.request_capacity_learning_startup_if_needed(ctx_limited, 'TEST'),
+  'must fire when the node state machine is parked in LIMITED')
+assert_eq(ctx_limited._transitions[1], constants.node_states.STARTUP,
+  'must transition LIMITED -> STARTUP to relearn')
+
+-- 8) Never learned, machine_state == STARTUP itself (already mid-startup)
+--    -- must not fire; STARTUP is neither RUNNING, OFF, nor LIMITED.
+local ctx_mid_startup = make_ctx({
+  modules = fresh_off_modules(), capacity_learning = nil,
+  current_state = STATE.MASTER, machine_state = constants.node_states.STARTUP,
+})
+assert_eq(handlers.request_capacity_learning_startup_if_needed(ctx_mid_startup, 'TEST'), false,
+  'must not fire while the node state machine is already in STARTUP')
 
 print('rt_capacity_learning_autonom_startup_test.lua: ok')

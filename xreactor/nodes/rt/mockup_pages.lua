@@ -49,11 +49,18 @@ local function capacity_key(model)
 end
 
 local function rt_status(model)
-  if not model.capacity_ready then return "KAPAZITAET WIRD GELERNT", "LIMITED" end
+  -- assignment_state (vom Master zugewiesen) muss VOR capacity_ready geprueft
+  -- werden: ein Knoten, den der Master bewusst geparkt/heruntergefahren hat
+  -- (shutdown/shed/standby, siehe master/rt_sync.lua -- 0-Kapazitaet-Knoten
+  -- sortieren dort immer ans Ende und bekommen genau diese assignment_states),
+  -- zeigte sonst faelschlich "KAPAZITAET WIRD GELERNT" statt seines tatsaechlichen
+  -- Zustands an, obwohl der Reaktor schlicht abgeschaltet ist (gemeldet
+  -- 2026-09-17: "die nod ist in kapazitaet lerne aber raktor ist aus").
   local assignment = tostring(model.assignment_state or "")
   if assignment == "shutdown" then return "SYSTEM FAHRT HERUNTER", "muted" end
   if assignment == "shed" or assignment == "standby" then return "WARTET AUF LASTZUWEISUNG", "muted" end
   if assignment == "startup" then return "SYSTEM FAHRT HOCH", "LIMITED" end
+  if not model.capacity_ready then return "KAPAZITAET WIRD GELERNT", "LIMITED" end
   local s = snapshot(model)
   local target = num(model.target_power, num(s.target_power, 0))
   local actual = num(s.actual_output, 0)

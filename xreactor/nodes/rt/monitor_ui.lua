@@ -58,10 +58,14 @@ local function resolve_monitor(monitor_adapter, preferred_name, monitor_scale)
 end
 
 local function rt_status(model)
-  if not model.capacity_ready then return "LIMITED" end
+  -- Reihenfolge wie in mockup_pages.lua's rt_status(): assignment_state (vom
+  -- Master zugewiesen) zuerst pruefen, sonst faerbt die Ampel einen bewusst
+  -- geparkten/abgeschalteten Knoten faelschlich als "LIMITED" (Kapazitaet
+  -- wird gelernt) statt "muted" (heruntergefahren/wartet auf Zuweisung).
   local assignment = tostring(model.assignment_state or "")
   if assignment == "shutdown" or assignment == "shed" or assignment == "standby" then return "muted" end
   if assignment == "startup" then return "LIMITED" end
+  if not model.capacity_ready then return "LIMITED" end
   local snapshot = model.snapshot and model.snapshot.snapshot or {}
   local target = num(model.target_power, num(snapshot.target_power, 0))
   local actual = num(snapshot.actual_output, 0)
