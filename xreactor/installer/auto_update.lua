@@ -19,6 +19,20 @@ local UPDATE_EVENT = "xreactor_remote_update_requested"
 -- them nothing.
 local QUIESCE_TIMEOUT_S = 60
 
+-- After this many consecutive quiesce timeouts for the SAME pending update
+-- (each one already a full 60s wait), stop waiting for a full safety
+-- confirmation and install anyway. Before this existed, a role that never
+-- reached a confirmed safe state (e.g. a permanently offline/unresponsive
+-- valve, or the whole event loop wedged behind a slow synchronous
+-- peripheral call in the "slow" tick group -- see nodes/support/runtime.lua)
+-- meant the update NEVER installed: every attempt timed out, safely
+-- rebooted or cancelled without ever calling run_update(), and the exact
+-- same timeout repeated forever on every subsequent check. Chosen
+-- deliberately by the operator over staying permanently safety-gated: a
+-- stuck valve transaction/reactor output can be interrupted by the forced
+-- reboot at the end of a successful install, same as any other reboot.
+local FORCE_AFTER_FAILURES = 3
+
 -- Many roles' own UI (e.g. nodes/log_collector/main.lua) draws directly
 -- onto the physical terminal, clearing it every redraw -- a plain print()
 -- from this coroutine gets overwritten almost immediately and is
@@ -203,6 +217,15 @@ local function request_and_await_quiesce(handshake)
   log("Quiesce angefordert -- warte auf RUNTIME_STOPPED...")
   if update_handshake.wait_for_runtime_stopped(handshake, QUIESCE_TIMEOUT_S) then
     log("Quiesce bestaetigt (RUNTIME_STOPPED)")
+    update_handshake.reset_quiesce_failures(handshake)
+    return true
+  end
+
+  local failures = update_handshake.record_quiesce_timeout(handshake)
+  if failures >= FORCE_AFTER_FAILURES then
+    log(("Quiesce-Timeout %d/%d -- Sicherheits-Vollbestaetigung wird uebersprungen, Update wird erzwungen"):format(
+      failures, FORCE_AFTER_FAILURES))
+    update_handshake.reset_quiesce_failures(handshake)
     return true
   end
 
@@ -212,16 +235,19 @@ local function request_and_await_quiesce(handshake)
   if handshake.quiesce_attempted == true
       or handshake.state == update_handshake.STATE.SAFE_OUTPUTS_APPLIED
       or handshake.state == update_handshake.STATE.RUNTIME_STOPPED then
-    log("Quiesce-Timeout nach Sicherheitsversuch -- Runtime wird sicher neu gestartet")
+    log(("Quiesce-Timeout %d/%d nach Sicherheitsversuch -- Runtime wird sicher neu gestartet"):format(
+      failures, FORCE_AFTER_FAILURES))
     if os and type(os.reboot) == "function" then os.reboot() end
     return false, "runtime stopped at quiesce timeout"
   end
   if update_handshake.reset(handshake) ~= true then
-    log("Quiesce-Reset fehlgeschlagen -- Runtime wird sicher neu gestartet")
+    log(("Quiesce-Reset fehlgeschlagen (Versuch %d/%d) -- Runtime wird sicher neu gestartet"):format(
+      failures, FORCE_AFTER_FAILURES))
     if os and type(os.reboot) == "function" then os.reboot() end
     return false, "quiesce reset failed"
   end
-  log("Quiesce-Timeout -- Rolle bleibt aktiv; Update bleibt vorgemerkt")
+  log(("Quiesce-Timeout %d/%d -- Rolle bleibt aktiv; Update bleibt vorgemerkt"):format(
+    failures, FORCE_AFTER_FAILURES))
   return false, "quiesce timeout"
 end
 
