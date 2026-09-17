@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 674,
-  manifest_id = "manifest-v674",
+  manifest_version = 675,
+  manifest_id = "manifest-v675",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "895c862f", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "6879d9a8", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -151,7 +151,7 @@ return {
     { path = "nodes/energy/matrix.lua", size_bytes = 1672, hash = "6b957631", required_for={"ENERGY"} },
     { path = "adapters/energy_storage.lua", size_bytes = 4023, hash = "444e8082", required_for={"ENERGY"} },
     { path = "adapters/induction_matrix.lua", size_bytes = 16633, hash = "a1047e43", required_for={"ENERGY"} },
-    { path = "adapters/logistical_sorter.lua", size_bytes = 3795, hash = "f4cc97ca", required_for={"REPROCESSING"} },
+    { path = "adapters/logistical_sorter.lua", size_bytes = 4360, hash = "e4dcb162", required_for={"REPROCESSING"} },
     { path = "services/matrix_sampling_service.lua", size_bytes = 867, hash = "fff32232", required_for={"ENERGY"} },
     { path = "nodes/energy/command_handler.lua", size_bytes = 1329, hash = "e6b074ac", required_for={"ENERGY"} },
     { path = "nodes/energy/config.lua", size_bytes = 6023, hash = "d84742e5", required_for={"ENERGY"} },

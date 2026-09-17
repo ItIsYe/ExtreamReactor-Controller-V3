@@ -34,10 +34,18 @@ end
 
 -- Mekanism's EnumColor values (methods.csv/enums.csv), in enum declaration
 -- order -- also the order color-cycle buttons in the UI step through.
+-- Confirmed 2026-09-17 against the operator's real in-game sorter (their
+-- own naming: black/blue/green/cyan/dark red/purple/orange/light grey/
+-- grey/light blue/lime/aqua/red/magenta/yellow/white/brown/pink/none) --
+-- matches this list 1:1 in order, plus NONE (the sorter's own default
+-- "no color set" state, also explicitly settable via setDefaultColor to
+-- reset it). NONE is appended at the end rather than the front so newly
+-- added Reprocessor targets keep defaulting to COLORS[1] == "BLACK" (an
+-- actual routable color), not to "no filter".
 sorter.COLORS = {
   "BLACK", "DARK_BLUE", "DARK_GREEN", "DARK_AQUA", "DARK_RED", "PURPLE",
   "ORANGE", "GRAY", "DARK_GRAY", "INDIGO", "BRIGHT_GREEN", "AQUA", "RED",
-  "PINK", "YELLOW", "WHITE", "BROWN", "BRIGHT_PINK",
+  "PINK", "YELLOW", "WHITE", "BROWN", "BRIGHT_PINK", "NONE",
 }
 
 local COLOR_SET = {}

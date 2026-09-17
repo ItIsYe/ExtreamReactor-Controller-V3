@@ -34,8 +34,11 @@ end
 
 local adapter = require('adapters.logistical_sorter')
 
--- COLORS matches Mekanism's real EnumColor (18 entries, no duplicates).
-assert_eq(#adapter.COLORS, 18, 'expected all 18 Mekanism EnumColor values')
+-- COLORS matches Mekanism's real EnumColor (19 entries: 18 real colors
+-- plus NONE, the sorter's own "no color set" state -- confirmed against
+-- the operator's real in-game sorter, see adapters/logistical_sorter.lua),
+-- no duplicates.
+assert_eq(#adapter.COLORS, 19, 'expected all 18 Mekanism EnumColor values plus NONE')
 local seen = {}
 for _, c in ipairs(adapter.COLORS) do
   assert_eq(seen[c], nil, 'duplicate color in COLORS: ' .. tostring(c))
