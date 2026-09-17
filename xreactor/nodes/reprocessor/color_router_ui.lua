@@ -110,7 +110,21 @@ end
 function M:render(mon, _ui, _colors, should_clear)
   self.buttons = {}
   local w, h = mon.getSize()
-  if should_clear ~= false then mux.clear(mon) end
+  -- should_clear only reflects a PAGE transition (ui_router.lua switching
+  -- to/from this page) -- it stays false across in-page redraws while the
+  -- operator edits the target list. But the row layout below the header
+  -- depends on #self.targets (the empty-state warning_box vs. the per-
+  -- target row loop occupy the same screen rows with different content
+  -- widths/heights) and on chest_enabled (shifts list_top). Without a full
+  -- clear on exactly those transitions, e.g. adding the first target while
+  -- "Keine Reprocessoren konfiguriert." is still on screen leaves stale
+  -- warning-box text behind mux.text()'s unpadded row/button writes never
+  -- touch (mux.text does not pad to a fixed width, unlike mux.button).
+  local layout_signature = tostring(#self.targets) .. "|" .. tostring(self.mode) .. "|" .. tostring(self.chest_enabled)
+  if should_clear ~= false or self._last_layout_signature ~= layout_signature then
+    mux.clear(mon)
+  end
+  self._last_layout_signature = layout_signature
 
   if self.mode == "pick_sorter" then
     return self:_render_picker(mon, w, h, "SORTER WAEHLEN",
