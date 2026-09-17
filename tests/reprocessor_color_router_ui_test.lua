@@ -80,8 +80,19 @@ assert_true(type(footer) == 'table' and footer.left and footer.right,
   'render() must return footer_nav geometry so ui_router keeps the shared prev/next buttons live')
 assert_eq(#ui.targets, 1)
 assert_eq(ui.sorter_name, 'sorter_0', 'working copy must load sorter from config.feed')
+assert_eq(ui.feed_enabled, false, 'feed_enabled must default to false when absent from config.feed')
 assert_eq(ui.chest_enabled, false, 'chest must default to disabled when absent from config.feed')
 assert_eq(ui.dirty, false, 'freshly loaded working copy must not be dirty')
+
+-- The FEEDING AN/AUS toggle is the only UI way to flip config.feed.enabled
+-- -- without it the whole Sorter/PUFFER/targets setup can be perfectly
+-- configured and still never feed anything (feed_router.lua:tick() returns
+-- early whenever it's off).
+local feed_toggle_btn = find_button(ui, 'feed_toggle')
+assert_true(feed_toggle_btn ~= nil, 'expected a FEEDING AN/AUS toggle button on the list page')
+assert_true(ui:handle_touch(feed_toggle_btn.x1, feed_toggle_btn.y) == true)
+assert_eq(ui.feed_enabled, true, 'toggling must enable feeding')
+assert_eq(ui.dirty, true, 'toggling feed_enabled must mark the working copy dirty')
 
 -- Toggle the collector chest on: no target-picker button before, present
 -- after (it only renders while the chest is enabled). The chest goes
@@ -172,11 +183,13 @@ assert_true(ui:handle_touch(save_btn.x1, save_btn.y) == true)
 assert_eq(ui.dirty, false, 'save must clear the dirty flag')
 assert_true(written ~= nil, 'save must call write_config')
 assert_eq(written.data.sorter, 'sorter_1', 'the persisted file must contain the chosen sorter')
+assert_eq(written.data.enabled, true, 'the persisted file must contain the feed_enabled toggle state')
 assert_eq(#written.data.targets, 2, 'the persisted file must contain both targets')
 assert_eq(written.data.chest.enabled, true, 'the persisted file must contain the chest toggle state')
 assert_eq(written.data.chest.target, 'chest_0', 'the persisted file must contain the chosen chest target')
 assert_eq(#config.feed.targets, 2, 'save must apply the working copy to config.feed.targets immediately')
 assert_eq(config.feed.sorter, 'sorter_1', 'save must apply the chosen sorter to config.feed immediately')
+assert_eq(config.feed.enabled, true, 'save must apply the feed_enabled toggle to config.feed immediately')
 assert_eq(config.feed.chest.enabled, true, 'save must apply the chest toggle to config.feed immediately')
 
 -- Discard after a further edit must revert to the last-saved state.

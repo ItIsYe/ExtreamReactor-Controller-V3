@@ -106,6 +106,7 @@ function M.new(opts)
     targets = {},
     buffers = {},
     sorter_name = nil,
+    feed_enabled = false,
     chest_enabled = false,
     chest_target = nil,
     buttons = {},
@@ -127,6 +128,7 @@ function M:_load_working_copy()
   end
   self.targets = out
   self.sorter_name = fd.sorter
+  self.feed_enabled = fd.enabled == true
   local chest = fd.chest or {}
   self.chest_enabled = chest.enabled == true
   self.chest_target = chest.target
@@ -192,27 +194,40 @@ function M:render(mon, _ui, _colors, should_clear)
   local compact = w < COMPACT_W
   local kiste_y
 
-  local sorter_btn = mux.button(mon, 2, 3, w - 3,
+  -- Einziger An/Aus-Schalter fuer das gesamte Feeding-System (config.feed.
+  -- enabled). Vorher gab es dafuer KEINEN UI-Weg -- musste per Datei-Edit
+  -- gesetzt werden, obwohl Sorter/PUFFER/Ziele komplett ueber dieses UI
+  -- laufen. Ohne dieses Flag laeuft feed_router.lua:tick() nie ueber den
+  -- fruehen Return hinaus (siehe dortiger Kommentar) -- Sorter/PUFFER
+  -- koennen also korrekt konfiguriert sein und trotzdem nie etwas
+  -- befuellen, wenn dieser Schalter aus bleibt.
+  local feed_toggle_btn = mux.button(mon, 2, 3, w - 3,
+    "FEEDING: " .. (self.feed_enabled and "AN" or "AUS"),
+    self.feed_enabled and "OK" or "OFFLINE", 1)
+  feed_toggle_btn.action = "feed_toggle"
+  self.buttons[#self.buttons + 1] = feed_toggle_btn
+
+  local sorter_btn = mux.button(mon, 2, 4, w - 3,
     "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
     self.sorter_name and "OK" or "WARNING", 1)
   sorter_btn.action = "sorter_open"
   self.buttons[#self.buttons + 1] = sorter_btn
 
-  local buffers_btn = mux.button(mon, 2, 4, w - 3,
+  local buffers_btn = mux.button(mon, 2, 5, w - 3,
     "PUFFER (" .. tostring(#self.buffers) .. ")",
     #self.buffers > 0 and "OK" or "WARNING", 1)
   buffers_btn.action = "buffers_open"
   self.buttons[#self.buttons + 1] = buffers_btn
 
   if compact then
-    kiste_y = 5
+    kiste_y = 6
     mux.text(mon, 2, kiste_y, "KISTE:", colorset.get("text"), colorset.get("background"))
     local chest_toggle_btn = mux.button(mon, 9, kiste_y, w - 10,
       self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
     chest_toggle_btn.action = "chest_toggle"
     self.buttons[#self.buttons + 1] = chest_toggle_btn
   else
-    kiste_y = 5
+    kiste_y = 6
     mux.text(mon, 2, kiste_y, "KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
     local chest_toggle_btn = mux.button(mon, 19, kiste_y, 10,
       self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
@@ -454,6 +469,10 @@ function M:_apply_action(btn)
     self.dirty = true
     self.mode = self._picker_return or "list"
     return true
+  elseif btn.action == "feed_toggle" then
+    self.feed_enabled = not self.feed_enabled
+    self.dirty = true
+    return true
   elseif btn.action == "chest_toggle" then
     self.chest_enabled = not self.chest_enabled
     self.dirty = true
@@ -534,13 +553,14 @@ function M:_save()
     targets_out[i] = { label = t.label, color = t.color }
   end
   local chest_out = { enabled = self.chest_enabled, target = self.chest_target }
-  local out = { sorter = self.sorter_name, targets = targets_out, chest = chest_out }
+  local out = { sorter = self.sorter_name, enabled = self.feed_enabled, targets = targets_out, chest = chest_out }
   local ok, err = self.write_config(self.config_path, out)
   if not ok then
     self.log("WARN", "color_router_ui: Speichern fehlgeschlagen: " .. tostring(err))
     return false
   end
   self.config.feed = self.config.feed or {}
+  self.config.feed.enabled = self.feed_enabled
   self.config.feed.targets = targets_out
   self.config.feed.chest = chest_out
   if self.sorter_name then self.config.feed.sorter = self.sorter_name end

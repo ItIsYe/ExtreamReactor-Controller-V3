@@ -113,6 +113,7 @@ do
       config.feed = config.feed or {}
       config.feed.targets = content.targets or {}
       if content.sorter then config.feed.sorter = content.sorter end
+      if content.enabled ~= nil then config.feed.enabled = content.enabled end
       if content.chest then config.feed.chest = content.chest end
     end
   end
