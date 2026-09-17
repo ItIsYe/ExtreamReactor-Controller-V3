@@ -853,24 +853,31 @@ local function configure_state_machine()
           log("WARN", "Master disconnected — switching to AUTONOM")
           current_state_value = STATE.AUTONOM
         end
-        -- Ohne je einen Master gesehen zu haben, wird start_module() (und
-        -- damit setActive(true)) nie aufgerufen -- der Reaktor bleibt fuer
-        -- immer bei 100% Staeben/0% Leistung stehen und capacity_learning.lua
-        -- kann nie eine echte Messung sammeln. Fahre den Reaktor NUR fuer
-        -- die einmalige Kapazitaetsmessung autonom hoch; sobald sie fertig
-        -- ist, wieder herunterfahren und auf den Master warten.
-        local lctx = make_lifecycle_ctx()
-        lctx.get_node_state_machine = function() return node_state_machine end
-        lctx.capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state
-        if state_handlers.request_capacity_learning_startup_if_needed(lctx, "CAPACITY_LEARNING_AUTONOM") then
-          capacity_learning_autonom_active = true
-        end
-        if capacity_learning_autonom_active
-            and lctx.capacity_learning and lctx.capacity_learning.ready == true then
+      end
+      -- Ohne SET_SETPOINTS vom Master wird start_module() (und damit
+      -- setActive(true)) nie aufgerufen -- der Reaktor bleibt bei 100%
+      -- Staeben/0% Leistung stehen und capacity_learning.lua kann nie eine
+      -- echte Messung sammeln. Das gilt sowohl OHNE Master (AUTONOM) als
+      -- auch MIT verbundenem Master, der einfach noch nichts angefordert
+      -- hat (MASTER) -- daher hier UNBEDINGT aufgerufen, nicht nur im
+      -- not-connected-Zweig oben. Faehrt den Reaktor NUR fuer die einmalige
+      -- Kapazitaetsmessung hoch; SAFE bleibt aussen vor (state_handlers
+      -- lehnt das intern ab).
+      local lctx = make_lifecycle_ctx()
+      lctx.get_node_state_machine = function() return node_state_machine end
+      lctx.capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state
+      if state_handlers.request_capacity_learning_startup_if_needed(lctx, "CAPACITY_LEARNING") then
+        capacity_learning_autonom_active = true
+      end
+      if capacity_learning_autonom_active
+          and lctx.capacity_learning and lctx.capacity_learning.ready == true then
+        if is_master_connected() then
+          log("INFO", "Capacity learning complete — handing control to MASTER")
+        else
           log("INFO", "Capacity learning complete — idling reactor until MASTER connects")
           module_lifecycle.scram(make_lifecycle_ctx())
-          capacity_learning_autonom_active = false
         end
+        capacity_learning_autonom_active = false
       end
     end,
     -- Alarm

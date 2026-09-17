@@ -203,23 +203,28 @@ function M.request_startup_if_needed(ctx, reason)
   return true
 end
 
--- Autonomous-only counterpart to request_startup_if_needed(). Without a
--- MASTER ever having sent SET_SETPOINTS, start_module() (which actually
--- calls setActive(true)/engages inductors) is NEVER invoked -- the node
--- state machine boots straight into RUNNING (main.lua), and RUNNING's
+-- Counterpart to request_startup_if_needed() that is NOT gated on a MASTER
+-- having sent SET_SETPOINTS. Without that command, start_module() (which
+-- actually calls setActive(true)/engages inductors) is NEVER invoked -- the
+-- node state machine boots straight into RUNNING (main.lua), and RUNNING's
 -- on_tick happily runs the rod/flow regulator loop every cycle, but that
 -- loop only adjusts an ALREADY-ACTIVE reactor/turbine; it never activates
 -- one from cold. Reported symptom: rods sit at 100% (0% power) forever
--- with no master connected. capacity_learning.lua can then never collect a
--- single sample either, since turbines never spin up.
+-- until a master both connects AND issues setpoints -- capacity_learning.lua
+-- can then never collect a single sample either, since turbines never spin
+-- up. This must work whether no master is connected at all (AUTONOM) OR a
+-- master is connected but simply hasn't requested anything yet (MASTER) --
+-- only SAFE (an explicit safety state) must never auto-start.
 --
--- This function starts the reactor/turbines with no MASTER connected, but
--- ONLY to let capacity learning measure real output once -- never as a
--- general "run autonomously forever" mode. Caller is responsible for
--- idling back down (see monitor_master()'s caller in main.lua) once
--- ctx.capacity_learning.ready becomes true.
+-- This function starts the reactor/turbines ONLY to let capacity learning
+-- measure real output once -- never as a general "run forever regardless
+-- of the master" mode. Caller (main.lua's monitor_master()) is responsible
+-- for idling back down once ctx.capacity_learning.ready becomes true, but
+-- only when no master is there to take over regulation; with a master
+-- connected, the normal control loop simply keeps running and master
+-- setpoints take over on their own on the next tick.
 function M.request_capacity_learning_startup_if_needed(ctx, reason)
-  if ctx.get_current_state() ~= ctx.STATE.AUTONOM then
+  if ctx.get_current_state() == ctx.STATE.SAFE then
     return false
   end
   local learning = ctx.capacity_learning
