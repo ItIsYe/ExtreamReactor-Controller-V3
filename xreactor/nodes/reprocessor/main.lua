@@ -91,9 +91,24 @@ local function add_config_warning(message) table.insert(config_warnings, message
 do
   local targets_path = "/xreactor_config/reproc_targets.lua"
   if fs.exists(targets_path) then
-    local ok_load, content = pcall(dofile, targets_path)
-    if not ok_load or type(content) ~= "table" then
-      add_config_warning("reproc_targets.lua konnte nicht geladen werden, Ziele bleiben leer: " .. tostring(content))
+    -- Must use utils.load_config(), NOT a raw dofile(): color_router_ui.
+    -- lua's _save() persists via utils.write_config(), which serializes
+    -- with textutils.serialize() -- a bare "{ ... }" table literal, with
+    -- NO "return" statement in front. That is not a valid standalone Lua
+    -- chunk ("unexpected symbol near '{'"), so dofile() on it always
+    -- failed to parse, unconditionally. Every single save-then-reboot
+    -- (including a normal auto-update reboot) therefore silently lost
+    -- every configured Reprocessor route -- confirmed 2026-09-17 via a
+    -- real log export ("reproc_targets.lua konnte nicht geladen werden
+    -- ...:1: unexpected symbol near '{'") despite the file on disk being
+    -- perfectly well-formed. utils.load_config() already has the correct dual-
+    -- format handling every other persisted config file in this codebase
+    -- relies on (tries load() as Lua first, falls back to textutils.
+    -- unserialize() for exactly this bare-serialized shape).
+    local content, load_meta = utils.load_config(targets_path, {})
+    if type(content) ~= "table" or load_meta.source == "defaults" then
+      add_config_warning("reproc_targets.lua konnte nicht geladen werden, Ziele bleiben leer: "
+        .. tostring(load_meta and load_meta.reason))
     else
       config.feed = config.feed or {}
       config.feed.targets = content.targets or {}
