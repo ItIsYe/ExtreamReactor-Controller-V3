@@ -344,15 +344,22 @@ end
 
 function M:tick()
   local cfg = self.config.feed or self.config or {}
-  if cfg.enabled ~= true then return end
-
   local now = os.epoch("utc")
 
-  -- Peripherals periodisch neu erkennen
+  -- Peripherals periodisch neu erkennen -- UNABHAENGIG vom enabled-Schalter:
+  -- die Diagnose-Seite (main.lua's build_requirements(), ui_pages.lua) zeigt
+  -- ME-BRIDGE/SORTER anhand von get_summary()'s bridge_bound/sorter_bound,
+  -- die ausschliesslich hier gesetzt werden. Vorher lief refresh_peripherals()
+  -- nur, wenn Feeding bereits aktiviert war -- ein frisch aufgesetzter oder
+  -- bewusst noch deaktivierter Knoten zeigte ME-BRIDGE/SORTER dadurch immer
+  -- als "FEHLT", selbst wenn beide physisch vorhanden und verkabelt sind,
+  -- schlicht weil die Erkennung nie gelaufen ist -- nicht weil sie fehlen.
   local refresh_ms = (tonumber(cfg.discovery_interval) or 60) * 1000
   if now - self._state.last_refresh >= refresh_ms then
     self:refresh_peripherals()
   end
+
+  if cfg.enabled ~= true then return end
 
   -- Sammel-Kiste läuft auf ihrem eigenen zufälligen Intervall, unabhängig
   -- von der Reprocessor-Rotation unten -- eigener Zeitplan, eigener Toggle.
