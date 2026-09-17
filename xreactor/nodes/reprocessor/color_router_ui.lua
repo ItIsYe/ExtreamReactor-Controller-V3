@@ -91,17 +91,29 @@ function M.new(opts)
     config = config,
     write_config = write_config,
     config_path = opts.config_path or "/xreactor_config/reproc_targets.lua",
+    -- PUFFER-Liste (config.buffers) ist ein separates, top-level Config-Feld
+    -- (nicht Teil von config.feed/reproc_targets.lua) -- eigener
+    -- Persistenz-Callback statt write_config+config_path, siehe
+    -- nodes/reprocessor/main.lua's write_buffers()/buffer_candidate_names().
+    get_buffer_candidates = opts.get_buffer_candidates or function() return {} end,
+    write_buffers = opts.write_buffers,
     log = opts.log or function() end,
-    mode = "list", -- "list" | "pick_sorter" | "pick_inlet" | "pick_chest"
+    -- "list" | "pick_sorter" | "pick_inlet" | "pick_chest" | "buffers" | "pick_buffer"
+    mode = "list",
     scroll = 0,
     picker_scroll = 0,
     dirty = false,
     targets = {},
+    buffers = {},
     sorter_name = nil,
     export_inlet = nil,
     chest_enabled = false,
     chest_target = nil,
     buttons = {},
+    -- Welcher Modus soll nach ABBRECHEN/WAEHLEN im Picker wieder aktiv
+    -- werden -- die Sorter/Ziel/Kisten-Picker werden immer von "list" aus
+    -- geoeffnet, der Puffer-Picker aber von der eigenen "buffers"-Unterseite.
+    _picker_return = "list",
   }, { __index = M })
   self:_load_working_copy()
   return self
@@ -120,6 +132,9 @@ function M:_load_working_copy()
   local chest = fd.chest or {}
   self.chest_enabled = chest.enabled == true
   self.chest_target = chest.target
+  local buf_out = {}
+  for i, name in ipairs(self.config.buffers or {}) do buf_out[i] = name end
+  self.buffers = buf_out
   self.dirty = false
 end
 
@@ -136,7 +151,8 @@ function M:render(mon, _ui, _colors, should_clear)
   -- "Keine Reprocessoren konfiguriert." is still on screen leaves stale
   -- warning-box text behind mux.text()'s unpadded row/button writes never
   -- touch (mux.text does not pad to a fixed width, unlike mux.button).
-  local layout_signature = tostring(#self.targets) .. "|" .. tostring(self.mode) .. "|" .. tostring(self.chest_enabled)
+  local layout_signature = tostring(#self.targets) .. "|" .. tostring(#self.buffers) .. "|"
+    .. tostring(self.mode) .. "|" .. tostring(self.chest_enabled)
   if should_clear ~= false or self._last_layout_signature ~= layout_signature then
     mux.clear(mon)
   end
@@ -151,6 +167,11 @@ function M:render(mon, _ui, _colors, should_clear)
   elseif self.mode == "pick_chest" then
     return self:_render_picker(mon, w, h, "KISTEN-ZIEL WAEHLEN",
       peripheral_names(), "Keine Peripherals gefunden.", "pick_chest_choose")
+  elseif self.mode == "pick_buffer" then
+    return self:_render_picker(mon, w, h, "PUFFER WAEHLEN",
+      self.get_buffer_candidates(), "Keine Puffer-Peripherals gefunden.", "pick_buffer_choose")
+  elseif self.mode == "buffers" then
+    return self:_render_buffers(mon, w, h)
   end
 
   mux.header(mon, {
@@ -186,7 +207,13 @@ function M:render(mon, _ui, _colors, should_clear)
     inlet_btn.action = "inlet_open"
     self.buttons[#self.buttons + 1] = inlet_btn
 
-    kiste_y = 5
+    local buffers_btn = mux.button(mon, 2, 5, w - 3,
+      "PUFFER (" .. tostring(#self.buffers) .. ")",
+      #self.buffers > 0 and "OK" or "WARNING", 1)
+    buffers_btn.action = "buffers_open"
+    self.buttons[#self.buttons + 1] = buffers_btn
+
+    kiste_y = 6
     mux.text(mon, 2, kiste_y, "KISTE:", colorset.get("text"), colorset.get("background"))
     local chest_toggle_btn = mux.button(mon, 9, kiste_y, w - 10,
       self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
@@ -206,7 +233,13 @@ function M:render(mon, _ui, _colors, should_clear)
     inlet_btn.action = "inlet_open"
     self.buttons[#self.buttons + 1] = inlet_btn
 
-    kiste_y = 5
+    local buffers_btn = mux.button(mon, 2, 4, w - 3,
+      "PUFFER (" .. tostring(#self.buffers) .. ")",
+      #self.buffers > 0 and "OK" or "WARNING", 1)
+    buffers_btn.action = "buffers_open"
+    self.buttons[#self.buttons + 1] = buffers_btn
+
+    kiste_y = 6
     mux.text(mon, 2, kiste_y, "KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
     local chest_toggle_btn = mux.button(mon, 19, kiste_y, 10,
       self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
@@ -323,6 +356,60 @@ function M:render(mon, _ui, _colors, should_clear)
   return mux.footer_nav(mon, footer_row, w, { center = "REPROC FARBEN" })
 end
 
+-- PUFFER-Verwaltung: eigene Unterseite (nicht Teil der Hauptliste), analog
+-- zur Reprocessor-Zielliste, aber ohne Farbwahl -- ein Puffer ist nur ein
+-- Peripherie-Name, per Picker aus den tatsaechlich erkannten Puffer-
+-- Peripherals gewaehlt (nodes/reprocessor/main.lua's buffer_candidate_
+-- names(), item-inventar- ODER waste-tank-Signatur, NICHT auf
+-- "chemical_tank"-artige Peripherals beschraenkt).
+function M:_render_buffers(mon, w, h)
+  mux.header(mon, {
+    title = "REPROC PUFFER", node_id = "SORTER-FARBEN", page = "Router",
+    status = #self.buffers > 0 and "OK" or "WARNING", icon = "network",
+  })
+
+  local list_top = 3
+  local footer_row = h
+  local action_row = footer_row - 2
+  local list_bottom = action_row - 2
+  local visible_rows = math.max(1, list_bottom - list_top + 1)
+
+  if #self.buffers == 0 then
+    mux.warning_box(mon, 2, list_top, w - 3,
+      { "Keine Puffer konfiguriert.", "+ HINZUFUEGEN antippen." }, "WARNING")
+  end
+
+  self.scroll = math.max(0, math.min(self.scroll, math.max(0, #self.buffers - visible_rows)))
+  local first = self.scroll + 1
+  local last = math.min(#self.buffers, self.scroll + visible_rows)
+  local del_x, del_w = w - 8, 7
+  local y = list_top
+  for i = first, last do
+    local name = self.buffers[i]
+    mux.text(mon, 2, y, left_padded_fit(string.format("%d. %s", i, tostring(name)), del_x - 3),
+      colorset.get("text"), colorset.get("background"))
+    local del_btn = mux.button(mon, del_x, y, del_w, "X", "WARNING", 1)
+    del_btn.action, del_btn.index = "buffer_delete", i
+    self.buttons[#self.buttons + 1] = del_btn
+    y = y + 1
+  end
+  if #self.buffers > visible_rows then
+    mux.text(mon, 2, list_bottom + 1,
+      string.format("%d-%d von %d", first, last, #self.buffers),
+      colorset.get("muted"), colorset.get("background"))
+  end
+
+  local add_btn = mux.button(mon, 2, action_row, 16, "+ HINZUFUEGEN", "LIMITED", 2)
+  add_btn.action = "buffer_add_open"
+  self.buttons[#self.buttons + 1] = add_btn
+
+  local back_btn = mux.button(mon, w - 14, action_row, 13, "ZURUECK", "OFFLINE", 2)
+  back_btn.action = "buffers_back"
+  self.buttons[#self.buttons + 1] = back_btn
+
+  return mux.footer_nav(mon, footer_row, w, { center = "REPROC PUFFER" })
+end
+
 function M:_render_picker(mon, w, h, title, names, empty_message, choose_action)
   mux.header(mon, {
     title = title, node_id = "SORTER-FARBEN", page = "Router", status = "LIMITED", icon = "network",
@@ -378,23 +465,25 @@ function M:_apply_action(btn)
   if btn.action == "sorter_open" then
     self.mode = "pick_sorter"
     self.picker_scroll = 0
+    self._picker_return = "list"
     return true
   elseif btn.action == "inlet_open" then
     self.mode = "pick_inlet"
     self.picker_scroll = 0
+    self._picker_return = "list"
     return true
   elseif btn.action == "pick_cancel" then
-    self.mode = "list"
+    self.mode = self._picker_return or "list"
     return true
   elseif btn.action == "pick_sorter_choose" then
     self.sorter_name = btn.name
     self.dirty = true
-    self.mode = "list"
+    self.mode = self._picker_return or "list"
     return true
   elseif btn.action == "pick_inlet_choose" then
     self.export_inlet = btn.name
     self.dirty = true
-    self.mode = "list"
+    self.mode = self._picker_return or "list"
     return true
   elseif btn.action == "chest_toggle" then
     self.chest_enabled = not self.chest_enabled
@@ -403,11 +492,39 @@ function M:_apply_action(btn)
   elseif btn.action == "chest_target_open" then
     self.mode = "pick_chest"
     self.picker_scroll = 0
+    self._picker_return = "list"
     return true
   elseif btn.action == "pick_chest_choose" then
     self.chest_target = btn.name
     self.dirty = true
+    self.mode = self._picker_return or "list"
+    return true
+  elseif btn.action == "buffers_open" then
+    self.mode = "buffers"
+    self.scroll = 0
+    return true
+  elseif btn.action == "buffers_back" then
     self.mode = "list"
+    return true
+  elseif btn.action == "buffer_add_open" then
+    self.mode = "pick_buffer"
+    self.picker_scroll = 0
+    self._picker_return = "buffers"
+    return true
+  elseif btn.action == "pick_buffer_choose" then
+    local already = false
+    for _, existing in ipairs(self.buffers) do
+      if existing == btn.name then already = true; break end
+    end
+    if not already then
+      self.buffers[#self.buffers + 1] = btn.name
+      self.dirty = true
+    end
+    self.mode = self._picker_return or "buffers"
+    return true
+  elseif btn.action == "buffer_delete" then
+    table.remove(self.buffers, btn.index)
+    self.dirty = true
     return true
   elseif btn.action == "color_prev" or btn.action == "color_next" then
     local t = self.targets[btn.index]
@@ -459,8 +576,26 @@ function M:_save()
   self.config.feed.chest = chest_out
   if self.sorter_name then self.config.feed.sorter = self.sorter_name end
   if self.export_inlet then self.config.feed.export_inlet = self.export_inlet end
+
+  -- config.buffers ist ein separates Top-Level-Feld (Teil der geschuetzten
+  -- Haupt-Config, nicht von reproc_targets.lua) -- eigener Persistenz-
+  -- Callback statt write_config+config_path, siehe main.lua's
+  -- write_buffers(). Ein fehlender Callback (z.B. in Tests ohne diese
+  -- Wiring) darf das Speichern von Sorter/Ziel/Zielen nicht blockieren.
+  local buffers_out = {}
+  for i, name in ipairs(self.buffers) do buffers_out[i] = name end
+  if type(self.write_buffers) == "function" then
+    local buf_ok, buf_err = self.write_buffers(buffers_out)
+    if not buf_ok then
+      self.log("WARN", "color_router_ui: Puffer-Liste Speichern fehlgeschlagen: " .. tostring(buf_err))
+    else
+      self.config.buffers = buffers_out
+    end
+  end
+
   self.dirty = false
-  self.log("INFO", "color_router_ui: " .. tostring(#targets_out) .. " Reprocessor-Ziel(e) gespeichert")
+  self.log("INFO", "color_router_ui: " .. tostring(#targets_out) .. " Reprocessor-Ziel(e), "
+    .. tostring(#buffers_out) .. " Puffer gespeichert")
   return true
 end
 

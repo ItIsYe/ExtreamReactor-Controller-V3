@@ -169,6 +169,50 @@ end
 
 local function cache(bound_names) buffers = utils.cache_peripherals(bound_names or {}) end
 
+-- Shared with buffer_candidate_names() below (the Router UI's live picker)
+-- so both agree on exactly what counts as a usable buffer: an item
+-- inventory (list()+size(), e.g. a chest/barrel/ME interface -- NOT
+-- limited to fluid/chemical tanks despite the historical default name
+-- "chemical_tank_0") or a waste-style tank (getWaste()/getItemCount()).
+local function is_buffer_method_set(method_set)
+  return (method_set.list and method_set.size) or method_set.getWaste or method_set.getItemCount
+end
+
+-- Live candidates for the Router UI's PUFFER picker -- every currently
+-- present peripheral whose method set matches is_buffer_method_set(),
+-- same exclusion list as color_router_ui.lua's own peripheral pickers.
+local BUFFER_EXCLUDED_TYPES = { monitor = true, modem = true }
+local function buffer_candidate_names()
+  local out = {}
+  if type(peripheral) ~= "table" or type(peripheral.getNames) ~= "function" then return out end
+  for _, name in ipairs(peripheral.getNames() or {}) do
+    local ok_type, kind = pcall(peripheral.getType, name)
+    if not (ok_type and BUFFER_EXCLUDED_TYPES[kind]) then
+      local ok_methods, methods = pcall(peripheral.getMethods, name)
+      if ok_methods and type(methods) == "table" then
+        local method_set = {}
+        for _, m in ipairs(methods) do method_set[m] = true end
+        if is_buffer_method_set(method_set) then out[#out + 1] = name end
+      end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+-- Persists config.buffers (the Router UI's PUFFER list) to the protected
+-- user config file, same write-then-apply pattern as RT's
+-- set_reactor_fill_target -- must survive a reboot/update like any other
+-- persisted setting.
+local function write_buffers(list)
+  config.buffers = list
+  local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
+  if not ok_write then
+    utils.log(CONFIG.LOG_PREFIX, "PUFFER-Liste: Persistierung fehlgeschlagen: " .. tostring(werr), "WARN")
+  end
+  return ok_write == true, werr
+end
+
 local function discover()
   local names
   local registry_devices
@@ -186,7 +230,7 @@ local function discover()
   local buffer_devices = support_discovery.collect_devices_by_methods(names, {
     kind = "buffer",
     allow_name = function(name) return allow_all or allow_set[name] end,
-    match = function(method_set) return (method_set.list and method_set.size) or method_set.getWaste or method_set.getItemCount end
+    match = is_buffer_method_set,
   })
   for _, entry in ipairs(buffer_devices) do table.insert(registry_devices, entry) end
   registry:sync(registry_devices)
@@ -420,6 +464,8 @@ get_color_router = function()
     color_router_instance = color_router_ui_lib.new({
       config = config, config_path = "/xreactor_config/reproc_targets.lua",
       write_config = utils.write_config,
+      get_buffer_candidates = buffer_candidate_names,
+      write_buffers = write_buffers,
       log = function(level, msg) utils.log("REPROC", msg, level) end,
     })
   end
