@@ -280,6 +280,36 @@ local function read_buffers()
   return info
 end
 
+-- Zusammenfassung aller fuer die Reprocessor-Rotation benoetigten
+-- Peripherals/Verbindungen, fuer die Diagnose-Seite (ui_pages.lua) --
+-- damit auf einen Blick sichtbar ist, was ueberhaupt gebraucht wird und
+-- was davon tatsaechlich gerade verbunden ist, statt das aus mehreren
+-- Einzelanzeigen (Buffer/Registry/Feed) zusammenraten zu muessen.
+local function build_requirements(feed_summary)
+  local fd = config.feed or {}
+  local buffer_name = (config.buffers or {})[1]
+  local buffer_present = type(buffer_name) == "string" and buffer_name ~= ""
+    and peripheral.isPresent(buffer_name) == true
+  local chest = fd.chest or {}
+  local chest_present = chest.enabled == true and type(chest.target) == "string" and chest.target ~= ""
+    and peripheral.isPresent(chest.target) == true
+  return {
+    wireless_modem = comms and comms.network and comms.network.modem ~= nil or false,
+    wired_modem    = comms and comms.network and comms.network.wired ~= nil or false,
+    monitor        = devices.monitor ~= nil,
+    monitor_is_term = devices.monitor_is_term == true,
+    me_bridge      = feed_summary.bridge_bound == true,
+    me_bridge_name = feed_summary.bridge_name,
+    sorter         = feed_summary.sorter_bound == true,
+    sorter_name    = feed_summary.sorter_name,
+    buffer_name    = buffer_name,
+    buffer_present = buffer_present,
+    chest_enabled  = chest.enabled == true,
+    chest_target   = chest.target,
+    chest_present  = chest_present,
+  }
+end
+
 local function build_status_payload_uncached()
   local reasons = {}
   if not next(buffers) then reasons[health.reasons.NO_STORAGE] = true end
@@ -308,9 +338,11 @@ local function build_status_payload_uncached()
   payload.buffers = buffers_snapshot
   for _, entry in ipairs(payload.buffers) do entry.process_state = process_state[entry.id] end
   payload.standby = standby
-  payload.feed = get_feed_router():get_summary()
+  local feed_summary = get_feed_router():get_summary()
+  payload.feed = feed_summary
   payload.bindings = reproc_health.bindings
   payload.bindings_summary = health.summarize_bindings(reproc_health.bindings)
+  payload.requirements = build_requirements(feed_summary)
   return payload
 end
 

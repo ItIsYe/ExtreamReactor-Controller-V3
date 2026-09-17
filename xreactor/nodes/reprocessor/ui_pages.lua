@@ -164,6 +164,28 @@ function M.new(opts)
     return mux.footer_nav(mon, h, w, { center = "PROCESS DETAILS" })
   end
 
+  -- "Was wird gebraucht, was ist verbunden" -- fasst alle fuer die
+  -- Reprocessor-Rotation noetigen Peripherals/Verbindungen (ME-Bridge,
+  -- Sorter, PUFFER-Kiste, optionale KISTE, Wireless-Modem, Monitor) in
+  -- einer einzigen Liste zusammen, statt das aus Buffer-/Registry-/Feed-
+  -- Einzelanzeigen zusammenraten zu muessen (main.lua's build_requirements()).
+  local function append_requirement_rows(rows, req)
+    if not req then return end
+    local function add(label, ok, extra)
+      local suffix = extra and extra ~= "" and (" (" .. tostring(extra) .. ")") or ""
+      rows[#rows + 1] = { text = label .. ": " .. (ok and "OK" or "FEHLT") .. suffix, status = ok and "OK" or "WARNING" }
+    end
+    add("ME-BRIDGE", req.me_bridge, req.me_bridge_name)
+    add("SORTER", req.sorter, req.sorter_name)
+    add("PUFFER", req.buffer_present, req.buffer_name)
+    if req.chest_enabled then
+      add("KISTE", req.chest_present, req.chest_target)
+    end
+    add("WIRELESS-MODEM", req.wireless_modem)
+    rows[#rows + 1] = { text = "MONITOR: " .. (req.monitor_is_term and "TERMINAL (Fallback)" or (req.monitor and "OK" or "FEHLT")),
+      status = req.monitor and "OK" or "WARNING" }
+  end
+
   local function diagnostics(mon, model)
     local w, h = header(mon, model, "REPROCESSING DIAGNOSTICS", "3/4", "network")
     local summary = model.summary or {}
@@ -184,6 +206,7 @@ function M.new(opts)
 
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, alerts)
+    append_requirement_rows(rows, model.payload and model.payload.requirements)
 
     if w >= 58 then
       local left_w = math.floor((w - 5) / 2)
