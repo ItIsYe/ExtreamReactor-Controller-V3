@@ -158,19 +158,41 @@ function sequencer.new(comms, ramp_profile, opts)
     table.insert(self.queue, { node_id = normalized, reason = reason or "DISCOVERY" })
   end
 
+  -- Root Cause (2026-09-17, "sieht aus wie Kommunikationsprobleme, alle
+  -- offline"): expandierte VORHER die GESAMTE Warteschlange in einem
+  -- einzigen, nicht unterbrechbaren Durchlauf -- plan_modules() (Iteration
+  -- + table.sort ueber alle Module) fuer JEDEN wartenden Knoten
+  -- hintereinander, ohne je an CC:Tweaked's Event-Loop zurueckzugeben.
+  -- Wenn beim gleichzeitigen Hochfahren der gesamten Flotte viele RT-Knoten
+  -- praktisch simultan per enqueue() (message_handlers.lua's HELLO/
+  -- REGISTER-Handler) in die Warteschlange kamen, ueberschritt dieser eine
+  -- Aufruf CC:Tweaked's "Too long without yielding"-Limit --
+  -- Log-Beleg: "Service tick failed (HOUSEKEEPING) ...: /xreactor/master/
+  -- startup_sequ:19/29: Too long without yielding" (genau die pairs()-
+  -- Iteration bzw. table.sort() in plan_modules() unten). Der dadurch
+  -- abgebrochene/verzoegerte MASTER-Tick sendet in der Zeit auch keine
+  -- Heartbeats mehr, weshalb jeder Peer ihn faelschlich als "offline"
+  -- erkennt (kein echtes Netzwerkproblem).
+  --
+  -- Fix: pro Aufruf nur den VORDERSTEN, noch unexpandierten Eintrag in
+  -- Modul-Steps umwandeln, den Rest der Warteschlange unangetastet lassen
+  -- -- tick() ruft build_steps() ohnehin bei jedem IDLE-Tick erneut auf,
+  -- solange self.queue[1] kein module_id hat, wodurch sich die Kosten auf
+  -- so viele Ticks verteilen wie Knoten in der Warteschlange stehen, statt
+  -- alles in einem Rutsch zu tun.
   function self.build_steps(nodes)
-    local expanded = {}
-    for _, entry in ipairs(self.queue) do
-      local node = nodes and nodes[entry.node_id]
-      if node and node.modules then
-        for _, step in ipairs(plan_modules(entry.node_id, node.modules)) do
-          table.insert(expanded, step)
-        end
-      else
-        table.insert(expanded, { node_id = entry.node_id })
-      end
+    local front = self.queue[1]
+    if not front then return end
+    local node = nodes and nodes[front.node_id]
+    local expanded_front = (node and node.modules) and plan_modules(front.node_id, node.modules) or {}
+    if #expanded_front == 0 then
+      expanded_front = { { node_id = front.node_id } }
     end
-    self.queue = expanded
+    local queue = expanded_front
+    for i = 2, #self.queue do
+      queue[#queue + 1] = self.queue[i]
+    end
+    self.queue = queue
   end
 
   -- Dieselbe Doppelpunkt-Konvention wie enqueue() oben.
