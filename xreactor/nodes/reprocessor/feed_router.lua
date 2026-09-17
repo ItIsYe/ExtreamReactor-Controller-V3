@@ -292,6 +292,15 @@ local function feed_chest(self, cfg)
     self.warn_once("chest_no_target", "FeedRouter: Kiste aktiv, aber kein Ziel-Peripheral gesetzt, übersprungen")
     return
   end
+  -- Gleicher Praesenz-Check wie fuer die PUFFER-Kiste (feed_one() oben) --
+  -- ein konfigurierter Name allein ist kein Beweis, dass die Peripherie
+  -- noch existiert (entfernt/umbenannt), sonst scheitert der Export nur
+  -- mit einer generischen "export failed"-Warnung statt einer klaren
+  -- Diagnose.
+  if not peripheral.isPresent(chest.target) then
+    self.warn_once("chest_abs", "FeedRouter: Kisten-Ziel nicht gefunden: " .. tostring(chest.target) .. ", übersprungen")
+    return
+  end
 
   local bridge = self._state.bridge
   if not bridge then

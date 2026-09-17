@@ -29,7 +29,7 @@ _G.os = _G.os or {}
 os.epoch = function() return now_ms end
 
 _G.peripheral = {
-  isPresent = function(name) return name == 'sorter_0' or name == 'me_bridge' or name == 'puffer_chest_0' end,
+  isPresent = function(name) return name == 'sorter_0' or name == 'me_bridge' or name == 'puffer_chest_0' or name == 'chest_0' end,
   getMethods = function(name)
     if name == 'sorter_0' then return { 'setDefaultColor', 'getDefaultColor' } end
     return {}
@@ -171,5 +171,38 @@ local ok = pcall(function() feed3:tick() end)
 assert_true(ok, 'a targetless chest must not crash the tick')
 assert_eq(#export_calls3, 0, 'a targetless chest must never export')
 assert_true(warnings3['chest_no_target'] ~= nil, 'a targetless enabled chest must produce a dedicated warning')
+
+-- 4. Chest enabled with a configured target that isn't actually present
+--    (removed/renamed/typo) -- must skip with a dedicated chest_abs
+--    warning, distinct from chest_no_target, and never attempt the
+--    export (mirrors the PUFFER buffer_abs check in feed_one()).
+local warnings4 = {}
+local export_calls4 = {}
+local feed4 = feed_router_lib.new({
+  config = { feed = {
+    enabled = true, waste_item = 'x', feed_amount = 2,
+    interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
+    targets = {},
+    chest = { enabled = true, target = 'chest_missing' },
+  } },
+  log = function() end,
+  warn_once = function(key, msg) warnings4[key] = msg end,
+})
+feed4._state.bridge = {
+  getItem = function(_query) return { amount = 1000 } end,
+  exportItemToPeripheral = function(_query, inlet)
+    export_calls4[#export_calls4 + 1] = { inlet = inlet }
+    return 2
+  end,
+}
+feed4._state.sorter = nil
+feed4._state.last_refresh = now_ms
+
+feed4:tick()
+now_ms = now_ms + 11000
+local ok4 = pcall(function() feed4:tick() end)
+assert_true(ok4, 'a chest target that is not present must not crash the tick')
+assert_eq(#export_calls4, 0, 'a chest target that is not present must never export')
+assert_true(warnings4['chest_abs'] ~= nil, 'expected a dedicated chest_abs warning distinct from chest_no_target')
 
 print('reprocessor_feed_router_chest_test.lua: ok')
