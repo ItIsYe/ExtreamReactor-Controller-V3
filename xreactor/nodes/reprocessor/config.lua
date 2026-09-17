@@ -36,10 +36,11 @@ local CONFIG = {
     -- Leer/Name nicht gefunden -> Fallback-Suche per Methodensignatur,
     -- genau wie bei me_bridge.
     sorter             = "logistical_sorter_0",
-    -- Gemeinsamer Export-Eingang (Sorter-Seite) -- ALLE Exporte gehen
-    -- hierher, die Sorter-Farbe entscheidet, welcher farbige Logistical
-    -- Transporter das Item danach zum jeweiligen Reprocessor traegt.
-    export_inlet       = "mekanism:logistical_transporter_0",
+    -- Kein export_inlet mehr: die ME-Bridge exportiert direkt in die
+    -- PUFFER-Kiste (config.buffers[1], per Router-UI gewaehlt). Der
+    -- Sorter sitzt physisch an dieser Kiste -- sobald seine Default-
+    -- Farbe gesetzt ist, uebernimmt Mekanism selbst den Weitertransport
+    -- zum farbigen Logistical Transporter und damit zum Reprocessor.
     waste_item         = "bigreactors:cyanite_ingot",
     feed_amount        = 2,      -- Items pro Befüllung (Minimum zum Arbeiten)
     interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befüllungen

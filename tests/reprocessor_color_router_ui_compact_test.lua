@@ -7,7 +7,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- Router page required a 62x16 monitor and would show nothing but a "too
 -- small" warning on a plain 51x19 computer -- this proves the page is now
 -- fully usable at that size: every control renders inside bounds, no two
--- buttons overlap, and the full sorter/ziel/kiste/target/save flow works
+-- buttons overlap, and the full sorter/puffer/kiste/target/save flow works
 -- via touch exactly like on a wide monitor.
 
 package.loaded['core.mockup_ui'] = nil
@@ -102,9 +102,9 @@ assert_eq(#ui.targets, 2, 'both targets must still render on the compact page')
 assert_no_overlaps(ui, 51)
 
 local sorter_btn = find_button(ui, 'sorter_open')
-local inlet_btn = find_button(ui, 'inlet_open')
-assert_true(sorter_btn ~= nil and inlet_btn ~= nil, 'SORTER and ZIEL must both have buttons on the compact page')
-assert_true(sorter_btn.y ~= inlet_btn.y, 'on a 51-wide screen SORTER and ZIEL must stack on separate rows, not share one')
+local buffers_btn = find_button(ui, 'buffers_open')
+assert_true(sorter_btn ~= nil and buffers_btn ~= nil, 'SORTER and PUFFER must both have buttons on the compact page')
+assert_true(sorter_btn.y ~= buffers_btn.y, 'on a 51-wide screen SORTER and PUFFER must stack on separate rows, not share one')
 
 -- Enable the chest: its own row must appear too, still within bounds.
 local chest_toggle_btn = find_button(ui, 'chest_toggle')

@@ -2,11 +2,14 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 -- Regression coverage for nodes/reprocessor/color_router_ui.lua, the
 -- Sorter-color equivalent of the old valve-path router_ui.lua for
--- REPROCESSOR: pick the Sorter and export inlet from the live peripheral
--- list, add/delete a target, cycle its color, and the save/discard
--- roundtrip (save persists {sorter=, export_inlet=, targets=} + applies it
--- to config.feed immediately; discard reverts unsaved edits without
--- touching config.feed).
+-- REPROCESSOR: pick the Sorter from the live peripheral list, add/delete a
+-- target, cycle its color, and the save/discard roundtrip (save persists
+-- {sorter=, targets=} + applies it to config.feed immediately; discard
+-- reverts unsaved edits without touching config.feed). There is no
+-- export_inlet/"ZIEL" picker anymore (2026-09-17): the ME-Bridge exports
+-- straight into the PUFFER buffer chest (config.buffers, see
+-- tests/reprocessor_color_router_ui_buffers_test.lua), and Mekanism's own
+-- Sorter+Transporter mechanics take over from there automatically.
 
 package.loaded['core.mockup_ui'] = nil
 package.loaded['adapters.logistical_sorter'] = nil
@@ -65,7 +68,7 @@ local write_config = function(path, data)
   return true
 end
 
-local config = { feed = { sorter = 'sorter_0', export_inlet = 'chest_0', targets = {
+local config = { feed = { sorter = 'sorter_0', targets = {
   { label = 'Reprocessor A', color = 'RED' },
 } } }
 
@@ -77,7 +80,6 @@ assert_true(type(footer) == 'table' and footer.left and footer.right,
   'render() must return footer_nav geometry so ui_router keeps the shared prev/next buttons live')
 assert_eq(#ui.targets, 1)
 assert_eq(ui.sorter_name, 'sorter_0', 'working copy must load sorter from config.feed')
-assert_eq(ui.export_inlet, 'chest_0', 'working copy must load export_inlet from config.feed')
 assert_eq(ui.chest_enabled, false, 'chest must default to disabled when absent from config.feed')
 assert_eq(ui.dirty, false, 'freshly loaded working copy must not be dirty')
 
@@ -85,7 +87,7 @@ assert_eq(ui.dirty, false, 'freshly loaded working copy must not be dirty')
 -- after (it only renders while the chest is enabled). The chest goes
 -- straight to a peripheral over the wired modem -- no sorter/color
 -- involved, so any detected peripheral (including a plain chest) is a
--- valid pick, same pool as the export-inlet picker.
+-- valid pick.
 assert_true(find_button(ui, 'chest_target_open') == nil, 'no chest target picker while the chest is disabled')
 local chest_toggle_btn = find_button(ui, 'chest_toggle')
 assert_true(chest_toggle_btn ~= nil, 'expected a KISTE toggle button')
@@ -132,24 +134,6 @@ assert_eq(ui.mode, 'list', 'choosing a sorter must return to the list page')
 assert_eq(ui.sorter_name, 'sorter_1', 'choosing a sorter must update the working copy')
 assert_eq(ui.dirty, true, 'choosing a sorter must mark the working copy dirty')
 
--- Open the export-inlet picker and pick the chest (any peripheral is
--- eligible as an export target, not just detected sorters).
-ui:render(mon, nil, nil, true)
-local inlet_open_btn = find_button(ui, 'inlet_open')
-assert_true(inlet_open_btn ~= nil, 'expected a ZIEL button on the list page')
-assert_true(ui:handle_touch(inlet_open_btn.x1, inlet_open_btn.y) == true)
-assert_eq(ui.mode, 'pick_inlet')
-
-ui:render(mon, nil, nil, true)
-local pick_chest = nil
-for _, btn in ipairs(ui.buttons) do
-  if btn.action == 'pick_inlet_choose' and btn.name == 'chest_0' then pick_chest = btn end
-end
-assert_true(pick_chest ~= nil, 'expected chest_0 as a pickable export-inlet candidate')
-assert_true(ui:handle_touch(pick_chest.x1, pick_chest.y) == true)
-assert_eq(ui.mode, 'list')
-assert_eq(ui.export_inlet, 'chest_0', 'choosing an inlet must update the working copy (unchanged value here)')
-
 -- Cancel out of a picker without choosing anything.
 ui:render(mon, nil, nil, true)
 local sorter_open_btn2 = find_button(ui, 'sorter_open')
@@ -188,7 +172,6 @@ assert_true(ui:handle_touch(save_btn.x1, save_btn.y) == true)
 assert_eq(ui.dirty, false, 'save must clear the dirty flag')
 assert_true(written ~= nil, 'save must call write_config')
 assert_eq(written.data.sorter, 'sorter_1', 'the persisted file must contain the chosen sorter')
-assert_eq(written.data.export_inlet, 'chest_0', 'the persisted file must contain the chosen export inlet')
 assert_eq(#written.data.targets, 2, 'the persisted file must contain both targets')
 assert_eq(written.data.chest.enabled, true, 'the persisted file must contain the chest toggle state')
 assert_eq(written.data.chest.target, 'chest_0', 'the persisted file must contain the chosen chest target')

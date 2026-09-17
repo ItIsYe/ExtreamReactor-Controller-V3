@@ -58,14 +58,13 @@ local function make_bridge(exported_holder)
 end
 
 -- 1. Full feed cycle: sorter color is set to the rotating target's color
---    BEFORE exporting, and the export goes to the shared export_inlet.
+--    BEFORE exporting, and the export goes to the PUFFER buffer chest.
 do
   _G.__last_sorter_color = nil
   local exported = {}
   local feed = feed_router_lib.new({
     config = { feed = {
       enabled = true, waste_item = 'x', feed_amount = 2,
-      export_inlet = 'sorter_inlet_0',
       targets = {
         { label = 'Reprocessor A', color = 'RED' },
         { label = 'Reprocessor B', color = 'BLUE' },

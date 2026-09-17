@@ -41,7 +41,7 @@ local config = {
     dedupe_ttl_s = 30, dedupe_limit = 200, peer_timeout_s = 12.0, queue_limit = 200, drop_simulation = 0 },
   feed = {
     enabled = true, me_bridge = 'me_bridge', sorter = 'logistical_sorter_0',
-    export_inlet = 'mekanism:logistical_transporter_0', waste_item = 'bigreactors:cyanite_ingot',
+    waste_item = 'bigreactors:cyanite_ingot',
     feed_amount = 2, interval_min_s = 20, interval_max_s = 60, discovery_interval = 60,
     targets = {
       { label = 'Reprocessor A', color = 'aqua' },     -- valid, lowercase -> must be uppercased
@@ -114,10 +114,9 @@ for _, w in ipairs(warnings_none) do
   assert_eq(w:find('feed.chest') == nil, true, 'a disabled chest must never produce a chest warning')
 end
 
--- export_inlet/sorter defaults apply when missing.
+-- sorter default applies when missing.
 local config2 = { feed = { targets = {} } }
 config_normalizer.normalize(config2, defaults, function() end, utils)
 assert_eq(config2.feed.sorter, 'logistical_sorter_0')
-assert_eq(config2.feed.export_inlet, 'mekanism:logistical_transporter_0')
 
 print('reprocessor_config_normalizer_color_test.lua: ok')

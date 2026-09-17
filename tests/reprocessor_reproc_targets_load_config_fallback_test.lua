@@ -72,10 +72,11 @@ local path = '/xreactor_config/reproc_targets.lua'
 
 -- 1) Save a realistic multi-target config through the REAL Router UI save
 --    path, exactly like the operator did in-game.
-local config = { feed = { sorter = nil, export_inlet = nil, targets = {} } }
+local config = { feed = { sorter = nil, targets = {} } }
 local ui = color_router_ui.new({ config = config, write_config = utils.write_config, config_path = path, log = function() end })
 ui.sorter_name = 'logistical_sorter_0'
-ui.export_inlet = 'minecraft:chest_9'
+ui.chest_enabled = true
+ui.chest_target = 'minecraft:chest_9'
 ui.targets = {
   { label = 'Reprocessor 1', color = 'GREEN' },
   { label = 'Reprocessor 2', color = 'CYAN' },
@@ -115,7 +116,7 @@ assert_eq(#loaded.targets, 2, 'both targets must survive the round-trip through 
 assert_eq(loaded.targets[1].color, 'GREEN')
 assert_eq(loaded.targets[2].color, 'CYAN')
 assert_eq(loaded.sorter, 'logistical_sorter_0')
-assert_eq(loaded.export_inlet, 'minecraft:chest_9')
+assert_eq(loaded.chest.target, 'minecraft:chest_9')
 
 -- 4) Structural check on the actual boot-time wiring: main.lua must call
 --    utils.load_config() for reproc_targets.lua, and must NOT call dofile

@@ -98,7 +98,7 @@ function M.new(opts)
     get_buffer_candidates = opts.get_buffer_candidates or function() return {} end,
     write_buffers = opts.write_buffers,
     log = opts.log or function() end,
-    -- "list" | "pick_sorter" | "pick_inlet" | "pick_chest" | "buffers" | "pick_buffer"
+    -- "list" | "pick_sorter" | "pick_chest" | "buffers" | "pick_buffer"
     mode = "list",
     scroll = 0,
     picker_scroll = 0,
@@ -106,12 +106,11 @@ function M.new(opts)
     targets = {},
     buffers = {},
     sorter_name = nil,
-    export_inlet = nil,
     chest_enabled = false,
     chest_target = nil,
     buttons = {},
     -- Welcher Modus soll nach ABBRECHEN/WAEHLEN im Picker wieder aktiv
-    -- werden -- die Sorter/Ziel/Kisten-Picker werden immer von "list" aus
+    -- werden -- die Sorter/Kisten-Picker werden immer von "list" aus
     -- geoeffnet, der Puffer-Picker aber von der eigenen "buffers"-Unterseite.
     _picker_return = "list",
   }, { __index = M })
@@ -128,7 +127,6 @@ function M:_load_working_copy()
   end
   self.targets = out
   self.sorter_name = fd.sorter
-  self.export_inlet = fd.export_inlet
   local chest = fd.chest or {}
   self.chest_enabled = chest.enabled == true
   self.chest_target = chest.target
@@ -161,9 +159,6 @@ function M:render(mon, _ui, _colors, should_clear)
   if self.mode == "pick_sorter" then
     return self:_render_picker(mon, w, h, "SORTER WAEHLEN",
       sorter_candidate_names(), "Kein Logistical Sorter gefunden.", "pick_sorter_choose")
-  elseif self.mode == "pick_inlet" then
-    return self:_render_picker(mon, w, h, "EXPORT-ZIEL WAEHLEN",
-      peripheral_names(), "Keine Peripherals gefunden.", "pick_inlet_choose")
   elseif self.mode == "pick_chest" then
     return self:_render_picker(mon, w, h, "KISTEN-ZIEL WAEHLEN",
       peripheral_names(), "Keine Peripherals gefunden.", "pick_chest_choose")
@@ -186,60 +181,38 @@ function M:render(mon, _ui, _colors, should_clear)
     return mux.footer_nav(mon, h, w, { center = "REPROC FARBEN" })
   end
 
-  -- Sorter/Export-Ziel: beide per Picker aus den tatsaechlich erkannten
-  -- Peripherals waehlbar -- keine Config-Datei-Bearbeitung noetig. Auf dem
-  -- 51 Zeichen breiten PC-Terminal (kein externer Monitor) passen lange
-  -- Peripherie-Namen nicht nebeneinander -- dann werden SORTER/ZIEL/KISTE
-  -- untereinander gestapelt statt nebeneinander gelegt (compact-Layout).
+  -- Sorter/Puffer: beide per Picker aus den tatsaechlich erkannten
+  -- Peripherals waehlbar -- keine Config-Datei-Bearbeitung noetig. Der
+  -- fruehere export_inlet/"ZIEL"-Picker ist entfallen: die ME-Bridge
+  -- exportiert nur noch in die PUFFER-Kiste, den Weitertransport zum
+  -- Reprocessor uebernimmt Mekanism selbst (Sorter+Transporter), sobald
+  -- die Sorter-Farbe gesetzt ist -- siehe feed_router.lua. Beide Zeilen
+  -- passen bei 51 Zeichen Breite (PC-Terminal) problemlos alleine in
+  -- ihre eigene Zeile, kein Nebeneinander-Layout mehr noetig.
   local compact = w < COMPACT_W
   local kiste_y
 
+  local sorter_btn = mux.button(mon, 2, 3, w - 3,
+    "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
+    self.sorter_name and "OK" or "WARNING", 1)
+  sorter_btn.action = "sorter_open"
+  self.buttons[#self.buttons + 1] = sorter_btn
+
+  local buffers_btn = mux.button(mon, 2, 4, w - 3,
+    "PUFFER (" .. tostring(#self.buffers) .. ")",
+    #self.buffers > 0 and "OK" or "WARNING", 1)
+  buffers_btn.action = "buffers_open"
+  self.buttons[#self.buttons + 1] = buffers_btn
+
   if compact then
-    local sorter_btn = mux.button(mon, 2, 3, w - 3,
-      "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
-      self.sorter_name and "OK" or "WARNING", 1)
-    sorter_btn.action = "sorter_open"
-    self.buttons[#self.buttons + 1] = sorter_btn
-
-    local inlet_btn = mux.button(mon, 2, 4, w - 3,
-      "ZIEL: " .. tostring(self.export_inlet or "NICHT GESETZT"),
-      self.export_inlet and "OK" or "WARNING", 1)
-    inlet_btn.action = "inlet_open"
-    self.buttons[#self.buttons + 1] = inlet_btn
-
-    local buffers_btn = mux.button(mon, 2, 5, w - 3,
-      "PUFFER (" .. tostring(#self.buffers) .. ")",
-      #self.buffers > 0 and "OK" or "WARNING", 1)
-    buffers_btn.action = "buffers_open"
-    self.buttons[#self.buttons + 1] = buffers_btn
-
-    kiste_y = 6
+    kiste_y = 5
     mux.text(mon, 2, kiste_y, "KISTE:", colorset.get("text"), colorset.get("background"))
     local chest_toggle_btn = mux.button(mon, 9, kiste_y, w - 10,
       self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
     chest_toggle_btn.action = "chest_toggle"
     self.buttons[#self.buttons + 1] = chest_toggle_btn
   else
-    local half_w = math.floor((w - 5) / 2)
-    local sorter_btn = mux.button(mon, 2, 3, half_w,
-      "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
-      self.sorter_name and "OK" or "WARNING", 1)
-    sorter_btn.action = "sorter_open"
-    self.buttons[#self.buttons + 1] = sorter_btn
-
-    local inlet_btn = mux.button(mon, 3 + half_w, 3, w - 3 - half_w,
-      "ZIEL: " .. tostring(self.export_inlet or "NICHT GESETZT"),
-      self.export_inlet and "OK" or "WARNING", 1)
-    inlet_btn.action = "inlet_open"
-    self.buttons[#self.buttons + 1] = inlet_btn
-
-    local buffers_btn = mux.button(mon, 2, 4, w - 3,
-      "PUFFER (" .. tostring(#self.buffers) .. ")",
-      #self.buffers > 0 and "OK" or "WARNING", 1)
-    buffers_btn.action = "buffers_open"
-    self.buttons[#self.buttons + 1] = buffers_btn
-
-    kiste_y = 6
+    kiste_y = 5
     mux.text(mon, 2, kiste_y, "KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
     local chest_toggle_btn = mux.button(mon, 19, kiste_y, 10,
       self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
@@ -467,21 +440,11 @@ function M:_apply_action(btn)
     self.picker_scroll = 0
     self._picker_return = "list"
     return true
-  elseif btn.action == "inlet_open" then
-    self.mode = "pick_inlet"
-    self.picker_scroll = 0
-    self._picker_return = "list"
-    return true
   elseif btn.action == "pick_cancel" then
     self.mode = self._picker_return or "list"
     return true
   elseif btn.action == "pick_sorter_choose" then
     self.sorter_name = btn.name
-    self.dirty = true
-    self.mode = self._picker_return or "list"
-    return true
-  elseif btn.action == "pick_inlet_choose" then
-    self.export_inlet = btn.name
     self.dirty = true
     self.mode = self._picker_return or "list"
     return true
@@ -565,7 +528,7 @@ function M:_save()
     targets_out[i] = { label = t.label, color = t.color }
   end
   local chest_out = { enabled = self.chest_enabled, target = self.chest_target }
-  local out = { sorter = self.sorter_name, export_inlet = self.export_inlet, targets = targets_out, chest = chest_out }
+  local out = { sorter = self.sorter_name, targets = targets_out, chest = chest_out }
   local ok, err = self.write_config(self.config_path, out)
   if not ok then
     self.log("WARN", "color_router_ui: Speichern fehlgeschlagen: " .. tostring(err))
@@ -575,7 +538,6 @@ function M:_save()
   self.config.feed.targets = targets_out
   self.config.feed.chest = chest_out
   if self.sorter_name then self.config.feed.sorter = self.sorter_name end
-  if self.export_inlet then self.config.feed.export_inlet = self.export_inlet end
 
   -- config.buffers ist ein separates Top-Level-Feld (Teil der geschuetzten
   -- Haupt-Config, nicht von reproc_targets.lua) -- eigener Persistenz-

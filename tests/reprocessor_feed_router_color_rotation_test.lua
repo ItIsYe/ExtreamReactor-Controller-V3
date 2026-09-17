@@ -42,16 +42,23 @@ local feed_router_lib = require('nodes.reprocessor.feed_router')
 
 local warnings = {}
 local feed = feed_router_lib.new({
-  config = { feed = {
-    enabled = true, waste_item = 'bigreactors:cyanite_ingot', feed_amount = 2,
-    interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
-    export_inlet = 'sorter_inlet_0',
-    targets = {
-      { label = 'Reprocessor A', color = 'RED' },
-      { label = 'Reprocessor B', color = nil },      -- invalid: must be skipped
-      { label = 'Reprocessor C', color = 'AQUA' },
+  config = {
+    -- buffers is a separate TOP-LEVEL config field (Router UI's PUFFER
+    -- picker, not part of config.feed) -- the ME-Bridge exports into
+    -- buffers[1] instead of the old export_inlet; the Sorter (already
+    -- physically sitting at that chest) handles the rest itself once its
+    -- color is set.
+    buffers = { 'puffer_chest_0' },
+    feed = {
+      enabled = true, waste_item = 'bigreactors:cyanite_ingot', feed_amount = 2,
+      interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
+      targets = {
+        { label = 'Reprocessor A', color = 'RED' },
+        { label = 'Reprocessor B', color = nil },      -- invalid: must be skipped
+        { label = 'Reprocessor C', color = 'AQUA' },
+      },
     },
-  } },
+  },
   log = function() end,
   warn_once = function(key, msg) warnings[key] = msg end,
 })
@@ -81,7 +88,7 @@ now_ms = now_ms + 11000
 feed:tick() -- target 1: Reprocessor A (RED) -- must export
 assert_eq(#export_calls, 1, 'target A should feed')
 assert_eq(sorter_calls[#sorter_calls], 'RED', 'sorter must be set to RED before feeding A')
-assert_eq(export_calls[1].inlet, 'sorter_inlet_0', 'export must go to the shared export_inlet')
+assert_eq(export_calls[1].inlet, 'puffer_chest_0', 'export must go to the PUFFER buffer chest, not a shared export_inlet')
 
 now_ms = now_ms + 11000
 feed:tick() -- target 2: Reprocessor B (no color) -- must be skipped

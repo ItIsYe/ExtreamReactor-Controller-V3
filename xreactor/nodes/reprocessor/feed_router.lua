@@ -7,13 +7,17 @@
 -- Reprocessor überhaupt zu arbeiten beginnt.
 --
 -- Routing läuft über einen Mekanism Logistical Sorter statt über eine
--- Ventil-Baum-Topologie: alle Exporte gehen an denselben export_inlet
--- (der Sorter-Eingang), und vor jedem Export wird die Sorter-Default-
--- Farbe (adapters/logistical_sorter.lua) auf die des aktuellen Ziels
--- gesetzt. Farbige Mekanism Logistical Transporter transportieren das
--- Item dann zum passenden Reprocessor. Dadurch entfällt die
+-- Ventil-Baum-Topologie: die ME-Bridge exportiert IMMER in dieselbe
+-- PUFFER-Kiste (config.buffers[1], per Router-UI gewählt -- eine normale
+-- Inventar-Peripherie, keine ME-Peripherie). Der Sorter sitzt physisch an
+-- dieser Kiste; vor jedem Export wird seine Default-Farbe
+-- (adapters/logistical_sorter.lua) auf die des aktuellen Ziels gesetzt.
+-- Ab dann übernimmt Mekanism selbst, automatisch, ohne weitere Computer-
+-- Aktion: der farbige Logistical Transporter zieht das Item aus der
+-- Kiste durch den Sorter zum passenden Reprocessor. Dadurch entfällt die
 -- Pfad-öffnen/liefern/schließen-Zustandsmaschine komplett — ein Feed ist
--- ein einziger synchroner Schritt (Farbe setzen, exportieren).
+-- für den Computer ein einziger synchroner Schritt (Farbe setzen,
+-- ME-Bridge -> Puffer-Kiste exportieren).
 --
 -- Config (config.feed):
 --   enabled            = true/false
@@ -21,9 +25,6 @@
 --   sorter             = "logistical_sorter_0"  -- Logistical Sorter, dessen
 --                                                  Default-Farbe pro Feed
 --                                                  gesetzt wird
---   export_inlet       = "mekanism:logistical_transporter_0"
---                                                -- gemeinsamer Export-
---                                                  Eingang (Sorter-Seite)
 --   waste_item         = "bigreactors:cyanite_ingot"
 --   feed_amount        = 2          -- Items pro Befüllung
 --   interval_min_s     = 20         -- zufälliges Intervall: min..max Sekunden
@@ -215,9 +216,15 @@ local function feed_one(self, cfg)
     return
   end
 
-  local export_inlet = cfg.export_inlet
-  if type(export_inlet) ~= "string" or export_inlet == "" then
-    self.warn_once("no_export_inlet", "FeedRouter: kein export_inlet konfiguriert, Feed übersprungen")
+  -- Die ME-Bridge exportiert NICHT mehr direkt zum Sorter/Transporter --
+  -- sie befuellt die PUFFER-Kiste (config.buffers[1], per Router-UI
+  -- gewaehlt). Der Sorter sitzt physisch an dieser Kiste: sobald seine
+  -- Default-Farbe gesetzt ist, uebernimmt Mekanism selbst (automatisch,
+  -- keine weitere Computer-Aktion) den Weitertransport Kiste -> farbiger
+  -- Transporter -> Reprocessor.
+  local buffer_name = (self.config.buffers or {})[1]
+  if type(buffer_name) ~= "string" or buffer_name == "" then
+    self.warn_once("no_buffer", "FeedRouter: keine Puffer-Kiste konfiguriert, Feed übersprungen")
     return
   end
 
@@ -242,7 +249,7 @@ local function feed_one(self, cfg)
     return
   end
 
-  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, export_inlet)
+  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, buffer_name)
   local err = nil
   if not ok then err = result; result = nil end
   local exported = type(result) == "table" and me_bridge_compat.item_amount(result)

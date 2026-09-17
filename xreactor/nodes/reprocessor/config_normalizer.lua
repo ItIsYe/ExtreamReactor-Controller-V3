@@ -29,9 +29,6 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(fd.sorter) ~= "string" then
     fd.sorter = d.sorter or "logistical_sorter_0"
   end
-  if type(fd.export_inlet) ~= "string" or fd.export_inlet == "" then
-    fd.export_inlet = d.export_inlet or "mekanism:logistical_transporter_0"
-  end
   if type(fd.waste_item) ~= "string" then
     fd.waste_item = d.waste_item or "bigreactors:cyanite_ingot"
   end

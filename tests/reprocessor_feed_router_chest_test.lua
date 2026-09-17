@@ -71,13 +71,15 @@ end
 --    fires and never appears in the sorter color calls.
 local warnings = {}
 local feed = feed_router_lib.new({
-  config = { feed = {
-    enabled = true, waste_item = 'x', feed_amount = 2,
-    interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
-    export_inlet = 'sorter_inlet_0',
-    targets = { { label = 'Reprocessor A', color = 'RED' } },
-    chest = { enabled = false, target = nil },
-  } },
+  config = {
+    buffers = { 'puffer_chest_0' },
+    feed = {
+      enabled = true, waste_item = 'x', feed_amount = 2,
+      interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
+      targets = { { label = 'Reprocessor A', color = 'RED' } },
+      chest = { enabled = false, target = nil },
+    },
+  },
   log = function() end,
   warn_once = function(key, msg) warnings[key] = msg end,
 })
@@ -89,7 +91,7 @@ feed:tick() -- arms both timers
 now_ms = now_ms + 11000
 feed:tick() -- target A feeds
 assert_eq(#export_calls, 1, 'target A should feed even with chest disabled')
-assert_eq(export_calls[1].inlet, 'sorter_inlet_0')
+assert_eq(export_calls[1].inlet, 'puffer_chest_0')
 
 now_ms = now_ms + 11000
 feed:tick()
@@ -109,7 +111,6 @@ local feed2 = feed_router_lib.new({
   config = { feed = {
     enabled = true, waste_item = 'x', feed_amount = 2,
     interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
-    export_inlet = 'sorter_inlet_0',
     targets = {},
     chest = { enabled = true, target = 'chest_0' },
   } },
@@ -148,7 +149,6 @@ local feed3 = feed_router_lib.new({
   config = { feed = {
     enabled = true, waste_item = 'x', feed_amount = 2,
     interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
-    export_inlet = 'sorter_inlet_0',
     targets = {},
     chest = { enabled = true, target = nil },
   } },

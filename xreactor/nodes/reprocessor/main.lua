@@ -82,8 +82,8 @@ local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 
 -- /xreactor_config/reproc_targets.lua (die vom Farb-Router-Editor
--- geschriebene kanonische { sorter=, export_inlet=, targets= }-Tabelle,
--- siehe color_router_ui.lua:_save()) muss VOR config_normalizer.normalize()
+-- geschriebene kanonische { sorter=, targets= }-Tabelle, siehe
+-- color_router_ui.lua:_save()) muss VOR config_normalizer.normalize()
 -- geladen werden, damit dessen Validierung (config_normalizer.lua) auch auf
 -- frisch geladene Werte greift, statt nur auf das, was schon in
 -- reprocessor.lua stand. Alles hier kommt ausschliesslich vom Router-UI --
@@ -113,7 +113,6 @@ do
       config.feed = config.feed or {}
       config.feed.targets = content.targets or {}
       if content.sorter then config.feed.sorter = content.sorter end
-      if content.export_inlet then config.feed.export_inlet = content.export_inlet end
       if content.chest then config.feed.chest = content.chest end
     end
   end
