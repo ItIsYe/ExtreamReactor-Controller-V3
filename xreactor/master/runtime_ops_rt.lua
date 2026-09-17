@@ -263,12 +263,24 @@ function M.check_timeouts(runtime)
       node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN] = true
       if last_seen and (now - last_seen) >= runtime.tuning.node_offline_purge_after_ms then stale_nodes[#stale_nodes + 1] = node.id end
     elseif node.health and node.health.reasons then
+      -- Only treat this as an actual reconnect (log line + alert-service
+      -- clear) when COMMS_DOWN was really set on this node before. This
+      -- elseif branch used to run for every healthy node on every single
+      -- check_timeouts() pass (every node not currently should_mark_down),
+      -- so it logged "Node ... reconnected — COMMS_DOWN alert cleared" and
+      -- called alert_service:_clear_alert() for nodes that were never down
+      -- in the first place -- hundreds of spurious log lines/alert calls
+      -- per minute across the whole fleet, drowning out real reconnects and
+      -- adding needless remote-log/alert-service load.
+      local was_down = node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN]
       node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN] = nil
       node.down_since = nil; node.down_pending_since = nil; node.offline = false; node.stale = false; node.recovering = false; node.managed = true
-      -- Alert clearen wenn Node wieder online kommt
-      if runtime.refs and runtime.refs.alert_service then
-        local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))
-        pcall(function() runtime.refs.alert_service:_clear_alert(down_key, os.epoch("utc")) end)
+      if was_down then
+        -- Alert clearen wenn Node wieder online kommt
+        if runtime.refs and runtime.refs.alert_service then
+          local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))
+          pcall(function() runtime.refs.alert_service:_clear_alert(down_key, os.epoch("utc")) end)
+        end
         runtime.log(("Node %s reconnected — COMMS_DOWN alert cleared"):format(tostring(node.id)), "INFO")
       end
     end
