@@ -121,6 +121,34 @@ do
 end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
+-- Einmalige Migration: config.buffers stammt von vor dem SORTER-KISTE-Umbau
+-- (2026-09-17) noch von der alten PUFFER-Liste -- wer die damalige UI
+-- genutzt hat, hat seine Sorter-Kiste (oder ZUSATZ-KISTE) dort persistiert.
+-- discover() (weiter unten) schliesst beide Namen zwar von der Buffer-
+-- Registrierung aus, aber der veraltete Eintrag bleibt sonst dauerhaft in
+-- der Config-Datei stehen und wuerde bei jedem Boot erneut ausgeschlossen
+-- werden muessen. Einmal bereinigen und wegschreiben ist robuster als sich
+-- bei jedem discover()-Zyklus auf den Ausschluss zu verlassen.
+do
+  local fd = config.feed or {}
+  local chest_target = type(fd.chest) == "table" and fd.chest.target or nil
+  local cleaned, removed = {}, false
+  for _, name in ipairs(config.buffers or {}) do
+    if name == fd.sorter_chest or name == chest_target then
+      removed = true
+    else
+      cleaned[#cleaned + 1] = name
+    end
+  end
+  if removed then
+    config.buffers = cleaned
+    local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
+    if not ok_write then
+      add_config_warning("Bereinigung von config.buffers (Sorter-/Zusatz-Kiste entfernt) konnte nicht gespeichert werden: " .. tostring(werr))
+    end
+  end
+end
+
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
   config_meta = config_meta, config_warnings = config_warnings
