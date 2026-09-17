@@ -30,27 +30,7 @@ function M.new()
     quiesce_attempted = false,
     remote_update_pending = false,
     remote_update_meta = nil,
-    -- Consecutive quiesce timeouts for the CURRENT pending update. Survives
-    -- M.reset() (which only cancels the live request back to IDLE) so the
-    -- caller (installer/auto_update.lua) can escalate after enough failed
-    -- attempts in a row, instead of retrying the same full-confirmation
-    -- wait forever whenever some role never reaches a confirmed safe state
-    -- (e.g. a permanently offline valve).
-    quiesce_failures = 0,
   }
-end
-
--- Called by the updater on every quiesce timeout; returns the new count.
-function M.record_quiesce_timeout(handshake)
-  if type(handshake) ~= "table" then return 0 end
-  handshake.quiesce_failures = (tonumber(handshake.quiesce_failures) or 0) + 1
-  return handshake.quiesce_failures
-end
-
--- Called by the updater once a quiesce actually succeeds (or is force-
--- skipped), so the NEXT pending update starts its own failure count fresh.
-function M.reset_quiesce_failures(handshake)
-  if type(handshake) == "table" then handshake.quiesce_failures = 0 end
 end
 
 function M.request_quiesce(handshake)

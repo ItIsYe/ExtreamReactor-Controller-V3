@@ -130,28 +130,4 @@ do
   assert_true(h.requested_at == nil, 'cancelled request must clear requested_at')
 end
 
--- 8. quiesce_failures: the counter installer/auto_update.lua's force-after-
---    N-timeouts escalation relies on. Must start at 0, increment on every
---    record_quiesce_timeout(), survive a reset() (a cancelled-and-retried
---    request is still part of the SAME escalation sequence, not a fresh
---    one), and clear back to 0 once reset_quiesce_failures() is called
---    (a real success, or the forced skip itself).
-do
-  local h = update_handshake.new()
-  assert_eq(h.quiesce_failures, 0, 'fresh handshake must start with zero quiesce failures')
-
-  assert_eq(update_handshake.record_quiesce_timeout(h), 1, 'first timeout must bump the counter to 1')
-  assert_eq(update_handshake.record_quiesce_timeout(h), 2, 'second timeout must bump the counter to 2')
-  assert_eq(h.quiesce_failures, 2, 'counter must reflect both recorded timeouts')
-
-  update_handshake.request_quiesce(h)
-  update_handshake.reset(h)
-  assert_eq(h.quiesce_failures, 2, 'reset() must NOT clear the failure counter -- same escalation sequence continues')
-
-  update_handshake.reset_quiesce_failures(h)
-  assert_eq(h.quiesce_failures, 0, 'reset_quiesce_failures() must clear the counter back to 0')
-
-  assert_eq(update_handshake.record_quiesce_timeout(nil), 0, 'record_quiesce_timeout(nil) must not error, returns 0')
-end
-
 print('core_update_handshake_test.lua: ok')
