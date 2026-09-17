@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 691,
-  manifest_id = "manifest-v691",
+  manifest_version = 692,
+  manifest_id = "manifest-v692",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "84fa97dd", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "7ce47115", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -70,7 +70,7 @@ return {
     { path = "master/loop.lua", size_bytes = 4318, hash = "2b30d64b", required_for={"MASTER"} },
     { path = "core/alert_rules.lua", size_bytes = 19959, hash = "a56229de", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 6441, hash = "1df55b57", required_for={"MASTER"} },
-    { path = "master/housekeeping.lua", size_bytes = 4106, hash = "c43799c5", required_for={"MASTER"} },
+    { path = "master/housekeeping.lua", size_bytes = 6213, hash = "5efeea43", required_for={"MASTER"} },
     { path = "master/fuel_relay.lua", size_bytes = 3413, hash = "0b9f8c37", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 9800, hash = "83305912", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },

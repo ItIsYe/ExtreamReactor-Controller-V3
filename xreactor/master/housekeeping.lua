@@ -78,25 +78,78 @@ local function normalize_rt_capacity_truth(runtime)
   end
 end
 
+-- Diagnose fuer "Service tick slow: HOUSEKEEPING took Xms"-Meldungen
+-- (siehe service_manager.lua): dessen Warnung nennt nur den Gesamtwert
+-- fuer den ganzen HOUSEKEEPING-Tick, nicht welcher der sechs Teilschritte
+-- unten dafuer verantwortlich war. Beobachtet 2026-09-17 beim gemeldeten
+-- "sieht aus wie Kommunikationsprobleme, alle offline": HOUSEKEEPING nahm
+-- einmalig 24921ms, "Service manager tick slow" davor sogar bis zu 25650ms
+-- -- waehrend eines so langen, ununterbrochenen synchronen Lua-Aufrufs kann
+-- der MASTER (CC:Tweaked ist kooperativ-single-threaded) keine
+-- modem_message-Events verarbeiten und sendet in dieser Zeit auch selbst
+-- keine Heartbeats/Status-Broadcasts mehr -- jeder Knoten (RT, alle VALVE-
+-- Knoten) erkennt das dann ganz korrekt als "Peer down: node-53 (MASTER)"
+-- fuer die Dauer des Stalls, obwohl das Funknetz selbst nichts abbekommen
+-- hat. Kein Netzwerkfehler, sondern ein zu langer blockierender Tick.
+-- Diese Sub-Timer pinpointen beim naechsten Auftreten, welcher der
+-- Teilschritte (voraussichtlich sequencer:tick oder rt_ops.check_timeouts,
+-- da beide ueber alle Knoten iterieren) den Block tatsaechlich verursacht,
+-- statt weiter zu raten.
+local SUBSTEP_WARN_MS = 500
+
+local function timed(runtime, name, fn)
+  local started = os.epoch and os.epoch("utc") or (os.clock() * 1000)
+  fn()
+  local duration = (os.epoch and os.epoch("utc") or (os.clock() * 1000)) - started
+  if duration > SUBSTEP_WARN_MS then
+    runtime.log(("HOUSEKEEPING substep slow: %s took %dms (threshold=%dms)"):format(
+      name, duration, SUBSTEP_WARN_MS), "WARN")
+  end
+end
+
 function M.tick(runtime)
-  M.handle_command_timeouts({
-    constants = runtime.libs.constants,
-    utils = runtime.libs.utils,
-    comms = runtime.refs.comms,
-    nodes = runtime.state.nodes,
-    log = runtime.log,
-    config_edits_state = runtime.state.config_edits,
-    on_config_edit_change = runtime.persist_config_edits
-  })
-  normalize_rt_capacity_truth(runtime)
-  if runtime.refs.sequencer then runtime.refs.sequencer:tick(runtime.state.nodes) end
-  if runtime.flush_rt_sync_queue then runtime.flush_rt_sync_queue() end
+  timed(runtime, "handle_command_timeouts", function()
+    M.handle_command_timeouts({
+      constants = runtime.libs.constants,
+      utils = runtime.libs.utils,
+      comms = runtime.refs.comms,
+      nodes = runtime.state.nodes,
+      log = runtime.log,
+      config_edits_state = runtime.state.config_edits,
+      on_config_edit_change = runtime.persist_config_edits
+    })
+  end)
+  timed(runtime, "normalize_rt_capacity_truth", function()
+    normalize_rt_capacity_truth(runtime)
+  end)
+  if runtime.refs.sequencer then
+    timed(runtime, "sequencer:tick", function()
+      runtime.refs.sequencer:tick(runtime.state.nodes)
+    end)
+  end
+  if runtime.flush_rt_sync_queue then
+    timed(runtime, "flush_rt_sync_queue", function()
+      runtime.flush_rt_sync_queue()
+    end)
+  end
   local rt_ops = runtime.libs.rt_ops
-  if rt_ops then rt_ops.check_timeouts(runtime) end
+  if rt_ops then
+    timed(runtime, "rt_ops.check_timeouts", function()
+      rt_ops.check_timeouts(runtime)
+    end)
+  end
   local profile_ops = runtime.libs.profile_ops
-  if profile_ops then profile_ops.sample_trends(runtime) end
+  if profile_ops then
+    timed(runtime, "profile_ops.sample_trends", function()
+      profile_ops.sample_trends(runtime)
+    end)
+  end
   local fuel_relay = runtime.libs.fuel_relay
-  if fuel_relay then fuel_relay.tick(runtime) end
+  if fuel_relay then
+    timed(runtime, "fuel_relay.tick", function()
+      fuel_relay.tick(runtime)
+    end)
+  end
 end
 
 return M
