@@ -5,6 +5,15 @@ local M = {}
 local TARGET_RPM = 900
 local TOLERANCE_RPM = 15
 local MIN_FRACTION = 0.8
+-- Sicherheitsabschlag auf die gelernte Turbinen-Maximalleistung: der Master
+-- darf einen 100%-Sollwert nie 1:1 auf den tatsaechlich beobachteten Peak
+-- abbilden (Messtoleranzen, minimale RPM-Schwankungen um TARGET_RPM,
+-- moegliche leichte Degradation) -- max_output wird deshalb IMMER als 95%
+-- des tatsaechlich gemessenen Werts gespeichert. Der Vergleich gegen den
+-- bisherigen max_output (fuer "hat sich die Kapazitaet verbessert?") laeuft
+-- konsistent auf der bereits abgeschlagenen Groesse, damit ein Cache-Reload
+-- (der nur den abgeschlagenen Wert persistiert) keine Drift verursacht.
+local SAFETY_MARGIN = 0.05
 
 local function numeric(value)
   if type(value) == "number" then return value end
@@ -96,19 +105,22 @@ function M.update(ctx, turbines)
   learning.at_target = at_target
   learning.total_turbines = total
   if measured then
+    local safe_measured = measured * (1 - SAFETY_MARGIN)
     if learning.ready ~= true then
-      learning.max_output = measured
+      learning.max_output = safe_measured
       learning.ready = true
       learning.reason = "MEASURED"
       learning.dirty = true
       pcall(log, "INFO", string.format(
-        "RT capacity measured output=%.2f at_target=%d/%d", measured, at_target, total))
-    elseif measured > (tonumber(learning.max_output) or 0) then
-      learning.max_output = measured
+        "RT capacity measured output=%.2f safety_margin=%.0f%% max_output=%.2f at_target=%d/%d",
+        measured, SAFETY_MARGIN * 100, safe_measured, at_target, total))
+    elseif safe_measured > (tonumber(learning.max_output) or 0) then
+      learning.max_output = safe_measured
       learning.reason = "UPDATED"
       learning.dirty = true
       pcall(log, "INFO", string.format(
-        "RT capacity updated output=%.2f at_target=%d/%d", measured, at_target, total))
+        "RT capacity updated output=%.2f safety_margin=%.0f%% max_output=%.2f at_target=%d/%d",
+        measured, SAFETY_MARGIN * 100, safe_measured, at_target, total))
     else
       learning.reason = "STABLE"
     end

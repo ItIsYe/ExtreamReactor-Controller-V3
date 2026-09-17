@@ -83,11 +83,13 @@ local previous = {
   reason = 'STABLE', topology_signature = 't1', topology_generation = 1,
 }
 local ctx = { capacity_learning = previous, log = function() end }
+-- capacity_learning.lua applies a 5% safety margin: raw energy=120 is
+-- stored as max_output=114 (120 * 0.95).
 local updated = learning.update(ctx, {
   { id = 't1', rpm = 900, energy = 120, coil_engaged = true }
 })
 if updated == previous then error('capacity update must be copy-on-write') end
-if previous.max_output ~= 100 or updated.max_output ~= 120 then
+if previous.max_output ~= 100 or updated.max_output ~= 114 then
   error('previous/new capacity values must remain distinguishable for persistence')
 end
 
@@ -99,11 +101,12 @@ previous = {
   reason = 'STABLE', topology_signature = 'old-turbine', topology_generation = 1,
 }
 ctx = { capacity_learning = previous, log = function() end }
+-- raw energy=80 is stored as max_output=76 (80 * 0.95).
 updated = learning.update(ctx, {
   { id = 'new-turbine', rpm = 900, energy = 80, coil_engaged = true }
 })
 if previous.max_output ~= 100 then error('topology change must not mutate the committed previous snapshot') end
-if updated.ready ~= true or updated.max_output ~= 80 then error('new lower topology measurement should become ready') end
+if updated.ready ~= true or updated.max_output ~= 76 then error('new lower topology measurement should become ready') end
 if updated.topology_signature ~= 'new-turbine' then error('new topology signature must be recorded') end
 if updated.dirty ~= true or updated.topology_generation ~= 2 then
   error('new lower topology measurement must be marked for persistence')

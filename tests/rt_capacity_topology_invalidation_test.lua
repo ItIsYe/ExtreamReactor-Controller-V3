@@ -5,19 +5,21 @@ local function turbine(id, energy)
   return { id = id, name = id, rpm = 900, energy = energy, coil_engaged = true }
 end
 
+-- max_output always carries capacity_learning.lua's 5% safety margin: a
+-- raw measured output of 200 is stored as 190 (200 * 0.95), 100 as 95.
 local first = learning.update(ctx, { turbine('T1', 100), turbine('T2', 100) })
-assert(first.ready == true and first.max_output == 200, 'initial topology should learn 200 output')
+assert(first.ready == true and first.max_output == 190, 'initial topology should learn 200 raw output, stored as 190 with the 5% safety margin')
 local generation = first.topology_generation
 
--- One turbine disappears permanently. The old 200 value must not survive; the
--- new one-turbine topology is measured independently as 100.
+-- One turbine disappears permanently. The old 190 value must not survive; the
+-- new one-turbine topology is measured independently as 95 (100 raw * 0.95).
 local second = learning.update(ctx, { turbine('T1', 100) })
 assert(second.topology_generation == generation + 1, 'topology generation must increment after removal')
 assert(second.topology_signature == 'T1', 'new topology signature must reflect the remaining turbine')
-assert(second.ready == true and second.max_output == 100, 'removed turbine must invalidate the stale historical peak')
+assert(second.ready == true and second.max_output == 95, 'removed turbine must invalidate the stale historical peak')
 
 -- A non-topology performance dip must keep the existing learned maximum.
 local third = learning.update(ctx, { turbine('T1', 80) })
 assert(third.topology_generation == second.topology_generation, 'same topology must not create a new generation')
-assert(third.max_output == 100, 'transient lower output on same topology must not reduce learned maximum')
+assert(third.max_output == 95, 'transient lower output on same topology must not reduce learned maximum')
 print('rt_capacity_topology_invalidation_test.lua: ok')
