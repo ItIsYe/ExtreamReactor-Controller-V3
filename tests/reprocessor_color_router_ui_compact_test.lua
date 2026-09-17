@@ -3,12 +3,10 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- Regression coverage for nodes/reprocessor/color_router_ui.lua's compact
 -- layout: REPROCESSOR usually has NO external monitor, so main.lua falls
 -- back to the node's own computer terminal (a fixed 51x19 screen, see
--- nodes/valve/local_ui.lua's EXPECTED_W/EXPECTED_H). Before this test the
--- Router page required a 62x16 monitor and would show nothing but a "too
--- small" warning on a plain 51x19 computer -- this proves the page is now
--- fully usable at that size: every control renders inside bounds, no two
--- buttons overlap, and the full sorter/puffer/kiste/target/save flow works
--- via touch exactly like on a wide monitor.
+-- nodes/valve/local_ui.lua's EXPECTED_W/EXPECTED_H). This proves the page
+-- is fully usable at that size: every control renders inside bounds, no
+-- two buttons overlap, and the full feeding/sorter/sorter-kiste/target/
+-- save flow works via touch exactly like on a wide monitor.
 
 package.loaded['core.mockup_ui'] = nil
 package.loaded['adapters.logistical_sorter'] = nil
@@ -101,35 +99,28 @@ assert_true(type(footer) == 'table' and footer.left and footer.right,
 assert_eq(#ui.targets, 2, 'both targets must still render on the compact page')
 assert_no_overlaps(ui, 51)
 
+local feed_toggle_btn = find_button(ui, 'feed_toggle')
 local sorter_btn = find_button(ui, 'sorter_open')
 local sorter_chest_btn = find_button(ui, 'sorter_chest_open')
-assert_true(sorter_btn ~= nil and sorter_chest_btn ~= nil, 'SORTER and SORTER-KISTE must both have buttons on the compact page')
+assert_true(feed_toggle_btn ~= nil and sorter_btn ~= nil and sorter_chest_btn ~= nil,
+  'FEEDING, SORTER and SORTER-KISTE must all have buttons on the compact page')
 assert_true(sorter_btn.y ~= sorter_chest_btn.y, 'on a 51-wide screen SORTER and SORTER-KISTE must stack on separate rows, not share one')
+assert_true(feed_toggle_btn.y ~= sorter_btn.y, 'FEEDING must be on its own row too')
 
--- Enable the chest: its own row must appear too, still within bounds.
-local chest_toggle_btn = find_button(ui, 'chest_toggle')
-assert_true(chest_toggle_btn ~= nil)
-assert_true(ui:handle_touch(chest_toggle_btn.x1, chest_toggle_btn.y) == true)
-assert_eq(ui.chest_enabled, true)
+-- Pick the Sorter-Kiste from the live peripheral list -- confirm the
+-- picker itself renders in bounds at 51 wide.
+assert_true(ui:handle_touch(sorter_chest_btn.x1, sorter_chest_btn.y) == true)
+assert_eq(ui.mode, 'pick_sorter_chest')
 
-ui:render(mon, nil, nil, true)
-assert_no_overlaps(ui, 51)
-local chest_target_btn = find_button(ui, 'chest_target_open')
-assert_true(chest_target_btn ~= nil, 'expected a chest target button once the chest is enabled on the compact page')
-assert_true(ui:handle_touch(chest_target_btn.x1, chest_target_btn.y) == true)
-assert_eq(ui.mode, 'pick_chest')
-
--- The picker itself already worked at any width (only the list page needed
--- the compact rework) -- confirm it still renders in bounds at 51 wide.
 ui:render(mon, nil, nil, true)
 assert_no_overlaps(ui, 51)
 local pick_btn = nil
 for _, btn in ipairs(ui.buttons) do
-  if btn.action == 'pick_chest_choose' and btn.name == 'ender_chest_1' then pick_btn = btn end
+  if btn.action == 'pick_sorter_chest_choose' and btn.name == 'ender_chest_1' then pick_btn = btn end
 end
-assert_true(pick_btn ~= nil, 'expected ender_chest_1 as a pickable chest target at 51 wide')
+assert_true(pick_btn ~= nil, 'expected ender_chest_1 as a pickable Sorter-Kiste at 51 wide')
 assert_true(ui:handle_touch(pick_btn.x1, pick_btn.y) == true)
-assert_eq(ui.chest_target, 'ender_chest_1')
+assert_eq(ui.sorter_chest_target, 'ender_chest_1')
 
 -- Cycle a target's color, then save -- the full flow must work end to end
 -- on the compact page exactly like on a wide monitor.
@@ -146,7 +137,7 @@ local save_btn = find_button(ui, 'save')
 assert_true(save_btn ~= nil)
 assert_true(ui:handle_touch(save_btn.x1, save_btn.y) == true)
 assert_true(written ~= nil, 'save must work on the compact page')
-assert_eq(written.data.chest.target, 'ender_chest_1')
+assert_eq(written.data.sorter_chest, 'ender_chest_1')
 assert_eq(#written.data.targets, 2)
 
 print('reprocessor_color_router_ui_compact_test.lua: ok')

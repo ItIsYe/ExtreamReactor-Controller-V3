@@ -1,20 +1,18 @@
 -- nodes/reprocessor/color_router_ui.lua
 --
 -- Replaces the shared FUEL valve-path router UI (nodes/fuel/router_ui.lua)
--- for REPROCESSOR: there is no valve tree anymore (see feed_router.lua's
--- module comment) -- routing to each Reprocessor is just a Mekanism
--- Logistical Sorter color. This page lets the operator do EVERYTHING
--- feed_router.lua needs entirely on-screen, with no config-file editing
--- required: turn feeding on/off, pick the Sorter and the SORTER-KISTE
--- (the one chest the ME-Bridge exports into, where the Sorter physically
--- sits) from the actually detected peripherals (same "pick from a live
--- list" pattern FUEL's router uses for its chest picker), add/remove
--- Reprocessor targets with a color each, and optionally enable the
--- separate ZUSATZ-KISTE for raw, unprocessed Cyanite.
+-- for REPROCESSOR: there is no valve tree -- routing to each Reprocessor
+-- is just a Mekanism Logistical Sorter color (see feed_router.lua's
+-- module comment for the full physical setup). This page lets the
+-- operator do EVERYTHING feed_router.lua needs entirely on-screen, with
+-- no config-file editing required: turn feeding on/off, pick the Sorter
+-- and the SORTER-KISTE (the one chest the ME-Bridge exports into, where
+-- the Sorter physically sits) from the actually detected peripherals, and
+-- add/remove Reprocessor targets with a color each.
 --
 -- Presentation + local edit-buffer only: touches mutate a working copy
--- (enabled, sorter name, sorter_chest, targets, chest). SPEICHERN persists
--- it (via write_config, same as any other persisted config) and applies it
+-- (enabled, sorter name, sorter_chest, targets). SPEICHERN persists it
+-- (via write_config, same as any other persisted config) and applies it
 -- to config.feed immediately; VERWERFEN reloads the working copy from the
 -- last-saved config.feed, discarding unsaved edits.
 
@@ -31,17 +29,16 @@ local COLORS = logistical_sorter.COLORS
 -- vollstaendig bedienbar sein, nicht nur auf einem groesseren Monitor.
 local MIN_W = 51
 local MIN_H = 19
--- Unterhalb dieser Breite passen SORTER/ZIEL nicht nebeneinander (lange
--- Peripherie-Namen wie "mekanism:logistical_transporter_0" brauchen die
--- volle Zeile) -- dann wird gestapelt statt nebeneinander gelegt.
+-- Unterhalb dieser Breite werden die Zielzeilen enger gepackt, damit
+-- Label/Pfeile/Loeschen-Button trotzdem ohne Ueberlappung nebeneinander passen.
 local COMPACT_W = 70
 local EXCLUDED_TYPES = { monitor = true, modem = true }
 
 -- mux.fit() only ever TRUNCATES text that's too long -- it never pads text
 -- that's shorter than the target width. The color name cell is redrawn on
 -- every color_prev/color_next tap without a full-screen clear (that tap
--- doesn't change #targets/mode/chest_enabled, the only things render()'s
--- layout-signature check clears for), so cycling from a longer name (e.g.
+-- doesn't change #targets/mode, the only things render()'s layout-
+-- signature check clears for), so cycling from a longer name (e.g.
 -- "DARK_GRAY") to a shorter one (e.g. "INDIGO") left the old name's tail
 -- on screen: "INDIGO" + leftover "RAY" = "INDIGORAY". Padding to the full
 -- fixed column width every time fixes this at the source, matching nodes/
@@ -60,7 +57,7 @@ local function color_index(color)
   return 1
 end
 
--- All peripherals that could plausibly be an export target -- same
+-- All peripherals that could plausibly be the SORTER-KISTE -- same
 -- exclusion list nodes/fuel/router_scada.lua's chest picker uses.
 local function peripheral_names()
   local out = {}
@@ -94,7 +91,7 @@ function M.new(opts)
     write_config = write_config,
     config_path = opts.config_path or "/xreactor_config/reproc_targets.lua",
     log = opts.log or function() end,
-    -- "list" | "pick_sorter" | "pick_sorter_chest" | "pick_chest"
+    -- "list" | "pick_sorter" | "pick_sorter_chest"
     mode = "list",
     scroll = 0,
     picker_scroll = 0,
@@ -104,17 +101,9 @@ function M.new(opts)
     feed_enabled = false,
     -- sorter_chest_target: die SORTER-KISTE -- die eine Kiste, an der der
     -- Sorter physisch sitzt und in die die ME-Bridge exportiert (config.
-    -- feed.sorter_chest). Eine einzelne Peripherie, kein Liste -- genau wie
-    -- chest_target unten.
+    -- feed.sorter_chest). Eine einzelne Peripherie, keine Liste.
     sorter_chest_target = nil,
-    -- chest_enabled/chest_target: die optionale ZUSATZ-KISTE fuer rohes
-    -- Cyanit (config.feed.chest) -- eine ANDERE, unabhaengige Kiste.
-    chest_enabled = false,
-    chest_target = nil,
     buttons = {},
-    -- Welcher Modus soll nach ABBRECHEN/WAEHLEN im Picker wieder aktiv
-    -- werden -- alle Picker dieser Seite werden von "list" aus geoeffnet.
-    _picker_return = "list",
   }, { __index = M })
   self:_load_working_copy()
   return self
@@ -131,9 +120,6 @@ function M:_load_working_copy()
   self.sorter_name = fd.sorter
   self.feed_enabled = fd.enabled == true
   self.sorter_chest_target = fd.sorter_chest
-  local chest = fd.chest or {}
-  self.chest_enabled = chest.enabled == true
-  self.chest_target = chest.target
   self.dirty = false
 end
 
@@ -145,13 +131,11 @@ function M:render(mon, _ui, _colors, should_clear)
   -- operator edits the target list. But the row layout below the header
   -- depends on #self.targets (the empty-state warning_box vs. the per-
   -- target row loop occupy the same screen rows with different content
-  -- widths/heights) and on chest_enabled (shifts list_top). Without a full
-  -- clear on exactly those transitions, e.g. adding the first target while
-  -- "Keine Reprocessoren konfiguriert." is still on screen leaves stale
-  -- warning-box text behind mux.text()'s unpadded row/button writes never
-  -- touch (mux.text does not pad to a fixed width, unlike mux.button).
-  local layout_signature = tostring(#self.targets) .. "|"
-    .. tostring(self.mode) .. "|" .. tostring(self.chest_enabled)
+  -- widths/heights). Without a full clear on exactly that transition, e.g.
+  -- adding the first target while "Keine Reprocessoren konfiguriert." is
+  -- still on screen leaves stale warning-box text behind (mux.text does
+  -- not pad to a fixed width, unlike mux.button).
+  local layout_signature = tostring(#self.targets) .. "|" .. tostring(self.mode)
   if should_clear ~= false or self._last_layout_signature ~= layout_signature then
     mux.clear(mon)
   end
@@ -163,9 +147,6 @@ function M:render(mon, _ui, _colors, should_clear)
   elseif self.mode == "pick_sorter_chest" then
     return self:_render_picker(mon, w, h, "SORTER-KISTE WAEHLEN",
       peripheral_names(), "Keine Peripherals gefunden.", "pick_sorter_chest_choose")
-  elseif self.mode == "pick_chest" then
-    return self:_render_picker(mon, w, h, "ZUSATZ-KISTE WAEHLEN",
-      peripheral_names(), "Keine Peripherals gefunden.", "pick_chest_choose")
   end
 
   mux.header(mon, {
@@ -180,29 +161,23 @@ function M:render(mon, _ui, _colors, should_clear)
     return mux.footer_nav(mon, h, w, { center = "REPROC FARBEN" })
   end
 
-  -- SORTER/SORTER-KISTE: beide per Picker aus den tatsaechlich erkannten
-  -- Peripherals waehlbar -- keine Config-Datei-Bearbeitung noetig. Die
-  -- SORTER-KISTE ist die eine Kiste, in die die ME-Bridge exportiert; der
-  -- Weitertransport zum Reprocessor uebernimmt Mekanism selbst (Sorter+
-  -- Transporter), sobald die Sorter-Farbe gesetzt ist -- siehe feed_router.
-  -- lua. Beide Zeilen passen bei 51 Zeichen Breite (PC-Terminal) problemlos
-  -- alleine in ihre eigene Zeile, kein Nebeneinander-Layout mehr noetig.
-  local compact = w < COMPACT_W
-  local kiste_y
-
   -- Einziger An/Aus-Schalter fuer das gesamte Feeding-System (config.feed.
-  -- enabled). Vorher gab es dafuer KEINEN UI-Weg -- musste per Datei-Edit
-  -- gesetzt werden, obwohl Sorter/Sorter-Kiste/Ziele komplett ueber dieses
-  -- UI laufen. Ohne dieses Flag laeuft feed_router.lua:tick() nie ueber den
-  -- fruehen Return hinaus (siehe dortiger Kommentar) -- Sorter/Sorter-Kiste
-  -- koennen also korrekt konfiguriert sein und trotzdem nie etwas
-  -- befuellen, wenn dieser Schalter aus bleibt.
+  -- enabled). Ohne dieses Flag laeuft feed_router.lua:tick() nie ueber den
+  -- fruehen Return hinaus -- Sorter/Sorter-Kiste koennen also korrekt
+  -- konfiguriert sein und trotzdem nie etwas befuellen, wenn dieser
+  -- Schalter aus bleibt.
   local feed_toggle_btn = mux.button(mon, 2, 3, w - 3,
     "FEEDING: " .. (self.feed_enabled and "AN" or "AUS"),
     self.feed_enabled and "OK" or "OFFLINE", 1)
   feed_toggle_btn.action = "feed_toggle"
   self.buttons[#self.buttons + 1] = feed_toggle_btn
 
+  -- SORTER/SORTER-KISTE: beide per Picker aus den tatsaechlich erkannten
+  -- Peripherals waehlbar -- keine Config-Datei-Bearbeitung noetig. Die
+  -- SORTER-KISTE ist die eine Kiste, in die die ME-Bridge exportiert; der
+  -- Weitertransport zum jeweiligen Reprocessor uebernimmt Mekanism selbst
+  -- (Sorter+Transporter), sobald die Sorter-Farbe gesetzt ist -- siehe
+  -- feed_router.lua.
   local sorter_btn = mux.button(mon, 2, 4, w - 3,
     "SORTER: " .. tostring(self.sorter_name or "NICHT GESETZT"),
     self.sorter_name and "OK" or "WARNING", 1)
@@ -215,45 +190,8 @@ function M:render(mon, _ui, _colors, should_clear)
   sorter_chest_btn.action = "sorter_chest_open"
   self.buttons[#self.buttons + 1] = sorter_chest_btn
 
-  if compact then
-    kiste_y = 6
-    mux.text(mon, 2, kiste_y, "ZUSATZ-KISTE:", colorset.get("text"), colorset.get("background"))
-    local chest_toggle_btn = mux.button(mon, 16, kiste_y, w - 17,
-      self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
-    chest_toggle_btn.action = "chest_toggle"
-    self.buttons[#self.buttons + 1] = chest_toggle_btn
-  else
-    kiste_y = 6
-    mux.text(mon, 2, kiste_y, "ZUSATZ-KISTE (Cyanit):", colorset.get("text"), colorset.get("background"))
-    local chest_toggle_btn = mux.button(mon, 25, kiste_y, 10,
-      self.chest_enabled and "AN" or "AUS", self.chest_enabled and "OK" or "OFFLINE", 1)
-    chest_toggle_btn.action = "chest_toggle"
-    self.buttons[#self.buttons + 1] = chest_toggle_btn
-
-    if self.chest_enabled then
-      local chest_target_btn = mux.button(mon, 37, kiste_y, w - 39,
-        "ZIEL: " .. tostring(self.chest_target or "NICHT GESETZT"),
-        self.chest_target and "OK" or "WARNING", 1)
-      chest_target_btn.action = "chest_target_open"
-      self.buttons[#self.buttons + 1] = chest_target_btn
-    end
-  end
-
-  -- Die optionale ZUSATZ-KISTE fuer rohes Cyanit -- eigener An/Aus-
-  -- Schalter + eigene Ziel-Peripherie (per Wired Modem direkt am
-  -- ME-Netzwerk), laeuft unabhaengig von der Reprocessor-Rotation unten
-  -- (feed_router.lua's feed_chest()) und OHNE Sorter/Farbe. Im compact-
-  -- Layout bekommt der ZIEL-Button eine eigene Zeile, da hier keine
-  -- Zeile mehr fuer AN/AUS + ZIEL nebeneinander reicht.
-  local list_top = kiste_y + 3
-  if compact and self.chest_enabled then
-    local chest_target_btn = mux.button(mon, 2, kiste_y + 1, w - 3,
-      "ZUSATZ-KISTE ZIEL: " .. tostring(self.chest_target or "NICHT GESETZT"),
-      self.chest_target and "OK" or "WARNING", 1)
-    chest_target_btn.action = "chest_target_open"
-    self.buttons[#self.buttons + 1] = chest_target_btn
-    list_top = kiste_y + 4
-  end
+  local compact = w < COMPACT_W
+  local list_top = 8
 
   local footer_row = h
   local action_row = footer_row - 2
@@ -392,46 +330,30 @@ function M:handle_touch(x, y)
 end
 
 function M:_apply_action(btn)
-  if btn.action == "sorter_open" then
-    self.mode = "pick_sorter"
-    self.picker_scroll = 0
-    self._picker_return = "list"
-    return true
-  elseif btn.action == "pick_cancel" then
-    self.mode = self._picker_return or "list"
-    return true
-  elseif btn.action == "pick_sorter_choose" then
-    self.sorter_name = btn.name
-    self.dirty = true
-    self.mode = self._picker_return or "list"
-    return true
-  elseif btn.action == "feed_toggle" then
+  if btn.action == "feed_toggle" then
     self.feed_enabled = not self.feed_enabled
     self.dirty = true
     return true
-  elseif btn.action == "chest_toggle" then
-    self.chest_enabled = not self.chest_enabled
-    self.dirty = true
-    return true
-  elseif btn.action == "chest_target_open" then
-    self.mode = "pick_chest"
+  elseif btn.action == "sorter_open" then
+    self.mode = "pick_sorter"
     self.picker_scroll = 0
-    self._picker_return = "list"
-    return true
-  elseif btn.action == "pick_chest_choose" then
-    self.chest_target = btn.name
-    self.dirty = true
-    self.mode = self._picker_return or "list"
     return true
   elseif btn.action == "sorter_chest_open" then
     self.mode = "pick_sorter_chest"
     self.picker_scroll = 0
-    self._picker_return = "list"
+    return true
+  elseif btn.action == "pick_cancel" then
+    self.mode = "list"
+    return true
+  elseif btn.action == "pick_sorter_choose" then
+    self.sorter_name = btn.name
+    self.dirty = true
+    self.mode = "list"
     return true
   elseif btn.action == "pick_sorter_chest_choose" then
     self.sorter_chest_target = btn.name
     self.dirty = true
-    self.mode = self._picker_return or "list"
+    self.mode = "list"
     return true
   elseif btn.action == "color_prev" or btn.action == "color_next" then
     local t = self.targets[btn.index]
@@ -471,10 +393,9 @@ function M:_save()
   for i, t in ipairs(self.targets) do
     targets_out[i] = { label = t.label, color = t.color }
   end
-  local chest_out = { enabled = self.chest_enabled, target = self.chest_target }
   local out = {
     sorter = self.sorter_name, sorter_chest = self.sorter_chest_target,
-    enabled = self.feed_enabled, targets = targets_out, chest = chest_out,
+    enabled = self.feed_enabled, targets = targets_out,
   }
   local ok, err = self.write_config(self.config_path, out)
   if not ok then
@@ -484,9 +405,8 @@ function M:_save()
   self.config.feed = self.config.feed or {}
   self.config.feed.enabled = self.feed_enabled
   self.config.feed.targets = targets_out
-  self.config.feed.chest = chest_out
   self.config.feed.sorter_chest = self.sorter_chest_target
-  if self.sorter_name then self.config.feed.sorter = self.sorter_name end
+  self.config.feed.sorter = self.sorter_name
 
   self.dirty = false
   self.log("INFO", "color_router_ui: " .. tostring(#targets_out) .. " Reprocessor-Ziel(e) gespeichert")

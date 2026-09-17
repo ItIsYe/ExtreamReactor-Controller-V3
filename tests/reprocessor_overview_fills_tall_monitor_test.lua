@@ -1,11 +1,11 @@
 -- Regression coverage: render_overview() used to place every block on a
--- fixed row number (banner y=5, cards y=7, section y=22, last data_row
--- y=24) regardless of the monitor's actual height. On any monitor taller
--- than the ~19-row reference layout, everything below row ~26 stayed
--- black -- the UI never used the extra space. Proves the VERARBEITUNGS-
--- LINIEN data_row (the deepest fixed block) now scales its row position
--- with available height, the same way nodes/rt/mockup_pages.lua's
--- render_overview() already did before this fix.
+-- fixed row number regardless of the monitor's actual height. On any
+-- monitor taller than the ~19-row reference layout, everything below row
+-- ~26 stayed black -- the UI never used the extra space. Proves the
+-- LETZTER FEHLER data_row (the deepest fixed block, only rendered when
+-- feed.last_error is set) now scales its row position with available
+-- height, the same way nodes/rt/mockup_pages.lua's render_overview()
+-- already did before this fix.
 
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
@@ -24,10 +24,9 @@ mux.kpi_strip = function() end
 mux.section = function() end
 mux.outlined_progress = function() end
 mux.data_row = function(mon, x, y, w, opts)
-  -- Only the VERARBEITUNGSLINIEN row carries a "BUFFER"-less recycle icon
-  -- with a label taken from the first buffer id -- but simplest and robust
-  -- is to just track the LAST data_row call's y each render, since that is
-  -- always the deepest fixed block in overview().
+  -- Simplest and robust is to just track the LAST data_row call's y each
+  -- render, since that is always the deepest fixed block in overview()
+  -- (the LETZTER FEHLER row, only rendered while feed.last_error is set).
   last_data_row_y = y
 end
 mux.footer_nav = function() return {} end
@@ -41,8 +40,10 @@ local pages = ui_pages.new({ ui = ui_stub, support_ui_pages = support })
 
 local model = {
   node_id = 'RP-1', status = 'OK',
-  payload = { buffers = { { id = 'chemical_tank_0', stored = 500, capacity = 1000, process_state = 'ok', percent = 50 } },
-    feed = { enabled = true, target_count = 1 } },
+  payload = {
+    feed = { enabled = true, target_count = 1, last_error = 'export failed' },
+    requirements = {},
+  },
 }
 
 -- Reference-sized monitor (h=30, close to the original ~19-row layout).

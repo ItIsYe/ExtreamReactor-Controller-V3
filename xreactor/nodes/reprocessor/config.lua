@@ -1,20 +1,14 @@
 -- CONFIG
+--
+-- REPROCESSOR-Node: befuellt mehrere Reprocessor-Maschinen mit Cyanite
+-- ueber einen gemeinsamen Mekanism Logistical Sorter (siehe feed_router.lua
+-- fuer die volle Erklaerung des physischen Aufbaus). Kein Ventil-Baum, kein
+-- eigener Computer-Anschluss an den Reprocessor-Maschinen selbst -- alles
+-- laeuft passiv ueber farbige Logistical Transporter.
 local CONFIG = {
   DEFAULT_ROLE = "REPROCESSOR-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "REPROC-1", -- Default node_id used if none is set.
   DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
-  -- WICHTIG: das ist NICHT die Sorter-Kiste (config.feed.sorter_chest,
-  -- siehe DEFAULT_FEED unten) oder die optionale ZUSATZ-KISTE (config.feed.
-  -- chest.target) -- beide sind einfache Kisten ohne process()-Methode.
-  -- DEFAULT_BUFFERS ist ausschliesslich fuer echte Reprocessor-MASCHINEN-
-  -- Peripherals mit process() gedacht (Kapazitaets-/Prozess-Anzeige auf
-  -- Overview/Details, main.lua's process_buffers()). Leer = kein Auto-
-  -- Erkennungs-Fallback mehr (main.lua's discover()) -- ohne explizite
-  -- Eintraege wird hier nichts gebunden, sonst wuerde jede erkannte Kiste
-  -- (inkl. Sorter-Kiste/ZUSATZ-KISTE) faelschlich als Reprocessor-Maschine
-  -- behandelt und dauerhaft als "unsupported" markiert, weil eine Kiste
-  -- nie process() hat.
-  DEFAULT_BUFFERS = {}, -- Default buffer peripheral names (echte Reprocessor-Maschinen, opt-in).
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
@@ -31,33 +25,30 @@ local CONFIG = {
   DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  -- Feed-Logik für die REPROCESSOR-Node.
+  -- Feed-Logik fuer die REPROCESSOR-Node.
   --
-  -- Reprocessoren haben KEINEN eigenen Computer-Port — der Füllstand kann
-  -- nicht direkt abgefragt werden. Statt Füllstand-basiertem Nachfüllen wird
-  -- in zufälligen Abständen reihum jeder Reprocessor mit genau
-  -- feed_amount (Standard 2) Cyanite befüllt — das Minimum damit der
-  -- Reprocessor überhaupt arbeitet.
+  -- Reprocessoren haben KEINEN eigenen Computer-Port -- der Fuellstand kann
+  -- nicht direkt abgefragt werden. Statt Fuellstand-basiertem Nachfuellen
+  -- wird in zufaelligen Abstaenden reihum jeder Reprocessor mit genau
+  -- feed_amount (Standard 2) Cyanite befuellt -- das Minimum damit der
+  -- Reprocessor ueberhaupt arbeitet.
   --
   DEFAULT_FEED = {
-    enabled            = false,
+    enabled            = false, -- Muss im Router-UI ("FEEDING") explizit eingeschaltet werden.
     me_bridge          = "me_bridge",
     -- Logistical Sorter, dessen Default-Farbe pro Feed auf die des
     -- aktuellen Ziels gesetzt wird (adapters/logistical_sorter.lua).
     -- Leer/Name nicht gefunden -> Fallback-Suche per Methodensignatur,
     -- genau wie bei me_bridge.
-    sorter             = "logistical_sorter_0",
-    -- sorter_chest: die SORTER-KISTE -- die ME-Bridge exportiert direkt
-    -- dorthin (per Router-UI gewaehlt). Der Sorter sitzt physisch an
-    -- dieser Kiste -- sobald seine Default-Farbe gesetzt ist, uebernimmt
-    -- Mekanism selbst den Weitertransport zum farbigen Logistical
-    -- Transporter und damit zum Reprocessor. Kein Default -- muss ueber
+    sorter             = nil,
+    -- sorter_chest: die SORTER-KISTE -- die eine Kiste, an der der Sorter
+    -- physisch sitzt (ME-Bridge-Exportziel). Kein Default -- muss ueber
     -- das Router-UI gewaehlt werden (siehe config_normalizer.lua's Warnung).
     sorter_chest       = nil,
     waste_item         = "bigreactors:cyanite_ingot",
-    feed_amount        = 2,      -- Items pro Befüllung (Minimum zum Arbeiten)
-    interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befüllungen
-    interval_max_s     = 60,     -- Höchst-Wartezeit zwischen Befüllungen (zufällig dazwischen)
+    feed_amount        = 2,      -- Items pro Befuellung (Minimum zum Arbeiten)
+    interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befuellungen
+    interval_max_s     = 60,     -- Hoechst-Wartezeit zwischen Befuellungen (zufaellig dazwischen)
     discovery_interval = 60,
     --
     -- targets: ein Eintrag pro Reprocessor
@@ -67,17 +58,6 @@ local CONFIG = {
     --           Router-UI zuweisbar (nodes/reprocessor/color_router_ui.lua)
     -- { label = "Reprocessor A", color = "RED" },
     targets            = {},
-    -- chest: die optionale ZUSATZ-KISTE fuer rohes Cyanit -- ANDERE Kiste
-    -- als sorter_chest oben, unabhaengig von der Reprocessor-Rotation --
-    -- eigener An/Aus-Schalter + eigene Ziel-Peripherie, per Router-UI
-    -- einstellbar (nodes/reprocessor/color_router_ui.lua). Laeuft NICHT
-    -- ueber den Sorter/eine Farbe, sondern direkt per ME-Bridge/Wired-
-    -- Modem-Export an "target" -- eigenes zufaelliges Intervall,
-    -- unabhaengig davon ob/wann Reprocessoren befuellt werden.
-    chest = {
-      enabled = false,
-      target  = nil,
-    },
   },
 }
 -- "feed" muss als separate Zuweisung NACH dem CONFIG-Tabellenkonstruktor

@@ -77,8 +77,6 @@ local ui = color_router_ui.new({ config = config, write_config = utils.write_con
 ui.sorter_name = 'logistical_sorter_0'
 ui.feed_enabled = true
 ui.sorter_chest_target = 'minecraft:sorter_chest_5'
-ui.chest_enabled = true
-ui.chest_target = 'minecraft:chest_9'
 ui.targets = {
   { label = 'Reprocessor 1', color = 'GREEN' },
   { label = 'Reprocessor 2', color = 'CYAN' },
@@ -120,7 +118,6 @@ assert_eq(loaded.targets[2].color, 'CYAN')
 assert_eq(loaded.sorter, 'logistical_sorter_0')
 assert_eq(loaded.enabled, true)
 assert_eq(loaded.sorter_chest, 'minecraft:sorter_chest_5')
-assert_eq(loaded.chest.target, 'minecraft:chest_9')
 
 -- 4) Structural check on the actual boot-time wiring: main.lua must call
 --    utils.load_config() for reproc_targets.lua, and must NOT call dofile

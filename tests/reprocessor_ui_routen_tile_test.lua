@@ -1,9 +1,11 @@
--- Die ROUTEN-Kachel auf der Reprocessor-Overview suchte nach
--- feed.active_routes/feed.active/feed.routes_active und
--- feed.total_routes/feed.total/feed.routes_total -- Feldnamen, die aus der
--- Fuel-UI kopiert wurden. feed_router.lua:get_summary() liefert aber nur
--- enabled/target_count -- keines dieser Felder existiert, also zeigte die
--- Kachel unabhaengig vom echten Zustand immer "0/0" an.
+-- Regression coverage for the Reprocessor Overview's FEEDING/ZIELE tiles
+-- (2026-09-17 rebuild): FEEDING shows the AN/AUS toggle state directly,
+-- ZIELE shows the configured target count -- no more "active/total" ratio
+-- (feed_router.lua has no per-route active concept, just a global enabled
+-- switch), so there is nothing left to compute wrong here, but the tiles
+-- must still read the right fields from get_summary()'s actual shape
+-- (enabled/target_count), not fields copied from the Fuel UI that
+-- feed_router.lua never produces.
 
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
@@ -31,35 +33,42 @@ local pages = ui_pages.new({ ui = ui_stub, support_ui_pages = support })
 
 local mon = { getSize = function() return 70, 24 end }
 
-local function find_routen(cards)
+local function find_card(cards, label)
   for _, c in ipairs(cards) do
-    if c.label == 'ROUTEN' then return c end
+    if c.label == label then return c end
   end
   return nil
 end
 
--- Fall 1: Feeding aktiv, 3 konfigurierte Targets -- muss "3/3" zeigen, nicht "0/0".
+-- Fall 1: Feeding aktiv, 3 konfigurierte Targets.
 metric_cards = {}
 pages.render_overview(mon, {
   node_id = 'RP-1', status = 'OK',
-  payload = { buffers = {}, feed = { enabled = true, target_count = 3 } },
+  payload = { feed = { enabled = true, target_count = 3 }, requirements = { me_bridge = true, sorter = true, sorter_chest_present = true } },
 })
-local tile1 = find_routen(metric_cards)
-if not tile1 then error('expected a ROUTEN tile to be rendered') end
-if tile1.value ~= '3/3' then
-  error("expected ROUTEN tile to show '3/3' for an enabled router with 3 targets, got " .. tostring(tile1.value))
+local feeding1 = find_card(metric_cards, 'FEEDING')
+if not feeding1 or feeding1.value ~= 'AN' then
+  error("expected FEEDING tile to show 'AN' when enabled, got " .. tostring(feeding1 and feeding1.value))
+end
+local ziele1 = find_card(metric_cards, 'ZIELE')
+if not ziele1 or ziele1.value ~= '3' then
+  error("expected ZIELE tile to show '3' for 3 configured targets, got " .. tostring(ziele1 and ziele1.value))
 end
 
--- Fall 2: Feeding deaktiviert -- 0 aktive Routen, aber die konfigurierten
--- Targets bleiben als Gesamtzahl sichtbar ("0/3"), nicht "0/0".
+-- Fall 2: Feeding deaktiviert -- ZIELE bleibt trotzdem die Gesamtzahl
+-- sichtbar (keine "0/3"-Verwechslung mehr).
 metric_cards = {}
 pages.render_overview(mon, {
   node_id = 'RP-1', status = 'OK',
-  payload = { buffers = {}, feed = { enabled = false, target_count = 3 } },
+  payload = { feed = { enabled = false, target_count = 3 }, requirements = {} },
 })
-local tile2 = find_routen(metric_cards)
-if not tile2 or tile2.value ~= '0/3' then
-  error("expected ROUTEN tile to show '0/3' for a disabled router with 3 configured targets, got " .. tostring(tile2 and tile2.value))
+local feeding2 = find_card(metric_cards, 'FEEDING')
+if not feeding2 or feeding2.value ~= 'AUS' then
+  error("expected FEEDING tile to show 'AUS' when disabled, got " .. tostring(feeding2 and feeding2.value))
+end
+local ziele2 = find_card(metric_cards, 'ZIELE')
+if not ziele2 or ziele2.value ~= '3' then
+  error("expected ZIELE tile to still show '3' while feeding is disabled, got " .. tostring(ziele2 and ziele2.value))
 end
 
 print('reprocessor_ui_routen_tile_test.lua: ok')

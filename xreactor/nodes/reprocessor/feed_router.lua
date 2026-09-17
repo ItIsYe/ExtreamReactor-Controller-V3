@@ -1,54 +1,43 @@
 -- nodes/reprocessor/feed_router.lua
 --
--- Reprocessoren haben KEINEN eigenen Computer-Port — der Füllstand kann
--- nicht abgefragt werden. Statt füllstandsbasiertem Nachfüllen wird in
--- zufälligen Abständen reihum jeder konfigurierte Reprocessor mit genau
--- feed_amount (Standard: 2) Cyanite befüllt — das Minimum damit der
--- Reprocessor überhaupt zu arbeiten beginnt.
---
--- Routing läuft über einen Mekanism Logistical Sorter statt über eine
--- Ventil-Baum-Topologie: die ME-Bridge exportiert IMMER in dieselbe
--- SORTER-KISTE (config.feed.sorter_chest, per Router-UI gewählt -- eine
--- normale Inventar-Peripherie, keine ME-Peripherie). Der Sorter sitzt
+-- Physischer Aufbau (bestaetigt 2026-09-17): mehrere Reprocessor-Maschinen,
+-- rein passiv beliefert -- KEIN eigener Computer-Anschluss an den
+-- Maschinen selbst. Genau EINE gemeinsame SORTER-KISTE fuer alle: die
+-- ME-Bridge exportiert Cyanite immer in diese eine Kiste (config.feed.
+-- sorter_chest, per Router-UI gewaehlt -- eine normale Inventar-
+-- Peripherie, keine ME-Peripherie). Ein Mekanism Logistical Sorter sitzt
 -- physisch an dieser Kiste; vor jedem Export wird seine Default-Farbe
 -- (adapters/logistical_sorter.lua) auf die des aktuellen Ziels gesetzt.
--- Ab dann übernimmt Mekanism selbst, automatisch, ohne weitere Computer-
+-- Ab dann uebernimmt Mekanism selbst, automatisch, ohne weitere Computer-
 -- Aktion: der farbige Logistical Transporter zieht das Item aus der
--- Kiste durch den Sorter zum passenden Reprocessor. Dadurch entfällt die
--- Pfad-öffnen/liefern/schließen-Zustandsmaschine komplett — ein Feed ist
--- für den Computer ein einziger synchroner Schritt (Farbe setzen,
--- ME-Bridge -> Sorter-Kiste exportieren).
+-- Kiste durch den Sorter zum passenden Reprocessor. Ein Feed ist fuer den
+-- Computer ein einziger synchroner Schritt (Farbe setzen, ME-Bridge ->
+-- Sorter-Kiste exportieren) -- KEINE mehrstufige Transaktion, kein
+-- Ventil-Pfad, kein Quiesce-Bedarf.
+--
+-- Da Reprocessoren keinen eigenen Computer-Port haben, kann ihr
+-- Fuellstand nicht abgefragt werden -- statt fuellstandsbasiertem
+-- Nachfuellen wird in zufaelligen Abstaenden reihum jeder konfigurierte
+-- Reprocessor mit genau feed_amount (Standard: 2) Cyanite befuellt, das
+-- Minimum damit er ueberhaupt zu arbeiten beginnt.
 --
 -- Config (config.feed):
---   enabled            = true/false
+--   enabled            = true/false  -- Router-UI "FEEDING"-Schalter
 --   me_bridge          = "me_bridge"
---   sorter             = "logistical_sorter_0"  -- Logistical Sorter, dessen
---                                                  Default-Farbe pro Feed
---                                                  gesetzt wird
---   sorter_chest       = nil  -- die Kiste, an der der Sorter physisch sitzt
---                                 (ME-Bridge-Exportziel), per Router-UI
---                                 gewählt (nodes/reprocessor/color_router_ui.lua)
+--   sorter             = nil  -- Logistical Sorter, per Router-UI gewaehlt
+--   sorter_chest       = nil  -- die SORTER-KISTE, per Router-UI gewaehlt
 --   waste_item         = "bigreactors:cyanite_ingot"
---   feed_amount        = 2          -- Items pro Befüllung
---   interval_min_s     = 20         -- zufälliges Intervall: min..max Sekunden
+--   feed_amount        = 2          -- Items pro Befuellung
+--   interval_min_s     = 20         -- zufaelliges Intervall: min..max Sekunden
 --   interval_max_s     = 60
 --   discovery_interval = 60
 --   targets = {
 --     { label = "Reprocessor A", color = "RED" },
 --     { label = "Reprocessor B", color = "BLUE" },
 --   }
---   -- gültige Farben: adapters/logistical_sorter.lua's sorter.COLORS
+--   -- gueltige Farben: adapters/logistical_sorter.lua's sorter.COLORS
 --   -- (Mekanism EnumColor) -- per Router-UI zugewiesen, siehe
 --   -- nodes/reprocessor/color_router_ui.lua.
---   chest = { enabled = false, target = nil }
---   -- Optionale ZUSATZ-KISTE für rohes Cyanit (für den Fall, dass man
---   -- Cyanit unverarbeitet haben möchte statt es an einen Reprocessor zu
---   -- liefern) -- ANDERE Kiste als sorter_chest oben, eigener An/Aus-
---   -- Schalter, läuft auf ihrem eigenen zufälligen Intervall, UNABHÄNGIG
---   -- von der Reprocessor-Rotation oben. Läuft NICHT über den Sorter/eine
---   -- Farbe -- "target" ist der Name der Kisten-Peripherie direkt, und
---   -- wird per ME-Bridge/Wired-Modem-Export direkt dorthin geliefert
---   -- (siehe feed_chest()).
 
 local logistical_sorter = require("adapters.logistical_sorter")
 local me_bridge_compat = require("core.me_bridge_compat")
@@ -62,7 +51,7 @@ local function safe_call(obj, method, ...)
   return r, nil
 end
 
--- Wählt eine zufällige Wartezeit zwischen min und max Sekunden.
+-- Waehlt eine zufaellige Wartezeit zwischen min und max Sekunden.
 local function random_interval(cfg)
   local lo = tonumber(cfg.interval_min_s) or 20
   local hi = tonumber(cfg.interval_max_s) or 60
@@ -82,19 +71,12 @@ function M.new(opts)
       sorter          = nil,
       sorter_name     = nil,
       last_refresh    = 0,
-      next_feed_ts    = 0,   -- os.epoch("utc") wann der nächste Feed-Versuch ist
+      next_feed_ts    = 0,   -- os.epoch("utc") wann der naechste Feed-Versuch ist
       target_index    = 1,   -- rotierender Index durch die targets-Liste
       last_target     = nil,
       total_feeds     = 0,
       last_feed_ts    = nil,
       last_error      = nil,
-      -- Unabhängiger Zyklus für die optionale Cyanit-Sammel-Kiste
-      -- (config.feed.chest) -- eigenes Intervall, eigener Fehlerstatus,
-      -- läuft parallel zur Reprocessor-Rotation oben.
-      next_chest_feed_ts = 0,
-      chest_total_feeds  = 0,
-      chest_last_feed_ts = nil,
-      chest_last_error   = nil,
     },
   }
   return setmetatable(self, { __index = M })
@@ -167,6 +149,7 @@ function M:refresh_peripherals()
     sorter_adapter = logistical_sorter.detect(sorter_name, "REPROC")
   end
   if not sorter_adapter then
+    -- Kein (oder kein gueltiger) konfigurierter Name -- per Methodensignatur suchen.
     local found_sorter_name, found_adapter = find_sorter_by_methods()
     if found_adapter then
       sorter_name, sorter_adapter = found_sorter_name, found_adapter
@@ -185,11 +168,10 @@ end
 
 -- ---- feed cycle -------------------------------------------------------------
 
--- Führt eine Befüllung für genau EIN Target durch (Rotation durch die Liste):
--- Sorter-Default-Farbe auf die des Ziels setzen, dann exportieren. Beide
--- Schritte sind einzelne synchrone Peripherie-Calls -- anders als beim
--- frueheren Ventil-Pfad-System gibt es keine mehrstufige Transaktion mehr,
--- die ueber mehrere tick()-Aufrufe laufen muesste.
+-- Fuehrt eine Befuellung fuer genau EIN Target durch (Rotation durch die
+-- Liste): Sorter-Default-Farbe auf die des Ziels setzen, dann exportieren.
+-- Beide Schritte sind einzelne synchrone Peripherie-Calls -- ein Feed ist
+-- fuer den Computer ein einziger Schritt, keine mehrstufige Transaktion.
 local function feed_one(self, cfg)
   local targets = cfg.targets or {}
   if #targets == 0 then
@@ -197,38 +179,32 @@ local function feed_one(self, cfg)
     return
   end
 
-  -- Rotierend nächstes Target wählen
+  -- Rotierend naechstes Target waehlen
   local idx = self._state.target_index
   if idx > #targets then idx = 1 end
   local target = targets[idx]
   self._state.target_index = idx + 1
 
   if not target or not target.color then
-    self.warn_once("bad_target:" .. tostring(idx), "FeedRouter: target ohne Farbe, übersprungen")
+    self.warn_once("bad_target:" .. tostring(idx), "FeedRouter: target ohne Farbe, uebersprungen")
     return
   end
 
   local bridge = self._state.bridge
   if not bridge then
-    self.warn_once("no_bridge", "FeedRouter: keine ME-Bridge verfügbar, Feed übersprungen")
+    self.warn_once("no_bridge", "FeedRouter: keine ME-Bridge verfuegbar, Feed uebersprungen")
     return
   end
 
   local sorter = self._state.sorter
   if not sorter then
-    self.warn_once("no_sorter", "FeedRouter: kein Logistical Sorter verfügbar, Feed übersprungen")
+    self.warn_once("no_sorter", "FeedRouter: kein Logistical Sorter verfuegbar, Feed uebersprungen")
     return
   end
 
-  -- Die ME-Bridge exportiert NICHT mehr direkt zum Sorter/Transporter --
-  -- sie befuellt die SORTER-KISTE (config.feed.sorter_chest, per Router-UI
-  -- gewaehlt). Der Sorter sitzt physisch an dieser Kiste: sobald seine
-  -- Default-Farbe gesetzt ist, uebernimmt Mekanism selbst (automatisch,
-  -- keine weitere Computer-Aktion) den Weitertransport Kiste -> farbiger
-  -- Transporter -> Reprocessor.
   local sorter_chest_name = cfg.sorter_chest
   if type(sorter_chest_name) ~= "string" or sorter_chest_name == "" then
-    self.warn_once("no_sorter_chest", "FeedRouter: keine Sorter-Kiste konfiguriert, Feed übersprungen")
+    self.warn_once("no_sorter_chest", "FeedRouter: keine Sorter-Kiste konfiguriert, Feed uebersprungen")
     return
   end
   -- Ein konfigurierter Name allein reicht nicht -- die Kiste kann entfernt/
@@ -237,19 +213,19 @@ local function feed_one(self, cfg)
   -- generischen "export failed" (feed_fail) -- diese Warnung benennt die
   -- eigentliche Ursache klar.
   if not peripheral.isPresent(sorter_chest_name) then
-    self.warn_once("sorter_chest_abs", "FeedRouter: Sorter-Kiste nicht gefunden: " .. tostring(sorter_chest_name) .. ", Feed übersprungen (im Router-UI die SORTER-KISTE neu waehlen)")
+    self.warn_once("sorter_chest_abs", "FeedRouter: Sorter-Kiste nicht gefunden: " .. tostring(sorter_chest_name) .. ", Feed uebersprungen (im Router-UI die SORTER-KISTE neu waehlen)")
     return
   end
 
   local item   = cfg.waste_item or "bigreactors:cyanite_ingot"
   local amount = tonumber(cfg.feed_amount) or 2
 
-  -- Verfügbarkeit in ME prüfen
+  -- Verfuegbarkeit in ME pruefen
   local me_info = safe_call(bridge, "getItem", { name = item })
   local in_me = me_bridge_compat.item_amount(me_info)
   if in_me < amount then
     self.warn_once("me_low:" .. tostring(target.label),
-      string.format("FeedRouter: ME hat nur %d %s (brauche %d) — übersprungen", in_me, item, amount))
+      string.format("FeedRouter: ME hat nur %d %s (brauche %d) — uebersprungen", in_me, item, amount))
     return
   end
 
@@ -281,66 +257,10 @@ local function feed_one(self, cfg)
   end
 end
 
--- Befüllt die optionale Sammel-Kiste (config.feed.chest) mit rohem Cyanit --
--- ANDERS als feed_one(): kein Sorter, keine Farbe -- der ME-Bridge-Export
--- geht per Wired-Modem-Netzwerk DIREKT an chest.target (eigene
--- Peripherie-Auswahl, siehe color_router_ui.lua). Das ist die einzige
--- Peripherie-Anforderung: die Kiste muss per Wired Modem am selben
--- ME-Netzwerk hängen wie die ME-Bridge.
-local function feed_chest(self, cfg)
-  local chest = cfg.chest
-  if not chest or chest.enabled ~= true then return end
-  if type(chest.target) ~= "string" or chest.target == "" then
-    self.warn_once("chest_no_target", "FeedRouter: ZUSATZ-KISTE aktiv, aber kein Ziel-Peripheral gesetzt, übersprungen")
-    return
-  end
-  -- Gleicher Praesenz-Check wie fuer die SORTER-KISTE (feed_one() oben) --
-  -- ein konfigurierter Name allein ist kein Beweis, dass die Peripherie
-  -- noch existiert (entfernt/umbenannt), sonst scheitert der Export nur
-  -- mit einer generischen "export failed"-Warnung statt einer klaren
-  -- Diagnose.
-  if not peripheral.isPresent(chest.target) then
-    self.warn_once("chest_abs", "FeedRouter: ZUSATZ-KISTE-Ziel nicht gefunden: " .. tostring(chest.target) .. ", übersprungen")
-    return
-  end
-
-  local bridge = self._state.bridge
-  if not bridge then
-    self.warn_once("chest_no_bridge", "FeedRouter: keine ME-Bridge verfügbar, Kiste übersprungen")
-    return
-  end
-
-  local item   = cfg.waste_item or "bigreactors:cyanite_ingot"
-  local amount = tonumber(cfg.feed_amount) or 2
-
-  local me_info = safe_call(bridge, "getItem", { name = item })
-  local in_me = me_bridge_compat.item_amount(me_info)
-  if in_me < amount then
-    self.warn_once("chest_me_low", string.format(
-      "FeedRouter: ME hat nur %d %s (brauche %d) für Kiste — übersprungen", in_me, item, amount))
-    return
-  end
-
-  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, chest.target)
-  local err = nil
-  if not ok then err = result; result = nil end
-  local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
-    or (type(result) == "number" and result or 0)
-  if exported and exported > 0 then
-    self._state.chest_total_feeds = self._state.chest_total_feeds + 1
-    self._state.chest_last_feed_ts = os.epoch("utc")
-    self._state.chest_last_error = nil
-    self.log("INFO", string.format(
-      "FeedRouter: Kiste (%s) befüllt mit %d/%d %s", tostring(chest.target), exported, amount, item))
-  else
-    self._state.chest_last_error = tostring(err or "export failed")
-    self.warn_once("chest_feed_fail", "FeedRouter: Befüllung der Kiste fehlgeschlagen: " .. tostring(err))
-  end
-end
-
--- Es gibt keine asynchrone Transaktion mehr, die abgebrochen werden
--- muesste (siehe Modulkommentar oben) -- bleibt als No-Op fuer die main.lua-
--- Schnittstelle (enter_standby() ruft dies weiterhin auf) erhalten.
+-- Es gibt keine asynchrone Transaktion, die abgebrochen werden muesste
+-- (siehe Modulkommentar oben) -- bleibt als No-Op fuer die main.lua-
+-- Schnittstelle erhalten, falls ein Feed-Zyklus spaeter doch wieder
+-- mehrstufig wird.
 function M:cancel(_reason)
 end
 
@@ -348,14 +268,10 @@ function M:tick()
   local cfg = self.config.feed or self.config or {}
   local now = os.epoch("utc")
 
-  -- Peripherals periodisch neu erkennen -- UNABHAENGIG vom enabled-Schalter:
-  -- die Diagnose-Seite (main.lua's build_requirements(), ui_pages.lua) zeigt
-  -- ME-BRIDGE/SORTER anhand von get_summary()'s bridge_bound/sorter_bound,
-  -- die ausschliesslich hier gesetzt werden. Vorher lief refresh_peripherals()
-  -- nur, wenn Feeding bereits aktiviert war -- ein frisch aufgesetzter oder
-  -- bewusst noch deaktivierter Knoten zeigte ME-BRIDGE/SORTER dadurch immer
-  -- als "FEHLT", selbst wenn beide physisch vorhanden und verkabelt sind,
-  -- schlicht weil die Erkennung nie gelaufen ist -- nicht weil sie fehlen.
+  -- Peripherals periodisch neu erkennen -- UNABHAENGIG vom enabled-
+  -- Schalter: die Diagnose-Seite (main.lua's build_requirements(),
+  -- ui_pages.lua) zeigt ME-BRIDGE/SORTER anhand von get_summary()'s
+  -- bridge_bound/sorter_bound, die ausschliesslich hier gesetzt werden.
   local refresh_ms = (tonumber(cfg.discovery_interval) or 60) * 1000
   if now - self._state.last_refresh >= refresh_ms then
     self:refresh_peripherals()
@@ -363,19 +279,7 @@ function M:tick()
 
   if cfg.enabled ~= true then return end
 
-  -- Sammel-Kiste läuft auf ihrem eigenen zufälligen Intervall, unabhängig
-  -- von der Reprocessor-Rotation unten -- eigener Zeitplan, eigener Toggle.
-  local chest = cfg.chest
-  if chest and chest.enabled == true then
-    if self._state.next_chest_feed_ts == 0 then
-      self._state.next_chest_feed_ts = now + random_interval(cfg) * 1000
-    elseif now >= self._state.next_chest_feed_ts then
-      feed_chest(self, cfg)
-      self._state.next_chest_feed_ts = now + random_interval(cfg) * 1000
-    end
-  end
-
-  -- Zufälliges Intervall: beim ersten Tick sofort einen Timer setzen
+  -- Zufaelliges Intervall: beim ersten Tick sofort einen Timer setzen
   if self._state.next_feed_ts == 0 then
     self._state.next_feed_ts = now + random_interval(cfg) * 1000
     return
@@ -385,7 +289,7 @@ function M:tick()
 
   feed_one(self, cfg)
 
-  -- Nächstes zufälliges Intervall planen
+  -- Naechstes zufaelliges Intervall planen
   self._state.next_feed_ts = now + random_interval(cfg) * 1000
 end
 
@@ -403,16 +307,11 @@ function M:get_summary()
     next_feed_in_s = self._state.next_feed_ts > 0 and math.max(0, math.floor((self._state.next_feed_ts - now) / 1000)) or nil,
     last_error     = self._state.last_error,
     target_count   = #(cfg.targets or {}),
+    targets        = cfg.targets or {},
     bridge_bound   = self._state.bridge ~= nil,
     bridge_name    = self._state.bridge_name,
     sorter_bound   = self._state.sorter ~= nil,
     sorter_name    = self._state.sorter_name,
-    chest_enabled       = cfg.chest ~= nil and cfg.chest.enabled == true,
-    chest_total_feeds   = self._state.chest_total_feeds,
-    chest_last_feed_ts  = self._state.chest_last_feed_ts,
-    chest_last_feed_age_s = self._state.chest_last_feed_ts and math.floor((now - self._state.chest_last_feed_ts) / 1000) or nil,
-    chest_next_feed_in_s = self._state.next_chest_feed_ts > 0 and math.max(0, math.floor((self._state.next_chest_feed_ts - now) / 1000)) or nil,
-    chest_last_error    = self._state.chest_last_error,
   }
 end
 

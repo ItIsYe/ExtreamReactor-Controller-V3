@@ -6,14 +6,6 @@ local M = {}
 function M.normalize(config_values, defaults, add_warning, utils)
   non_rt_config.apply_common(config_values, defaults, add_warning, utils)
 
-  -- config.buffers: opt-in Liste echter Reprocessor-MASCHINEN-Peripherals
-  -- mit process() (Kapazitaets-/Prozess-Anzeige) -- NICHT die Sorter-Kiste
-  -- oder die ZUSATZ-KISTE, siehe config.lua's Kommentar.
-  if type(config_values.buffers) ~= "table" then
-    config_values.buffers = utils.deep_copy(defaults.buffers)
-    add_warning("buffers missing/invalid; defaulting to configured list")
-  end
-
   -- Normalize feed config block (random-interval Cyanite supply to reprocessors).
   if config_values.feed == nil then
     config_values.feed = utils.deep_copy(defaults.feed) or {}
@@ -29,9 +21,7 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(fd.me_bridge) ~= "string" then
     fd.me_bridge = d.me_bridge or "me_bridge"
   end
-  if type(fd.sorter) ~= "string" then
-    fd.sorter = d.sorter or "logistical_sorter_0"
-  end
+  if type(fd.sorter) ~= "string" or fd.sorter == "" then fd.sorter = nil end
   if type(fd.waste_item) ~= "string" then
     fd.waste_item = d.waste_item or "bigreactors:cyanite_ingot"
   end
@@ -50,16 +40,16 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(fd.targets) ~= "table" then fd.targets = {} end
 
   -- sorter_chest (die SORTER-KISTE) ist das tatsaechliche ME-Bridge-
-  -- Exportziel (siehe feed_router.lua) -- eigenes Feld, NICHT Teil von
-  -- config.buffers (das ist ausschliesslich fuer echte Reprocessor-
-  -- Maschinen-Peripherals mit process(), siehe config.lua's Kommentar).
-  -- Genau wie FUEL's logistics.export_chest (siehe nodes/fuel/
-  -- config_normalizer.lua) muss ein fehlendes Exportziel laut und
-  -- deutlich gewarnt werden, statt sich hinter einem Platzhalter-Default
-  -- zu verstecken, der wie eine echte Konfiguration aussieht.
+  -- Exportziel (siehe feed_router.lua) -- genau wie FUEL's logistics.
+  -- export_chest (siehe nodes/fuel/config_normalizer.lua) muss ein
+  -- fehlendes Exportziel laut und deutlich gewarnt werden, statt sich
+  -- hinter einem Platzhalter-Default zu verstecken.
   if type(fd.sorter_chest) ~= "string" or fd.sorter_chest == "" then fd.sorter_chest = nil end
   if #fd.targets > 0 and fd.sorter_chest == nil then
-    add_warning("feed.sorter_chest (SORTER-KISTE) fehlt; Feeding bleibt deaktiviert bis im Router-UI eine Sorter-Kiste gewaehlt wurde")
+    add_warning("feed.sorter_chest (SORTER-KISTE) fehlt; Feeding bleibt wirkungslos bis im Router-UI eine Sorter-Kiste gewaehlt wurde")
+  end
+  if #fd.targets > 0 and fd.sorter == nil then
+    add_warning("feed.sorter fehlt; Feeding bleibt wirkungslos bis im Router-UI ein Logistical Sorter gewaehlt wurde")
   end
 
   for i, t in ipairs(fd.targets) do
@@ -84,15 +74,6 @@ function M.normalize(config_values, defaults, add_warning, utils)
     else
       t.color = t.color:upper()
     end
-  end
-
-  -- chest: die optionale ZUSATZ-KISTE fuer rohes Cyanit, laeuft
-  -- unabhaengig von der Reprocessor-Rotation, direkt per ME-Bridge/Wired-
-  -- Modem-Export ohne Sorter/Farbe (siehe feed_router.lua).
-  if type(fd.chest) ~= "table" then fd.chest = {} end
-  if fd.chest.enabled ~= true then fd.chest.enabled = false end
-  if fd.chest.enabled and (type(fd.chest.target) ~= "string" or fd.chest.target == "") then
-    add_warning("feed.chest (ZUSATZ-KISTE) ist aktiviert, hat aber kein Ziel-Peripheral gesetzt; Befuellung wird uebersprungen bis eines gesetzt ist")
   end
 end
 

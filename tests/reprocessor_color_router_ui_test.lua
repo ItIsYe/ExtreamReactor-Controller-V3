@@ -2,14 +2,13 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 -- Regression coverage for nodes/reprocessor/color_router_ui.lua, the
 -- Sorter-color equivalent of the old valve-path router_ui.lua for
--- REPROCESSOR: pick the Sorter from the live peripheral list, add/delete a
--- target, cycle its color, and the save/discard roundtrip (save persists
--- {sorter=, targets=} + applies it to config.feed immediately; discard
+-- REPROCESSOR: turn feeding on/off, pick the Sorter and the SORTER-KISTE
+-- from the live peripheral list, add/delete a target, cycle its color,
+-- and the save/discard roundtrip (save persists {sorter=, sorter_chest=,
+-- enabled=, targets=} + applies it to config.feed immediately; discard
 -- reverts unsaved edits without touching config.feed). There is no
--- export_inlet/"ZIEL" picker anymore (2026-09-17): the ME-Bridge exports
--- straight into the PUFFER buffer chest (config.buffers, see
--- tests/reprocessor_color_router_ui_buffers_test.lua), and Mekanism's own
--- Sorter+Transporter mechanics take over from there automatically.
+-- ZUSATZ-KISTE anymore (2026-09-17 rebuild) -- the operator's real build
+-- has exactly one shared Sorter-Kiste and no second collector chest.
 
 package.loaded['core.mockup_ui'] = nil
 package.loaded['adapters.logistical_sorter'] = nil
@@ -81,46 +80,37 @@ assert_true(type(footer) == 'table' and footer.left and footer.right,
 assert_eq(#ui.targets, 1)
 assert_eq(ui.sorter_name, 'sorter_0', 'working copy must load sorter from config.feed')
 assert_eq(ui.feed_enabled, false, 'feed_enabled must default to false when absent from config.feed')
-assert_eq(ui.chest_enabled, false, 'chest must default to disabled when absent from config.feed')
+assert_eq(ui.sorter_chest_target, nil, 'sorter_chest_target must default to nil when absent from config.feed')
 assert_eq(ui.dirty, false, 'freshly loaded working copy must not be dirty')
 
 -- The FEEDING AN/AUS toggle is the only UI way to flip config.feed.enabled
--- -- without it the whole Sorter/PUFFER/targets setup can be perfectly
--- configured and still never feed anything (feed_router.lua:tick() returns
--- early whenever it's off).
+-- -- without it the whole Sorter/Sorter-Kiste/targets setup can be
+-- perfectly configured and still never feed anything (feed_router.lua:
+-- tick() returns early whenever it's off).
 local feed_toggle_btn = find_button(ui, 'feed_toggle')
 assert_true(feed_toggle_btn ~= nil, 'expected a FEEDING AN/AUS toggle button on the list page')
 assert_true(ui:handle_touch(feed_toggle_btn.x1, feed_toggle_btn.y) == true)
 assert_eq(ui.feed_enabled, true, 'toggling must enable feeding')
 assert_eq(ui.dirty, true, 'toggling feed_enabled must mark the working copy dirty')
 
--- Toggle the collector chest on: no target-picker button before, present
--- after (it only renders while the chest is enabled). The chest goes
--- straight to a peripheral over the wired modem -- no sorter/color
--- involved, so any detected peripheral (including a plain chest) is a
--- valid pick.
-assert_true(find_button(ui, 'chest_target_open') == nil, 'no chest target picker while the chest is disabled')
-local chest_toggle_btn = find_button(ui, 'chest_toggle')
-assert_true(chest_toggle_btn ~= nil, 'expected a KISTE toggle button')
-assert_true(ui:handle_touch(chest_toggle_btn.x1, chest_toggle_btn.y) == true)
-assert_eq(ui.chest_enabled, true, 'toggling must enable the chest')
-assert_eq(ui.dirty, true, 'toggling the chest must mark the working copy dirty')
+-- Open the SORTER-KISTE picker: any detected peripheral (including a
+-- plain chest) is a valid pick -- it's just a hand-off point, no sorter/
+-- color check involved for this specific picker.
+ui:render(mon, nil, nil, true)
+local sorter_chest_open_btn = find_button(ui, 'sorter_chest_open')
+assert_true(sorter_chest_open_btn ~= nil, 'expected a SORTER-KISTE button on the list page')
+assert_true(ui:handle_touch(sorter_chest_open_btn.x1, sorter_chest_open_btn.y) == true)
+assert_eq(ui.mode, 'pick_sorter_chest')
 
 ui:render(mon, nil, nil, true)
-local chest_target_open_btn = find_button(ui, 'chest_target_open')
-assert_true(chest_target_open_btn ~= nil, 'expected a ZIEL button for the chest once it is enabled')
-assert_true(ui:handle_touch(chest_target_open_btn.x1, chest_target_open_btn.y) == true)
-assert_eq(ui.mode, 'pick_chest')
-
-ui:render(mon, nil, nil, true)
-local pick_chest_target = nil
+local pick_sorter_chest = nil
 for _, btn in ipairs(ui.buttons) do
-  if btn.action == 'pick_chest_choose' and btn.name == 'chest_0' then pick_chest_target = btn end
+  if btn.action == 'pick_sorter_chest_choose' and btn.name == 'chest_0' then pick_sorter_chest = btn end
 end
-assert_true(pick_chest_target ~= nil, 'expected chest_0 as a pickable chest-target candidate')
-assert_true(ui:handle_touch(pick_chest_target.x1, pick_chest_target.y) == true)
-assert_eq(ui.mode, 'list', 'choosing a chest target must return to the list page')
-assert_eq(ui.chest_target, 'chest_0', 'choosing a chest target must update the working copy')
+assert_true(pick_sorter_chest ~= nil, 'expected chest_0 as a pickable Sorter-Kiste candidate')
+assert_true(ui:handle_touch(pick_sorter_chest.x1, pick_sorter_chest.y) == true)
+assert_eq(ui.mode, 'list', 'choosing a Sorter-Kiste must return to the list page')
+assert_eq(ui.sorter_chest_target, 'chest_0', 'choosing a Sorter-Kiste must update the working copy')
 
 ui:render(mon, nil, nil, true)
 -- Open the sorter picker, verify only real sorters are listed (not the
@@ -183,14 +173,13 @@ assert_true(ui:handle_touch(save_btn.x1, save_btn.y) == true)
 assert_eq(ui.dirty, false, 'save must clear the dirty flag')
 assert_true(written ~= nil, 'save must call write_config')
 assert_eq(written.data.sorter, 'sorter_1', 'the persisted file must contain the chosen sorter')
+assert_eq(written.data.sorter_chest, 'chest_0', 'the persisted file must contain the chosen Sorter-Kiste')
 assert_eq(written.data.enabled, true, 'the persisted file must contain the feed_enabled toggle state')
 assert_eq(#written.data.targets, 2, 'the persisted file must contain both targets')
-assert_eq(written.data.chest.enabled, true, 'the persisted file must contain the chest toggle state')
-assert_eq(written.data.chest.target, 'chest_0', 'the persisted file must contain the chosen chest target')
 assert_eq(#config.feed.targets, 2, 'save must apply the working copy to config.feed.targets immediately')
 assert_eq(config.feed.sorter, 'sorter_1', 'save must apply the chosen sorter to config.feed immediately')
+assert_eq(config.feed.sorter_chest, 'chest_0', 'save must apply the chosen Sorter-Kiste to config.feed immediately')
 assert_eq(config.feed.enabled, true, 'save must apply the feed_enabled toggle to config.feed immediately')
-assert_eq(config.feed.chest.enabled, true, 'save must apply the chest toggle to config.feed immediately')
 
 -- Discard after a further edit must revert to the last-saved state.
 ui:render(mon, nil, nil, true)

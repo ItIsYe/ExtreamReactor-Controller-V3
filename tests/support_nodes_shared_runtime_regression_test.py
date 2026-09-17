@@ -14,7 +14,15 @@ for node in ('fuel', 'water', 'reprocessor'):
     assert 'support_runtime.run_slow_loop' in source, f'{node}: expected shared support slow-loop usage'
     assert 'support_ui_pages' in source, f'{node}: expected shared support ui_pages usage'
     assert 'support_command_handler' in source, f'{node}: expected shared support command handler usage'
-    assert 'collect_devices_by_methods' in source, f'{node}: expected shared support discovery classification helper usage'
+    # 2026-09-17: REPROCESSOR's registry-based "buffer" peripheral kind
+    # (an opt-in list of real Reprocessor-machine peripherals) was removed
+    # in the clean rebuild -- ME-Bridge/Sorter/Sorter-Kiste are detected
+    # directly inside feed_router.lua via peripheral method signatures,
+    # never through the shared registry classification helper. FUEL/WATER
+    # still classify real registry-tracked peripherals (waste outlets/
+    # tanks) this way.
+    if node != 'reprocessor':
+        assert 'collect_devices_by_methods' in source, f'{node}: expected shared support discovery classification helper usage'
 
 assert 'function M.init_logging' in support_runtime, 'expected shared support init_logging helper'
 assert 'function M.run_event_loop' in support_runtime, 'expected shared support event loop helper'
