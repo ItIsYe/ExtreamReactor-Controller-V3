@@ -118,6 +118,17 @@ local reproc_health = health.new({})
 local buffers = {}
 local router
 local color_router_instance
+-- Forward-declared: render_monitor() (defined further up, ~line 267)
+-- captures get_color_router() inside a page-render closure. Declaring
+-- get_color_router further down (~line 392) as its own fresh local would
+-- create a BRAND NEW local that render_monitor()'s already-compiled
+-- closure can never see as an upvalue -- the reference inside that
+-- closure would resolve to a global instead, which is nil. Production
+-- symptom: "attempt to call global 'get_color_router' (a nil value)" at
+-- main.lua:299 every time the REPROCESSOR UI rendered the Router page.
+-- Forward-declaring the local here and assigning to it later (no fresh
+-- local at the assignment site) fixes the capture.
+local get_color_router
 local devices = {
   monitor = nil, monitor_name = nil, discovery_failed = false, registry_summary = nil,
   registry_load_error = nil, proto_mismatch = false, last_scan_ts = nil,
@@ -389,7 +400,7 @@ local function enter_standby(reason)
   utils.log("REPROC", "Standby aktiviert (" .. tostring(reason) .. ")", "WARN")
 end
 
-local function get_color_router()
+get_color_router = function()
   if not color_router_instance then
     color_router_instance = color_router_ui_lib.new({
       config = config, config_path = "/xreactor_config/reproc_targets.lua",
