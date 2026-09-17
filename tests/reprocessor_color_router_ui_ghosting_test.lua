@@ -116,4 +116,27 @@ if not screen_final:find('Keine Reprocessoren konfiguriert', 1, true) then
   error('expected the empty-state warning box to reappear once the last target is removed')
 end
 
+-- 4) Cycling a target's color (screenshot 2026-09-17: "INDIGORAYN" --
+--    leftover tail of a longer previous color name like "DARK_GRAY" after
+--    cycling to the shorter "INDIGO") does not change #targets/mode/
+--    chest_enabled, so it is NOT covered by the layout-signature clear
+--    above -- the color cell itself must pad to its full fixed width on
+--    every redraw instead.
+ui.targets[1] = { label = 'Reprocessor 1', color = 'DARK_GRAY' }
+ui:render(mon, nil, nil, false)
+local before_cycle = mon.full_screen()
+if not before_cycle:find('DARK_GRAY', 1, true) then
+  error('expected DARK_GRAY to be drawn before cycling')
+end
+
+ui.targets[1].color = 'INDIGO'
+ui:render(mon, nil, nil, false) -- in-page redraw, no page transition
+local after_cycle = mon.full_screen()
+if after_cycle:find('DARK_GRAY', 1, true) or after_cycle:find('INDIGO%a') then
+  error('leftover tail of the previous, longer color name must not survive an in-page color cycle, got:\n' .. after_cycle)
+end
+if not after_cycle:find('INDIGO', 1, true) then
+  error('expected the new color name to actually be drawn')
+end
+
 print('reprocessor_color_router_ui_ghosting_test.lua: ok')

@@ -35,6 +35,22 @@ local MIN_H = 19
 local COMPACT_W = 70
 local EXCLUDED_TYPES = { monitor = true, modem = true }
 
+-- mux.fit() only ever TRUNCATES text that's too long -- it never pads text
+-- that's shorter than the target width. The color name cell is redrawn on
+-- every color_prev/color_next tap without a full-screen clear (that tap
+-- doesn't change #targets/mode/chest_enabled, the only things render()'s
+-- layout-signature check clears for), so cycling from a longer name (e.g.
+-- "DARK_GRAY") to a shorter one (e.g. "INDIGO") left the old name's tail
+-- on screen: "INDIGO" + leftover "RAY" = "INDIGORAY". Padding to the full
+-- fixed column width every time fixes this at the source, matching nodes/
+-- fuel/scada_layout.lua's left_padded_fit()/right_padded_fit() pattern for
+-- the same bug class.
+local function left_padded_fit(text, width)
+  local fitted = mux.fit(text, width)
+  if #fitted >= width then return fitted end
+  return fitted .. string.rep(" ", width - #fitted)
+end
+
 local function color_index(color)
   for i, c in ipairs(COLORS) do
     if c == color then return i end
@@ -250,14 +266,14 @@ function M:render(mon, _ui, _colors, should_clear)
   local y = list_top
   for i = first, last do
     local t = self.targets[i]
-    mux.text(mon, 2, y, mux.fit(string.format("%d. %s", i, tostring(t.label or "?")), color_col - 3),
+    mux.text(mon, 2, y, left_padded_fit(string.format("%d. %s", i, tostring(t.label or "?")), color_col - 3),
       colorset.get("text"), colorset.get("background"))
 
     local prev_btn = mux.button(mon, color_col, y, 3, "<", "LIMITED", 1)
     prev_btn.action, prev_btn.index = "color_prev", i
     self.buttons[#self.buttons + 1] = prev_btn
 
-    mux.text(mon, color_col + 4, y, mux.fit(tostring(t.color or "?"), color_w), colorset.get("OK"), colorset.get("background"))
+    mux.text(mon, color_col + 4, y, left_padded_fit(tostring(t.color or "?"), color_w), colorset.get("OK"), colorset.get("background"))
 
     local next_btn = mux.button(mon, color_col + next_off, y, 3, ">", "LIMITED", 1)
     next_btn.action, next_btn.index = "color_next", i
