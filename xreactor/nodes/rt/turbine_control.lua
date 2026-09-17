@@ -148,6 +148,25 @@ end
 -- ── Ziel-RPM-Berechnung ─────────────────────────────────────────────────────
 
 function M.get_target_rpm(ctx)
+  -- Solange die Kapazitaet noch nicht gelernt ist, MUSS dieser Wert immer
+  -- der volle base TARGET_RPM sein -- unabhaengig vom MASTER. Vorher wurde
+  -- hier bereits ein evtl. laengst veralteter MASTER-Sollwert (ctx.targets.
+  -- rpm, z.B. ein reduzierter Teillast-Wert von einem frueheren SET_
+  -- SETPOINTS, der beim Parken/Herunterfahren einfach stehen blieb) benutzt,
+  -- sobald current_state()==MASTER -- capacity_learning.lua verlangt aber
+  -- exakt 900+-15 RPM (siehe capacity_learning.lua TARGET_RPM/TOLERANCE_RPM),
+  -- und genau dieser Rueckgabewert speist sowohl die Flow-Regelung
+  -- (update_turbine_flow_state) als auch die Coil-Einrastschwelle
+  -- (update_inductor_for_rpm's scale=target_rpm/base_target) als auch --
+  -- ueber get_turbine_target_rpm() -- die pro-Turbine-Zielsetzung. Ein
+  -- veralteter/reduzierter MASTER-Sollwert konnte die Messung so auf
+  -- unbestimmte Zeit verhindern, obwohl der Reaktor bereits wieder laeuft
+  -- (gemeldet 2026-09-17: Kapazitaetslernen muss komplett unabhaengig von
+  -- Fuel-Rod-/Flow-Regelung und Coil ein/aus sein).
+  local cap_ready = ctx.capacity_learning and ctx.capacity_learning.ready == true
+  if not cap_ready then
+    return ctx.CONFIG.TARGET_RPM
+  end
   local master_rpm = ctx.targets and ctx.targets.rpm
   if ctx.current_state() == ctx.STATE.MASTER
       and type(master_rpm) == "number" and master_rpm > 0 then
