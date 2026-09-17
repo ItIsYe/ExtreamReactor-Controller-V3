@@ -205,6 +205,10 @@ local warned = {}
 local last_command, last_command_ts
 local last_status_snapshot
 local capacity_learning_state  -- persistenter Learning-State
+-- true waehrend der Reaktor NUR fuer eine einmalige autonome Kapazitaets-
+-- messung (kein Master verbunden) hochgefahren wurde -- siehe monitor_master
+-- weiter unten und state_handlers.request_capacity_learning_startup_if_needed().
+local capacity_learning_autonom_active = false
 
 -- Persistent module-startup state (which module is booting, queue,
 -- watchdog) backing start_module()/process_startup()/
@@ -848,6 +852,24 @@ local function configure_state_machine()
         if current_state() == STATE.MASTER then
           log("WARN", "Master disconnected — switching to AUTONOM")
           current_state_value = STATE.AUTONOM
+        end
+        -- Ohne je einen Master gesehen zu haben, wird start_module() (und
+        -- damit setActive(true)) nie aufgerufen -- der Reaktor bleibt fuer
+        -- immer bei 100% Staeben/0% Leistung stehen und capacity_learning.lua
+        -- kann nie eine echte Messung sammeln. Fahre den Reaktor NUR fuer
+        -- die einmalige Kapazitaetsmessung autonom hoch; sobald sie fertig
+        -- ist, wieder herunterfahren und auf den Master warten.
+        local lctx = make_lifecycle_ctx()
+        lctx.get_node_state_machine = function() return node_state_machine end
+        lctx.capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state
+        if state_handlers.request_capacity_learning_startup_if_needed(lctx, "CAPACITY_LEARNING_AUTONOM") then
+          capacity_learning_autonom_active = true
+        end
+        if capacity_learning_autonom_active
+            and lctx.capacity_learning and lctx.capacity_learning.ready == true then
+          log("INFO", "Capacity learning complete — idling reactor until MASTER connects")
+          module_lifecycle.scram(make_lifecycle_ctx())
+          capacity_learning_autonom_active = false
         end
       end
     end,

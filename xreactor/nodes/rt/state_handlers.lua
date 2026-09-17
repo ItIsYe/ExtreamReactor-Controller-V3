@@ -203,6 +203,50 @@ function M.request_startup_if_needed(ctx, reason)
   return true
 end
 
+-- Autonomous-only counterpart to request_startup_if_needed(). Without a
+-- MASTER ever having sent SET_SETPOINTS, start_module() (which actually
+-- calls setActive(true)/engages inductors) is NEVER invoked -- the node
+-- state machine boots straight into RUNNING (main.lua), and RUNNING's
+-- on_tick happily runs the rod/flow regulator loop every cycle, but that
+-- loop only adjusts an ALREADY-ACTIVE reactor/turbine; it never activates
+-- one from cold. Reported symptom: rods sit at 100% (0% power) forever
+-- with no master connected. capacity_learning.lua can then never collect a
+-- single sample either, since turbines never spin up.
+--
+-- This function starts the reactor/turbines with no MASTER connected, but
+-- ONLY to let capacity learning measure real output once -- never as a
+-- general "run autonomously forever" mode. Caller is responsible for
+-- idling back down (see monitor_master()'s caller in main.lua) once
+-- ctx.capacity_learning.ready becomes true.
+function M.request_capacity_learning_startup_if_needed(ctx, reason)
+  if ctx.get_current_state() ~= ctx.STATE.AUTONOM then
+    return false
+  end
+  local learning = ctx.capacity_learning
+  if learning and learning.ready == true then
+    return false
+  end
+  local machine_state = ctx.get_node_state_machine() and ctx.get_node_state_machine().state and ctx.get_node_state_machine():state() or nil
+  if machine_state ~= (ctx.constants or constants).node_states.RUNNING and machine_state ~= (ctx.constants or constants).node_states.OFF then
+    return false
+  end
+  local needs_turbine = has_off_modules(ctx.modules, "turbine")
+  local needs_reactor = has_off_modules(ctx.modules, "reactor")
+  if not needs_turbine and not needs_reactor then
+    return false
+  end
+  if ctx.get_active_startup() then
+    return false
+  end
+  ctx.log("INFO", ("Autonomous capacity-learning startup requested reason=%s turbines_off=%s reactors_off=%s"):format(
+    tostring(reason or "unknown"),
+    tostring(needs_turbine),
+    tostring(needs_reactor)
+  ))
+  ctx.get_node_state_machine():transition((ctx.constants or constants).node_states.STARTUP)
+  return true
+end
+
 function M.set_state(ctx, new_state, transition_reason)
   local current_state = ctx.get_current_state()
   if current_state == new_state then
