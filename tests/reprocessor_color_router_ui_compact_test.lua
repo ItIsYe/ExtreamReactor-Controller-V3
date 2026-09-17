@@ -102,9 +102,9 @@ assert_eq(#ui.targets, 2, 'both targets must still render on the compact page')
 assert_no_overlaps(ui, 51)
 
 local sorter_btn = find_button(ui, 'sorter_open')
-local buffers_btn = find_button(ui, 'buffers_open')
-assert_true(sorter_btn ~= nil and buffers_btn ~= nil, 'SORTER and PUFFER must both have buttons on the compact page')
-assert_true(sorter_btn.y ~= buffers_btn.y, 'on a 51-wide screen SORTER and PUFFER must stack on separate rows, not share one')
+local sorter_chest_btn = find_button(ui, 'sorter_chest_open')
+assert_true(sorter_btn ~= nil and sorter_chest_btn ~= nil, 'SORTER and SORTER-KISTE must both have buttons on the compact page')
+assert_true(sorter_btn.y ~= sorter_chest_btn.y, 'on a 51-wide screen SORTER and SORTER-KISTE must stack on separate rows, not share one')
 
 -- Enable the chest: its own row must appear too, still within bounds.
 local chest_toggle_btn = find_button(ui, 'chest_toggle')

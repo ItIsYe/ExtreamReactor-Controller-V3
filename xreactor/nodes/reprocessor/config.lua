@@ -3,14 +3,18 @@ local CONFIG = {
   DEFAULT_ROLE = "REPROCESSOR-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "REPROC-1", -- Default node_id used if none is set.
   DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
-  -- Kein Platzhalter-Default mehr: buffers[1] ist seit dem PUFFER-Umbau das
-  -- tatsaechliche ME-Bridge-Exportziel (feed_router.lua), ein erfundener
-  -- Name wie "chemical_tank_0" wuerde wie eine echte Konfiguration
-  -- aussehen, obwohl er in keinem realen Aufbau existiert (siehe
-  -- config_normalizer.lua's buffers[1]-Warnung, analog zu FUEL's
-  -- logistics.export_chest). Leer = klar erkennbar "noch nicht
-  -- konfiguriert", per Router-UI (PUFFER-Seite) zu setzen.
-  DEFAULT_BUFFERS = {}, -- Default buffer peripheral names.
+  -- WICHTIG: das ist NICHT die Sorter-Kiste (config.feed.sorter_chest,
+  -- siehe DEFAULT_FEED unten) oder die optionale ZUSATZ-KISTE (config.feed.
+  -- chest.target) -- beide sind einfache Kisten ohne process()-Methode.
+  -- DEFAULT_BUFFERS ist ausschliesslich fuer echte Reprocessor-MASCHINEN-
+  -- Peripherals mit process() gedacht (Kapazitaets-/Prozess-Anzeige auf
+  -- Overview/Details, main.lua's process_buffers()). Leer = kein Auto-
+  -- Erkennungs-Fallback mehr (main.lua's discover()) -- ohne explizite
+  -- Eintraege wird hier nichts gebunden, sonst wuerde jede erkannte Kiste
+  -- (inkl. Sorter-Kiste/ZUSATZ-KISTE) faelschlich als Reprocessor-Maschine
+  -- behandelt und dauerhaft als "unsupported" markiert, weil eine Kiste
+  -- nie process() hat.
+  DEFAULT_BUFFERS = {}, -- Default buffer peripheral names (echte Reprocessor-Maschinen, opt-in).
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
@@ -43,11 +47,13 @@ local CONFIG = {
     -- Leer/Name nicht gefunden -> Fallback-Suche per Methodensignatur,
     -- genau wie bei me_bridge.
     sorter             = "logistical_sorter_0",
-    -- Kein export_inlet mehr: die ME-Bridge exportiert direkt in die
-    -- PUFFER-Kiste (config.buffers[1], per Router-UI gewaehlt). Der
-    -- Sorter sitzt physisch an dieser Kiste -- sobald seine Default-
-    -- Farbe gesetzt ist, uebernimmt Mekanism selbst den Weitertransport
-    -- zum farbigen Logistical Transporter und damit zum Reprocessor.
+    -- sorter_chest: die SORTER-KISTE -- die ME-Bridge exportiert direkt
+    -- dorthin (per Router-UI gewaehlt). Der Sorter sitzt physisch an
+    -- dieser Kiste -- sobald seine Default-Farbe gesetzt ist, uebernimmt
+    -- Mekanism selbst den Weitertransport zum farbigen Logistical
+    -- Transporter und damit zum Reprocessor. Kein Default -- muss ueber
+    -- das Router-UI gewaehlt werden (siehe config_normalizer.lua's Warnung).
+    sorter_chest       = nil,
     waste_item         = "bigreactors:cyanite_ingot",
     feed_amount        = 2,      -- Items pro Befüllung (Minimum zum Arbeiten)
     interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befüllungen
@@ -61,13 +67,13 @@ local CONFIG = {
     --           Router-UI zuweisbar (nodes/reprocessor/color_router_ui.lua)
     -- { label = "Reprocessor A", color = "RED" },
     targets            = {},
-    -- chest: optionale zweite Sammel-Kiste fuer rohes Cyanit, unabhaengig
-    -- von der Reprocessor-Rotation oben -- eigener An/Aus-Schalter + eigene
-    -- Ziel-Peripherie, per Router-UI einstellbar
-    -- (nodes/reprocessor/color_router_ui.lua). Laeuft NICHT ueber den
-    -- Sorter/eine Farbe, sondern direkt per ME-Bridge/Wired-Modem-Export
-    -- an "target" -- eigenes zufaelliges Intervall, unabhaengig davon
-    -- ob/wann Reprocessoren befuellt werden.
+    -- chest: die optionale ZUSATZ-KISTE fuer rohes Cyanit -- ANDERE Kiste
+    -- als sorter_chest oben, unabhaengig von der Reprocessor-Rotation --
+    -- eigener An/Aus-Schalter + eigene Ziel-Peripherie, per Router-UI
+    -- einstellbar (nodes/reprocessor/color_router_ui.lua). Laeuft NICHT
+    -- ueber den Sorter/eine Farbe, sondern direkt per ME-Bridge/Wired-
+    -- Modem-Export an "target" -- eigenes zufaelliges Intervall,
+    -- unabhaengig davon ob/wann Reprocessoren befuellt werden.
     chest = {
       enabled = false,
       target  = nil,

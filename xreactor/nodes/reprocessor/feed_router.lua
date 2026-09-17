@@ -8,16 +8,16 @@
 --
 -- Routing läuft über einen Mekanism Logistical Sorter statt über eine
 -- Ventil-Baum-Topologie: die ME-Bridge exportiert IMMER in dieselbe
--- PUFFER-Kiste (config.buffers[1], per Router-UI gewählt -- eine normale
--- Inventar-Peripherie, keine ME-Peripherie). Der Sorter sitzt physisch an
--- dieser Kiste; vor jedem Export wird seine Default-Farbe
+-- SORTER-KISTE (config.feed.sorter_chest, per Router-UI gewählt -- eine
+-- normale Inventar-Peripherie, keine ME-Peripherie). Der Sorter sitzt
+-- physisch an dieser Kiste; vor jedem Export wird seine Default-Farbe
 -- (adapters/logistical_sorter.lua) auf die des aktuellen Ziels gesetzt.
 -- Ab dann übernimmt Mekanism selbst, automatisch, ohne weitere Computer-
 -- Aktion: der farbige Logistical Transporter zieht das Item aus der
 -- Kiste durch den Sorter zum passenden Reprocessor. Dadurch entfällt die
 -- Pfad-öffnen/liefern/schließen-Zustandsmaschine komplett — ein Feed ist
 -- für den Computer ein einziger synchroner Schritt (Farbe setzen,
--- ME-Bridge -> Puffer-Kiste exportieren).
+-- ME-Bridge -> Sorter-Kiste exportieren).
 --
 -- Config (config.feed):
 --   enabled            = true/false
@@ -25,6 +25,9 @@
 --   sorter             = "logistical_sorter_0"  -- Logistical Sorter, dessen
 --                                                  Default-Farbe pro Feed
 --                                                  gesetzt wird
+--   sorter_chest       = nil  -- die Kiste, an der der Sorter physisch sitzt
+--                                 (ME-Bridge-Exportziel), per Router-UI
+--                                 gewählt (nodes/reprocessor/color_router_ui.lua)
 --   waste_item         = "bigreactors:cyanite_ingot"
 --   feed_amount        = 2          -- Items pro Befüllung
 --   interval_min_s     = 20         -- zufälliges Intervall: min..max Sekunden
@@ -38,13 +41,14 @@
 --   -- (Mekanism EnumColor) -- per Router-UI zugewiesen, siehe
 --   -- nodes/reprocessor/color_router_ui.lua.
 --   chest = { enabled = false, target = nil }
---   -- Optionale zweite Sammel-Kiste für rohes Cyanit (für den Fall, dass
---   -- man Cyanit unverarbeitet haben möchte statt es an einen Reprocessor
---   -- zu liefern) -- eigener An/Aus-Schalter, läuft auf ihrem eigenen
---   -- zufälligen Intervall, UNABHÄNGIG von der Reprocessor-Rotation oben.
---   -- Läuft NICHT über den Sorter/eine Farbe -- "target" ist der Name der
---   -- Kisten-Peripherie direkt, und wird per ME-Bridge/Wired-Modem-Export
---   -- direkt dorthin geliefert (siehe feed_chest()).
+--   -- Optionale ZUSATZ-KISTE für rohes Cyanit (für den Fall, dass man
+--   -- Cyanit unverarbeitet haben möchte statt es an einen Reprocessor zu
+--   -- liefern) -- ANDERE Kiste als sorter_chest oben, eigener An/Aus-
+--   -- Schalter, läuft auf ihrem eigenen zufälligen Intervall, UNABHÄNGIG
+--   -- von der Reprocessor-Rotation oben. Läuft NICHT über den Sorter/eine
+--   -- Farbe -- "target" ist der Name der Kisten-Peripherie direkt, und
+--   -- wird per ME-Bridge/Wired-Modem-Export direkt dorthin geliefert
+--   -- (siehe feed_chest()).
 
 local logistical_sorter = require("adapters.logistical_sorter")
 local me_bridge_compat = require("core.me_bridge_compat")
@@ -217,25 +221,23 @@ local function feed_one(self, cfg)
   end
 
   -- Die ME-Bridge exportiert NICHT mehr direkt zum Sorter/Transporter --
-  -- sie befuellt die PUFFER-Kiste (config.buffers[1], per Router-UI
+  -- sie befuellt die SORTER-KISTE (config.feed.sorter_chest, per Router-UI
   -- gewaehlt). Der Sorter sitzt physisch an dieser Kiste: sobald seine
   -- Default-Farbe gesetzt ist, uebernimmt Mekanism selbst (automatisch,
   -- keine weitere Computer-Aktion) den Weitertransport Kiste -> farbiger
   -- Transporter -> Reprocessor.
-  local buffer_name = (self.config.buffers or {})[1]
-  if type(buffer_name) ~= "string" or buffer_name == "" then
-    self.warn_once("no_buffer", "FeedRouter: keine Puffer-Kiste konfiguriert, Feed übersprungen")
+  local sorter_chest_name = cfg.sorter_chest
+  if type(sorter_chest_name) ~= "string" or sorter_chest_name == "" then
+    self.warn_once("no_sorter_chest", "FeedRouter: keine Sorter-Kiste konfiguriert, Feed übersprungen")
     return
   end
-  -- Ein konfigurierter Name allein reicht nicht -- config.buffers[1] kann
-  -- immer noch der ausgelieferte Platzhalter-Default ("chemical_tank_0",
-  -- siehe config.lua's DEFAULT_BUFFERS) sein, wenn der Betreiber die
-  -- PUFFER-Seite im Router-UI noch nie geoeffnet hat. Ohne diesen Check
-  -- versucht export_to() stumm gegen eine nicht existierende Peripherie
-  -- und scheitert nur mit einem generischen "export failed" (feed_fail) --
-  -- diese Warnung benennt die eigentliche Ursache klar.
-  if not peripheral.isPresent(buffer_name) then
-    self.warn_once("buffer_abs", "FeedRouter: Puffer-Kiste nicht gefunden: " .. tostring(buffer_name) .. ", Feed übersprungen (im Router-UI unter PUFFER die echte Kiste waehlen)")
+  -- Ein konfigurierter Name allein reicht nicht -- die Kiste kann entfernt/
+  -- umbenannt worden sein. Ohne diesen Check versucht export_to() stumm
+  -- gegen eine nicht existierende Peripherie und scheitert nur mit einem
+  -- generischen "export failed" (feed_fail) -- diese Warnung benennt die
+  -- eigentliche Ursache klar.
+  if not peripheral.isPresent(sorter_chest_name) then
+    self.warn_once("sorter_chest_abs", "FeedRouter: Sorter-Kiste nicht gefunden: " .. tostring(sorter_chest_name) .. ", Feed übersprungen (im Router-UI die SORTER-KISTE neu waehlen)")
     return
   end
 
@@ -260,7 +262,7 @@ local function feed_one(self, cfg)
     return
   end
 
-  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, buffer_name)
+  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, sorter_chest_name)
   local err = nil
   if not ok then err = result; result = nil end
   local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
@@ -289,16 +291,16 @@ local function feed_chest(self, cfg)
   local chest = cfg.chest
   if not chest or chest.enabled ~= true then return end
   if type(chest.target) ~= "string" or chest.target == "" then
-    self.warn_once("chest_no_target", "FeedRouter: Kiste aktiv, aber kein Ziel-Peripheral gesetzt, übersprungen")
+    self.warn_once("chest_no_target", "FeedRouter: ZUSATZ-KISTE aktiv, aber kein Ziel-Peripheral gesetzt, übersprungen")
     return
   end
-  -- Gleicher Praesenz-Check wie fuer die PUFFER-Kiste (feed_one() oben) --
+  -- Gleicher Praesenz-Check wie fuer die SORTER-KISTE (feed_one() oben) --
   -- ein konfigurierter Name allein ist kein Beweis, dass die Peripherie
   -- noch existiert (entfernt/umbenannt), sonst scheitert der Export nur
   -- mit einer generischen "export failed"-Warnung statt einer klaren
   -- Diagnose.
   if not peripheral.isPresent(chest.target) then
-    self.warn_once("chest_abs", "FeedRouter: Kisten-Ziel nicht gefunden: " .. tostring(chest.target) .. ", übersprungen")
+    self.warn_once("chest_abs", "FeedRouter: ZUSATZ-KISTE-Ziel nicht gefunden: " .. tostring(chest.target) .. ", übersprungen")
     return
   end
 

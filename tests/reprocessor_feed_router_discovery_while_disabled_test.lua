@@ -40,10 +40,9 @@ local feed_router_lib = require('nodes.reprocessor.feed_router')
 local export_calls = 0
 local feed = feed_router_lib.new({
   config = {
-    buffers = { 'puffer_chest_0' },
     feed = {
       enabled = false, -- deliberately still disabled
-      me_bridge = 'me_bridge', sorter = 'sorter_0',
+      me_bridge = 'me_bridge', sorter = 'sorter_0', sorter_chest = 'puffer_chest_0',
       waste_item = 'x', feed_amount = 2, discovery_interval = 60,
       targets = { { label = 'Reprocessor A', color = 'RED' } },
     },

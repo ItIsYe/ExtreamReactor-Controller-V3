@@ -72,10 +72,10 @@ end
 local warnings = {}
 local feed = feed_router_lib.new({
   config = {
-    buffers = { 'puffer_chest_0' },
     feed = {
       enabled = true, waste_item = 'x', feed_amount = 2,
       interval_min_s = 10, interval_max_s = 10, discovery_interval = 9999,
+      sorter_chest = 'puffer_chest_0',
       targets = { { label = 'Reprocessor A', color = 'RED' } },
       chest = { enabled = false, target = nil },
     },

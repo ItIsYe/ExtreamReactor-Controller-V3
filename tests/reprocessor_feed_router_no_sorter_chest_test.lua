@@ -1,18 +1,17 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Regression coverage for feed_router.lua's architecture change (2026-09-17,
--- confirmed against the operator's real build): the ME-Bridge now exports
--- into the PUFFER buffer chest (config.buffers[1]) instead of a shared
--- export_inlet -- Mekanism's own Sorter+Transporter mechanics take over
--- from the chest automatically. Without a configured buffer chest, feed_
--- one() must skip cleanly with a dedicated warning, not crash or export to
--- a nil/empty destination.
+-- Regression coverage for feed_router.lua's architecture: the ME-Bridge
+-- exports into the SORTER-KISTE (config.feed.sorter_chest) instead of a
+-- shared export_inlet -- Mekanism's own Sorter+Transporter mechanics take
+-- over from the chest automatically. Without a configured Sorter-Kiste,
+-- feed_one() must skip cleanly with a dedicated warning, not crash or
+-- export to a nil/empty destination.
 
 package.loaded['adapters.logistical_sorter'] = nil
 package.loaded['nodes.reprocessor.feed_router'] = nil
 
 _G.peripheral = {
-  isPresent = function(name) return name == 'sorter_0' or name == 'puffer_chest_0' end,
+  isPresent = function(name) return name == 'sorter_0' or name == 'sorter_chest_0' end,
   getMethods = function(name)
     if name == 'sorter_0' then return { 'setDefaultColor', 'getDefaultColor' } end
     return {}
@@ -38,12 +37,12 @@ local logistical_sorter = require('adapters.logistical_sorter')
 local feed_router_lib = require('nodes.reprocessor.feed_router')
 
 local export_calls = 0
-local function make_feed(buffers)
+local function make_feed(sorter_chest)
   local feed = feed_router_lib.new({
     config = {
-      buffers = buffers,
       feed = {
         enabled = true, waste_item = 'x', feed_amount = 2,
+        sorter_chest = sorter_chest,
         targets = { { label = 'Reprocessor A', color = 'RED' } },
       },
     },
@@ -57,8 +56,8 @@ local function make_feed(buffers)
   return feed
 end
 
--- 1) No buffers configured at all (nil) -- must skip with a warning, no
---    export, no crash.
+-- 1) No Sorter-Kiste configured at all (nil) -- must skip with a warning,
+--    no export, no crash.
 do
   local warnings = {}
   local feed = make_feed(nil)
@@ -72,52 +71,49 @@ do
     feed._state.next_feed_ts = os.epoch('utc') - 1 -- force due
     feed:tick()
   end)
-  assert_true(ok, 'a missing buffer list must not crash the tick')
-  assert_eq(export_calls, 0, 'no export must happen without a configured buffer')
-  assert_true(warnings['no_buffer'] ~= nil, 'expected a dedicated no_buffer warning')
+  assert_true(ok, 'a missing Sorter-Kiste must not crash the tick')
+  assert_eq(export_calls, 0, 'no export must happen without a configured Sorter-Kiste')
+  assert_true(warnings['no_sorter_chest'] ~= nil, 'expected a dedicated no_sorter_chest warning')
 end
 
--- 2) Empty buffers list ({}) -- same as nil, must skip cleanly.
+-- 2) Empty-string Sorter-Kiste -- same as nil, must skip cleanly.
 do
   export_calls = 0
   local warnings = {}
-  local feed = make_feed({})
+  local feed = make_feed('')
   feed.warn_once = function(key, msg) warnings[key] = msg end
   feed._state.last_refresh = os.epoch('utc')
   feed._state.next_feed_ts = os.epoch('utc') - 1
   feed:tick()
-  assert_eq(export_calls, 0, 'no export must happen with an empty buffer list')
-  assert_true(warnings['no_buffer'] ~= nil, 'expected a dedicated no_buffer warning for an empty list too')
+  assert_eq(export_calls, 0, 'no export must happen with an empty Sorter-Kiste name')
+  assert_true(warnings['no_sorter_chest'] ~= nil, 'expected a dedicated no_sorter_chest warning for an empty name too')
 end
 
--- 3) A real buffer configured -- feed proceeds normally, exporting to it.
+-- 3) A real Sorter-Kiste configured -- feed proceeds normally, exporting to it.
 do
   export_calls = 0
-  local feed = make_feed({ 'puffer_chest_0' })
+  local feed = make_feed('sorter_chest_0')
   feed._state.last_refresh = os.epoch('utc')
   feed._state.next_feed_ts = os.epoch('utc') - 1
   feed:tick()
-  assert_eq(export_calls, 1, 'a configured buffer must let the feed proceed')
+  assert_eq(export_calls, 1, 'a configured Sorter-Kiste must let the feed proceed')
 end
 
--- 4) A buffer NAME is configured, but no such peripheral is actually
---    present (e.g. still the shipped default "chemical_tank_0", or a typo)
---    -- must skip cleanly with a DEDICATED "buffer not found" warning, not
---    the generic feed_fail from a blind export attempt. Real-world case:
---    the operator never opened the Router UI's PUFFER page, so config.
---    buffers[1] is still config.lua's DEFAULT_BUFFERS placeholder, which
---    never physically existed in their build.
+-- 4) A Sorter-Kiste NAME is configured, but no such peripheral is actually
+--    present (removed/renamed/typo) -- must skip cleanly with a DEDICATED
+--    "not found" warning, not the generic feed_fail from a blind export
+--    attempt.
 do
   export_calls = 0
   local warnings = {}
-  local feed = make_feed({ 'chemical_tank_0' }) -- not in the isPresent() allowlist above
+  local feed = make_feed('typo_chest') -- not in the isPresent() allowlist above
   feed.warn_once = function(key, msg) warnings[key] = msg end
   feed._state.last_refresh = os.epoch('utc')
   feed._state.next_feed_ts = os.epoch('utc') - 1
   local ok = pcall(function() feed:tick() end)
-  assert_true(ok, 'a configured-but-absent buffer must not crash the tick')
-  assert_eq(export_calls, 0, 'no export must be attempted against a non-existent buffer peripheral')
-  assert_true(warnings['buffer_abs'] ~= nil, 'expected a dedicated buffer_abs warning distinct from no_buffer')
+  assert_true(ok, 'a configured-but-absent Sorter-Kiste must not crash the tick')
+  assert_eq(export_calls, 0, 'no export must be attempted against a non-existent Sorter-Kiste peripheral')
+  assert_true(warnings['sorter_chest_abs'] ~= nil, 'expected a dedicated sorter_chest_abs warning distinct from no_sorter_chest')
 end
 
-print('reprocessor_feed_router_no_buffer_test.lua: ok')
+print('reprocessor_feed_router_no_sorter_chest_test.lua: ok')

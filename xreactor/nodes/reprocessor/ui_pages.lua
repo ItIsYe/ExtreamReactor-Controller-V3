@@ -88,20 +88,23 @@ function M.new(opts)
     if w >= 54 then
       local gap = 1
       local cw = math.floor((w - 4 - gap * 2) / 3)
-      mux.metric_card(mon, 2, y_at(2), cw, 4, { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" })
+      mux.metric_card(mon, 2, y_at(2), cw, 4, { label = "MASCHINEN", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" })
       mux.metric_card(mon, 2 + cw + gap, y_at(2), cw, 4, { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = active > 0 and "OK" or "LIMITED", icon = "recycle" })
       mux.metric_card(mon, 2 + (cw + gap) * 2, y_at(2), cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
     else
       mux.kpi_strip(mon, 2, y_at(2), w - 3, {
-        { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" },
+        { label = "MASCHINEN", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" },
         { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = "OK", icon = "recycle" },
         { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
       })
     end
 
-    section_arrow(mon, 2, y_at(7), w - 3, "PUFFER AUSLASTUNG", key, "storage")
+    -- "MASCHINEN" = echte Reprocessor-Maschinen-Peripherals mit process()
+    -- (config.buffers, opt-in) -- NICHT die SORTER-KISTE oder die ZUSATZ-
+    -- KISTE, die beide keine Maschinen sind und hier nie auftauchen.
+    section_arrow(mon, 2, y_at(7), w - 3, "MASCHINEN-AUSLASTUNG", key, "storage")
     mux.outlined_progress(mon, 2, y_at(9), w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
-    mux.data_row(mon, 2, y_at(10), w - 3, { label = short(stored) .. " / " .. short(capacity), value = "BUFFER", status = "text", icon = "storage" })
+    mux.data_row(mon, 2, y_at(10), w - 3, { label = short(stored) .. " / " .. short(capacity), value = "MASCHINEN", status = "text", icon = "storage" })
 
     if h >= 20 then
       local cw = math.floor((w - 5 - 3) / 4)
@@ -130,7 +133,7 @@ function M.new(opts)
     local ratio = capacity > 0 and math.max(0, math.min(1, stored / capacity)) or 0
 
     local top = {
-      { label = "BUFFER", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" },
+      { label = "MASCHINEN", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" },
       { label = "ACTIVE", value = tostring(active), status = active > 0 and "OK" or "LIMITED", icon = "recycle" },
       { label = "FILL", value = string.format("%.0f%%", ratio * 100), status = "LIMITED", icon = "storage" },
       { label = "STANDBY", value = p.standby and "YES" or "NO", status = p.standby and "LIMITED" or "OK", icon = "config" },
@@ -143,13 +146,13 @@ function M.new(opts)
       mux.kpi_strip(mon, 2, 5, w - 3, top)
     end
 
-    section_arrow(mon, 2, 10, w - 3, "BUFFER / PROCESS STATE", "LIMITED", "recycle")
+    section_arrow(mon, 2, 10, w - 3, "MASCHINEN / PROZESS-STATUS", "LIMITED", "recycle")
     local y = 12
     for _, b in ipairs(buffers) do
       if y > h - 7 then break end
       local key = state_key(b.process_state)
       local pct = tonumber(b.percent) and math.max(0, math.min(1, tonumber(b.percent) / 100)) or 0
-      mux.card(mon, 2, y, w - 3, 6, { title = tostring(b.id or "BUFFER") .. "   " .. tostring(b.process_state or "unknown"):upper(), status = key, icon = "recycle" })
+      mux.card(mon, 2, y, w - 3, 6, { title = tostring(b.id or "MASCHINE") .. "   " .. tostring(b.process_state or "unknown"):upper(), status = key, icon = "recycle" })
       mux.kpi_strip(mon, 4, y + 1, w - 7, {
         { label = "STORED", value = short(b.stored), status = key, icon = "storage" },
         { label = "CAP", value = short(b.capacity), status = "LIMITED", icon = "storage" },
@@ -160,14 +163,18 @@ function M.new(opts)
       y = y + 7
     end
 
-    if #buffers == 0 then mux.warning_box(mon, 2, 12, w - 3, { "Keine Buffer gefunden", "Discovery / Binding pruefen" }, "WARNING") end
+    -- config.buffers ist ein opt-in Feature fuer echte Reprocessor-
+    -- Maschinen-Peripherals -- standardmaessig leer, also KEINE Warnung
+    -- ("nicht gefunden"), sondern nur ein Hinweis, dass es nicht
+    -- konfiguriert ist.
+    if #buffers == 0 then mux.warning_box(mon, 2, 12, w - 3, { "Keine Reprocessor-Maschinen konfiguriert", "(optional, config.buffers)" }, "LIMITED") end
     return mux.footer_nav(mon, h, w, { center = "PROCESS DETAILS" })
   end
 
   -- "Was wird gebraucht, was ist verbunden" -- fasst alle fuer die
   -- Reprocessor-Rotation noetigen Peripherals/Verbindungen (ME-Bridge,
-  -- Sorter, PUFFER-Kiste, optionale KISTE, Wireless-Modem, Monitor) in
-  -- einer einzigen Liste zusammen, statt das aus Buffer-/Registry-/Feed-
+  -- Sorter, SORTER-KISTE, optionale ZUSATZ-KISTE, Wireless-Modem, Monitor)
+  -- in einer einzigen Liste zusammen, statt das aus Registry-/Feed-
   -- Einzelanzeigen zusammenraten zu muessen (main.lua's build_requirements()).
   local function append_requirement_rows(rows, req)
     if not req then return end
@@ -177,9 +184,9 @@ function M.new(opts)
     end
     add("ME-BRIDGE", req.me_bridge, req.me_bridge_name)
     add("SORTER", req.sorter, req.sorter_name)
-    add("PUFFER", req.buffer_present, req.buffer_name)
+    add("SORTER-KISTE", req.sorter_chest_present, req.sorter_chest_name)
     if req.chest_enabled then
-      add("KISTE", req.chest_present, req.chest_target)
+      add("ZUSATZ-KISTE", req.chest_present, req.chest_target)
     end
     add("WIRELESS-MODEM", req.wireless_modem)
     rows[#rows + 1] = { text = "MONITOR: " .. (req.monitor_is_term and "TERMINAL (Fallback)" or (req.monitor and "OK" or "FEHLT")),

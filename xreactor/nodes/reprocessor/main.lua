@@ -113,6 +113,7 @@ do
       config.feed = config.feed or {}
       config.feed.targets = content.targets or {}
       if content.sorter then config.feed.sorter = content.sorter end
+      if content.sorter_chest ~= nil then config.feed.sorter_chest = content.sorter_chest end
       if content.enabled ~= nil then config.feed.enabled = content.enabled end
       if content.chest then config.feed.chest = content.chest end
     end
@@ -169,56 +170,44 @@ end
 
 local function cache(bound_names) buffers = utils.cache_peripherals(bound_names or {}) end
 
--- Shared with buffer_candidate_names() below (the Router UI's live picker)
--- so both agree on exactly what counts as a usable buffer: an item
--- inventory (list()+size(), e.g. a chest/barrel/ME interface -- NOT
--- limited to fluid/chemical tanks despite the historical default name
--- "chemical_tank_0") or a waste-style tank (getWaste()/getItemCount()).
+-- config.buffers ist NICHT die Sorter-Kiste (config.feed.sorter_chest,
+-- siehe unten) oder die optionale ZUSATZ-KISTE (config.feed.chest.target) --
+-- beide sind einfache Kisten ohne process()-Methode. config.buffers ist
+-- ausschliesslich fuer echte Reprocessor-Maschinen-Peripherals mit process()
+-- gedacht (Kapazitaets-/Prozess-Anzeige auf Overview/Details). Eine reine
+-- Kiste, die hier auftaucht, wird von process_buffers() (unten) IMMER als
+-- "unsupported" markiert -- sie hat schlicht kein process(). Deshalb werden
+-- die beiden bekannten Kisten unten explizit ausgeschlossen, statt sie ueber
+-- den Auto-Erkennungs-Fallback versehentlich hier landen zu lassen.
 local function is_buffer_method_set(method_set)
   return (method_set.list and method_set.size) or method_set.getWaste or method_set.getItemCount
 end
 
--- Live candidates for the Router UI's PUFFER picker -- every currently
--- present peripheral whose method set matches is_buffer_method_set(),
--- same exclusion list as color_router_ui.lua's own peripheral pickers.
-local BUFFER_EXCLUDED_TYPES = { monitor = true, modem = true }
-local function buffer_candidate_names()
-  local out = {}
-  if type(peripheral) ~= "table" or type(peripheral.getNames) ~= "function" then return out end
-  for _, name in ipairs(peripheral.getNames() or {}) do
-    local ok_type, kind = pcall(peripheral.getType, name)
-    if not (ok_type and BUFFER_EXCLUDED_TYPES[kind]) then
-      local ok_methods, methods = pcall(peripheral.getMethods, name)
-      if ok_methods and type(methods) == "table" then
-        local method_set = {}
-        for _, m in ipairs(methods) do method_set[m] = true end
-        if is_buffer_method_set(method_set) then out[#out + 1] = name end
-      end
-    end
+local function known_chest_names()
+  local fd = config.feed or {}
+  local names = {}
+  if type(fd.sorter_chest) == "string" and fd.sorter_chest ~= "" then names[fd.sorter_chest] = true end
+  if type(fd.chest) == "table" and type(fd.chest.target) == "string" and fd.chest.target ~= "" then
+    names[fd.chest.target] = true
   end
-  table.sort(out)
-  return out
-end
-
--- Persists config.buffers (the Router UI's PUFFER list) to the protected
--- user config file, same write-then-apply pattern as RT's
--- set_reactor_fill_target -- must survive a reboot/update like any other
--- persisted setting.
-local function write_buffers(list)
-  config.buffers = list
-  local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
-  if not ok_write then
-    utils.log(CONFIG.LOG_PREFIX, "PUFFER-Liste: Persistierung fehlgeschlagen: " .. tostring(werr), "WARN")
-  end
-  return ok_write == true, werr
+  return names
 end
 
 local function discover()
   local names
   local registry_devices
+  local excluded = known_chest_names()
   local allow_set = {}
-  for _, name in ipairs(config.buffers or {}) do allow_set[name] = true end
-  local allow_all = #config.buffers == 0
+  for _, name in ipairs(config.buffers or {}) do
+    if not excluded[name] then allow_set[name] = true end
+  end
+  -- KEIN Auto-Erkennungs-Fallback mehr, wenn config.buffers leer ist:
+  -- vorher wurde dann JEDE erkannte Kiste/Tank automatisch als "Buffer"
+  -- (= erwarteter Reprocessor-Prozess-Port) gebunden und zeigte staendig
+  -- "unsupported", weil eine Kiste nie process() hat. config.buffers ist
+  -- ein reines Opt-in-Feature fuer echte Reprocessor-Maschinen-Peripherals --
+  -- ohne explizite Eintraege wird hier nichts gebunden.
+  local allow_all = false
   local monitor_entry = monitor_adapter.find(nil, "largest", 0.5, CONFIG.LOG_PREFIX)
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
@@ -288,9 +277,9 @@ end
 -- Einzelanzeigen (Buffer/Registry/Feed) zusammenraten zu muessen.
 local function build_requirements(feed_summary)
   local fd = config.feed or {}
-  local buffer_name = (config.buffers or {})[1]
-  local buffer_present = type(buffer_name) == "string" and buffer_name ~= ""
-    and peripheral.isPresent(buffer_name) == true
+  local sorter_chest_name = fd.sorter_chest
+  local sorter_chest_present = type(sorter_chest_name) == "string" and sorter_chest_name ~= ""
+    and peripheral.isPresent(sorter_chest_name) == true
   local chest = fd.chest or {}
   local chest_present = chest.enabled == true and type(chest.target) == "string" and chest.target ~= ""
     and peripheral.isPresent(chest.target) == true
@@ -303,8 +292,8 @@ local function build_requirements(feed_summary)
     me_bridge_name = feed_summary.bridge_name,
     sorter         = feed_summary.sorter_bound == true,
     sorter_name    = feed_summary.sorter_name,
-    buffer_name    = buffer_name,
-    buffer_present = buffer_present,
+    sorter_chest_name    = sorter_chest_name,
+    sorter_chest_present = sorter_chest_present,
     chest_enabled  = chest.enabled == true,
     chest_target   = chest.target,
     chest_present  = chest_present,
@@ -496,8 +485,6 @@ get_color_router = function()
     color_router_instance = color_router_ui_lib.new({
       config = config, config_path = "/xreactor_config/reproc_targets.lua",
       write_config = utils.write_config,
-      get_buffer_candidates = buffer_candidate_names,
-      write_buffers = write_buffers,
       log = function(level, msg) utils.log("REPROC", msg, level) end,
     })
   end

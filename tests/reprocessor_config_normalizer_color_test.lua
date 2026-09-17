@@ -119,9 +119,9 @@ local config2 = { feed = { targets = {} } }
 config_normalizer.normalize(config2, defaults, function() end, utils)
 assert_eq(config2.feed.sorter, 'logistical_sorter_0')
 
--- buffers[1] is the real ME-Bridge export target since the PUFFER rework
+-- feed.sorter_chest (die SORTER-KISTE) is the real ME-Bridge export target
 -- (feed_router.lua) -- with Reprocessor targets actually configured but no
--- PUFFER chest chosen yet, this must warn explicitly (mirrors FUEL's
+-- Sorter-Kiste chosen yet, this must warn explicitly (mirrors FUEL's
 -- logistics.export_chest "missing; unsafe/unconfigured" warning), not stay
 -- silent behind a made-up placeholder default.
 local empty_buffers_defaults = {
@@ -140,17 +140,17 @@ local warnings3 = {}
 config_normalizer.normalize(config3, empty_buffers_defaults, function(msg) warnings3[#warnings3 + 1] = msg end, utils)
 local found_buffer_warning = false
 for _, w in ipairs(warnings3) do
-  if w:find('buffers%[1%]') then found_buffer_warning = true end
+  if w:find('sorter_chest') then found_buffer_warning = true end
 end
-assert_eq(found_buffer_warning, true, 'targets configured without any PUFFER buffer must produce a dedicated warning')
+assert_eq(found_buffer_warning, true, 'targets configured without any Sorter-Kiste must produce a dedicated warning')
 
--- No targets configured at all -- missing buffers must not warn (nothing
--- to feed yet, matching FUEL's own gate on #reactors > 0).
+-- No targets configured at all -- missing sorter_chest must not warn
+-- (nothing to feed yet, matching FUEL's own gate on #reactors > 0).
 local config4 = { buffers = {}, feed = { targets = {} } }
 local warnings4 = {}
 config_normalizer.normalize(config4, empty_buffers_defaults, function(msg) warnings4[#warnings4 + 1] = msg end, utils)
 for _, w in ipairs(warnings4) do
-  assert_eq(w:find('buffers%[1%]') == nil, true, 'no targets configured yet must not warn about a missing PUFFER buffer')
+  assert_eq(w:find('sorter_chest') == nil, true, 'no targets configured yet must not warn about a missing Sorter-Kiste')
 end
 
 print('reprocessor_config_normalizer_color_test.lua: ok')
