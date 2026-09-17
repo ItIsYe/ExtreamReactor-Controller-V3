@@ -47,6 +47,13 @@ local config = {
       { label = 'Reprocessor A', color = 'aqua' },     -- valid, lowercase -> must be uppercased
       { label = 'Reprocessor B', color = 'NOT_A_COLOR' }, -- invalid -> warn, left in place
       { label = 'Reprocessor C' },                      -- missing color -> warn, left in place
+      -- Saved under a name removed from adapters/logistical_sorter.lua's
+      -- COLORS by the 2026-09-17 fix (confirmed against the operator's
+      -- real sorter) -- must be migrated to its replacement, not treated
+      -- as invalid: an update must never silently break/lose an
+      -- already-configured route.
+      { label = 'Reprocessor D', color = 'DARK_BLUE' },
+      { label = 'Reprocessor E', color = 'bright_pink' }, -- lowercase legacy name too
     },
     chest = { enabled = true, target = 'chest_0' },
   },
@@ -65,6 +72,14 @@ assert_eq(found_b, true, 'an invalid color must produce a warning naming targets
 assert_eq(found_c, true, 'a missing color must produce a warning naming targets[3]')
 assert_eq(config.feed.targets[2].color, 'NOT_A_COLOR', 'an invalid color is left in place, not silently rewritten')
 assert_eq(config.feed.targets[3].color, nil, 'a missing color stays nil, not defaulted to some color')
+
+assert_eq(config.feed.targets[4].color, 'BLUE', 'a legacy DARK_BLUE must be migrated to its current replacement BLUE')
+assert_eq(config.feed.targets[5].color, 'PINK', 'a legacy bright_pink must be migrated to its current replacement PINK (case-insensitive)')
+local found_d_migration = false
+for _, w in ipairs(warnings) do
+  if w:find('targets%[4%]') and w:find('migrated') then found_d_migration = true end
+end
+assert_eq(found_d_migration, true, 'a legacy color migration must produce a "migrated" warning naming targets[4], not an "invalid" one')
 
 assert_eq(config.feed.chest.enabled, true, 'chest.enabled must pass through unchanged when already valid')
 assert_eq(config.feed.chest.target, 'chest_0', 'chest.target must pass through unchanged when already valid')

@@ -53,8 +53,20 @@ function M.normalize(config_values, defaults, add_warning, utils)
       add_warning(string.format("feed.targets[%d] missing label", i))
     end
     if not logistical_sorter.is_valid_color(t.color) then
-      add_warning(string.format("feed.targets[%d] (%s) invalid/missing color; feeding for this target will be skipped until fixed",
-        i, tostring(t.label or "?")))
+      -- A color saved under a since-removed legacy name (e.g. a config
+      -- edition update tightened adapters/logistical_sorter.lua's COLORS
+      -- to the confirmed-correct list) must be upgraded to its current
+      -- replacement instead of the route silently breaking on the next
+      -- boot -- an already-configured route must survive an update.
+      local migrated = logistical_sorter.migrate_legacy_color(t.color)
+      if migrated then
+        add_warning(string.format("feed.targets[%d] (%s) color %s migrated to %s",
+          i, tostring(t.label or "?"), tostring(t.color), migrated))
+        t.color = migrated
+      else
+        add_warning(string.format("feed.targets[%d] (%s) invalid/missing color; feeding for this target will be skipped until fixed",
+          i, tostring(t.label or "?")))
+      end
     else
       t.color = t.color:upper()
     end

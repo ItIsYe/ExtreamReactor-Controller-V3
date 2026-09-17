@@ -45,6 +45,37 @@ for _, c in ipairs(adapter.COLORS) do
   seen[c] = true
 end
 
+-- Exactly the operator's real in-game sorter list (2026-09-17), taken
+-- over verbatim: black/blue/green/cyan/dark red/purple/orange/light
+-- grey/grey/light blue/lime/aqua/red/magenta/yellow/white/brown/pink,
+-- plus NONE.
+local EXPECTED_COLORS = {
+  'BLACK', 'BLUE', 'GREEN', 'CYAN', 'DARK_RED', 'PURPLE', 'ORANGE',
+  'LIGHT_GRAY', 'GRAY', 'LIGHT_BLUE', 'LIME', 'AQUA', 'RED', 'MAGENTA',
+  'YELLOW', 'WHITE', 'BROWN', 'PINK', 'NONE',
+}
+for i, expected in ipairs(EXPECTED_COLORS) do
+  assert_eq(adapter.COLORS[i], expected, 'COLORS[' .. i .. '] must match the confirmed real sorter color list')
+end
+
+-- Legacy (pre-2026-09-17, guessed/incorrect) names must migrate to their
+-- confirmed-correct replacement, so a route saved under the old list
+-- keeps working after an update.
+assert_eq(adapter.migrate_legacy_color('DARK_BLUE'), 'BLUE')
+assert_eq(adapter.migrate_legacy_color('dark_green'), 'GREEN', 'migration must be case-insensitive')
+assert_eq(adapter.migrate_legacy_color('DARK_AQUA'), 'CYAN')
+assert_eq(adapter.migrate_legacy_color('DARK_GRAY'), 'GRAY')
+assert_eq(adapter.migrate_legacy_color('INDIGO'), 'LIGHT_BLUE')
+assert_eq(adapter.migrate_legacy_color('BRIGHT_GREEN'), 'LIME')
+assert_eq(adapter.migrate_legacy_color('BRIGHT_PINK'), 'PINK')
+-- GRAY and PINK are unchanged, still-valid current names -- they must
+-- NEVER be remapped, since that would silently change which real color
+-- gets applied on the physical sorter.
+assert_eq(adapter.migrate_legacy_color('GRAY'), nil, 'GRAY is still a valid current color, must not be remapped')
+assert_eq(adapter.migrate_legacy_color('PINK'), nil, 'PINK is still a valid current color, must not be remapped')
+assert_eq(adapter.migrate_legacy_color('NOT_A_COLOR'), nil, 'an unknown name has no migration')
+assert_eq(adapter.migrate_legacy_color(nil), nil)
+
 assert_eq(adapter.is_valid_color('RED'), true, 'RED must be a valid color')
 assert_eq(adapter.is_valid_color('red'), true, 'lowercase must also validate (case-insensitive)')
 assert_eq(adapter.is_valid_color('NOT_A_COLOR'), false, 'unknown color must be invalid')
