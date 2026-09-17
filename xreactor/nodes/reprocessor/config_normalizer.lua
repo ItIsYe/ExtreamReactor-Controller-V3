@@ -45,6 +45,17 @@ function M.normalize(config_values, defaults, add_warning, utils)
     fd.discovery_interval = d.discovery_interval or 60
   end
   if type(fd.targets) ~= "table" then fd.targets = {} end
+
+  -- buffers[1] ist seit dem PUFFER-Umbau (2026-09-17) das tatsaechliche
+  -- ME-Bridge-Exportziel (siehe feed_router.lua), nicht mehr nur eine
+  -- Kapazitaets-Anzeige. Genau wie FUEL's logistics.export_chest (siehe
+  -- nodes/fuel/config_normalizer.lua) muss ein fehlendes Exportziel laut
+  -- und deutlich gewarnt werden, statt sich hinter einem Platzhalter-
+  -- Default zu verstecken, der wie eine echte Konfiguration aussieht.
+  if #fd.targets > 0 and (type((config_values.buffers or {})[1]) ~= "string" or config_values.buffers[1] == "") then
+    add_warning("buffers[1] (PUFFER-Exportziel) fehlt; Feeding bleibt deaktiviert bis im Router-UI eine Puffer-Kiste gewaehlt wurde")
+  end
+
   for i, t in ipairs(fd.targets) do
     if not t.label then
       add_warning(string.format("feed.targets[%d] missing label", i))

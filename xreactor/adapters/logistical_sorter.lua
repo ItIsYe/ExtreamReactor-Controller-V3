@@ -89,8 +89,27 @@ function sorter.migrate_legacy_color(value)
   return LEGACY_COLOR_MIGRATION[value:upper()]
 end
 
+-- setDefaultColor/getDefaultColor alone as the detection signature is
+-- fragile: Mekanism's "Requires Public Security" flag on these two
+-- specific methods (see module comment above) means peripheral.getMethods()
+-- can omit them for a Sorter whose in-game security is still at its
+-- default (non-Public) level, even though the block is physically present
+-- and fully wired -- detect() then returned nil and callers logged
+-- "Sorter nicht gefunden", hiding the real, fixable cause (a security
+-- setting) behind a message that reads like a missing/miswired
+-- peripheral. setAutoMode is NOT security-gated (nodes/valve/controller.lua
+-- already relies on exactly this method, unconditionally, to recognise a
+-- Sorter for the redstone-actuator path) and is present on every
+-- Logistical Sorter regardless of its security level, so accepting EITHER
+-- signature still only matches a real Sorter (never a chest/transporter),
+-- while making detection itself independent of the security setting that
+-- setDefaultColor()/getDefaultColor() specifically require. The actual
+-- security requirement still applies when a call is made -- see
+-- sorter.setDefaultColor() below, which surfaces that failure explicitly
+-- instead of pretending the Sorter was never found.
 local function is_sorter_method_set(methods)
-  return methods.setDefaultColor == true and methods.getDefaultColor == true
+  return (methods.setDefaultColor == true and methods.getDefaultColor == true)
+    or methods.setAutoMode == true
 end
 
 function sorter.detect(name, log_prefix)

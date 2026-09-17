@@ -6,16 +6,28 @@ local calls = {}
 local methods_by_name = {
   sorter_0 = { 'setDefaultColor', 'getDefaultColor', 'getAutoMode' },
   chest_0  = { 'list', 'size' }, -- not a sorter: must not be detected
+  -- Simulates a real Mekanism Logistical Sorter whose in-game security is
+  -- still at its default (non-Public) level: Mekanism's own "Requires
+  -- Public Security" flag on setDefaultColor/getDefaultColor means
+  -- getMethods() omits exactly those two, while setAutoMode (not security-
+  -- gated) is still listed -- see adapters/logistical_sorter.lua's comment.
+  sorter_limited = { 'setAutoMode', 'getAutoMode' },
 }
 local default_color = 'WHITE'
 
 _G.peripheral = {
   isPresent = function(name) return methods_by_name[name] ~= nil end,
   getMethods = function(name) return methods_by_name[name] end,
-  getType = function(name) return name == 'sorter_0' and 'logisticalSorter' or 'minecraft:chest' end,
+  getType = function(name)
+    if name == 'sorter_0' or name == 'sorter_limited' then return 'logisticalSorter' end
+    return 'minecraft:chest'
+  end,
   call = function(name, method, ...)
     calls[#calls + 1] = { name = name, method = method, ... }
     if method == 'setDefaultColor' then
+      if name == 'sorter_limited' then
+        error('No such method setDefaultColor (security level too low)')
+      end
       default_color = ...
       return
     end
@@ -101,5 +113,23 @@ assert_eq(color, 'AQUA', 'getDefaultColor must reflect the last set color')
 local bad_ok, bad_err = sorter.setDefaultColor('turquoise')
 assert_eq(bad_ok, false, 'an unknown color must be rejected before any peripheral call')
 assert_eq(tostring(bad_err):find('invalid_color', 1, true) ~= nil, true)
+
+-- A Sorter whose color methods are hidden by Mekanism's security flag
+-- must still be DETECTED (setAutoMode alone is enough) -- previously
+-- detect() required setDefaultColor+getDefaultColor and returned nil for
+-- this exact case, so callers logged "Sorter nicht gefunden" for a Sorter
+-- that was physically present and wired correctly, just not yet set to
+-- Public security in-game.
+local limited = adapter.detect('sorter_limited', 'TEST')
+assert_eq(limited ~= nil, true, 'a sorter exposing only setAutoMode (security-limited) must still be detected')
+assert_eq(limited.name, 'sorter_limited')
+
+-- Detection succeeding must not paper over the actual security block --
+-- calling setDefaultColor() still fails, but now with the real underlying
+-- error instead of a misleading "not found" one step earlier.
+local limited_ok, limited_err = limited.setDefaultColor('red')
+assert_eq(limited_ok, false, 'setDefaultColor must still fail against a security-limited sorter')
+assert_eq(tostring(limited_err):find('security', 1, true) ~= nil, true,
+  'the real security error must surface, not a generic/misleading failure')
 
 print('logistical_sorter_adapter_test.lua: ok')

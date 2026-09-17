@@ -3,7 +3,14 @@ local CONFIG = {
   DEFAULT_ROLE = "REPROCESSOR-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "REPROC-1", -- Default node_id used if none is set.
   DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
-  DEFAULT_BUFFERS = { "chemical_tank_0" }, -- Default buffer peripheral names.
+  -- Kein Platzhalter-Default mehr: buffers[1] ist seit dem PUFFER-Umbau das
+  -- tatsaechliche ME-Bridge-Exportziel (feed_router.lua), ein erfundener
+  -- Name wie "chemical_tank_0" wuerde wie eine echte Konfiguration
+  -- aussehen, obwohl er in keinem realen Aufbau existiert (siehe
+  -- config_normalizer.lua's buffers[1]-Warnung, analog zu FUEL's
+  -- logistics.export_chest). Leer = klar erkennbar "noch nicht
+  -- konfiguriert", per Router-UI (PUFFER-Seite) zu setzen.
+  DEFAULT_BUFFERS = {}, -- Default buffer peripheral names.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
