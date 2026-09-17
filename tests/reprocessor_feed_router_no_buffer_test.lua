@@ -12,7 +12,7 @@ package.loaded['adapters.logistical_sorter'] = nil
 package.loaded['nodes.reprocessor.feed_router'] = nil
 
 _G.peripheral = {
-  isPresent = function(name) return name == 'sorter_0' end,
+  isPresent = function(name) return name == 'sorter_0' or name == 'puffer_chest_0' end,
   getMethods = function(name)
     if name == 'sorter_0' then return { 'setDefaultColor', 'getDefaultColor' } end
     return {}
@@ -98,6 +98,26 @@ do
   feed._state.next_feed_ts = os.epoch('utc') - 1
   feed:tick()
   assert_eq(export_calls, 1, 'a configured buffer must let the feed proceed')
+end
+
+-- 4) A buffer NAME is configured, but no such peripheral is actually
+--    present (e.g. still the shipped default "chemical_tank_0", or a typo)
+--    -- must skip cleanly with a DEDICATED "buffer not found" warning, not
+--    the generic feed_fail from a blind export attempt. Real-world case:
+--    the operator never opened the Router UI's PUFFER page, so config.
+--    buffers[1] is still config.lua's DEFAULT_BUFFERS placeholder, which
+--    never physically existed in their build.
+do
+  export_calls = 0
+  local warnings = {}
+  local feed = make_feed({ 'chemical_tank_0' }) -- not in the isPresent() allowlist above
+  feed.warn_once = function(key, msg) warnings[key] = msg end
+  feed._state.last_refresh = os.epoch('utc')
+  feed._state.next_feed_ts = os.epoch('utc') - 1
+  local ok = pcall(function() feed:tick() end)
+  assert_true(ok, 'a configured-but-absent buffer must not crash the tick')
+  assert_eq(export_calls, 0, 'no export must be attempted against a non-existent buffer peripheral')
+  assert_true(warnings['buffer_abs'] ~= nil, 'expected a dedicated buffer_abs warning distinct from no_buffer')
 end
 
 print('reprocessor_feed_router_no_buffer_test.lua: ok')

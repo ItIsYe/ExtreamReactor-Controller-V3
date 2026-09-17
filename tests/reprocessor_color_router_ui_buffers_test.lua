@@ -66,7 +66,7 @@ end
 local candidates = { 'minecraft:barrel_3', 'minecraft:barrel_7' }
 local function get_buffer_candidates() return candidates end
 
-local config = { feed = { sorter = 'sorter_0', export_inlet = 'chest_0', targets = {} }, buffers = { 'minecraft:barrel_3' } }
+local config = { feed = { sorter = 'sorter_0', targets = {} }, buffers = { 'minecraft:barrel_3' } }
 local ui = color_router_ui.new({
   config = config,
   write_config = function() return true end,
@@ -140,6 +140,21 @@ assert_true(del_btn ~= nil)
 ui:handle_touch(del_btn.x1, del_btn.y)
 assert_eq(#ui.buffers, 1, 'delete must remove the buffer from the working copy')
 assert_eq(ui.buffers[1], 'minecraft:barrel_7')
+
+-- Only buffers[1] is the real ME-Bridge export target (feed_router.lua's
+-- feed_one()) -- the buffers sub-page must mark entry 1 distinctly so the
+-- operator can tell it apart from purely cosmetic capacity-display entries.
+do
+  local writes = {}
+  local capture_mon = new_mon(80, 30)
+  capture_mon.write = function(text) writes[#writes + 1] = tostring(text) end
+  ui:render(capture_mon, nil, nil, true)
+  local found = false
+  for _, w in ipairs(writes) do
+    if w:find("EXPORT%-ZIEL") then found = true end
+  end
+  assert_true(found, 'expected buffer entry 1 to be marked as the export target on the buffers sub-page')
+end
 
 -- Back to the list, then SAVE -- must persist buffers via write_buffers()
 -- (a SEPARATE top-level config field, not part of reproc_targets.lua).

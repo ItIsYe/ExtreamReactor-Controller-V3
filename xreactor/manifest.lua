@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 679,
-  manifest_id = "manifest-v679",
+  manifest_version = 680,
+  manifest_id = "manifest-v680",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "3ee04e0a", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "16e2fb86", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -198,10 +198,10 @@ return {
     { path = "nodes/fuel/hop_timing.lua", size_bytes = 10294, hash = "b7f8d96b", required_for={"FUEL"} },
     },
     reprocessing = {
-    { path = "nodes/reprocessor/color_router_ui.lua", size_bytes = 22818, hash = "4e612528", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/color_router_ui.lua", size_bytes = 23193, hash = "cbb6143c", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/config.lua", size_bytes = 4068, hash = "c7b01f1f", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 3461, hash = "7a9488b2", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/feed_router.lua", size_bytes = 15826, hash = "bf86a840", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/feed_router.lua", size_bytes = 16570, hash = "144fa6c4", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/main.lua", size_bytes = 29050, hash = "2a0f3f4d", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 12284, hash = "f3722d21", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },

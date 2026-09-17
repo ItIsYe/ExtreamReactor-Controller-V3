@@ -227,6 +227,17 @@ local function feed_one(self, cfg)
     self.warn_once("no_buffer", "FeedRouter: keine Puffer-Kiste konfiguriert, Feed übersprungen")
     return
   end
+  -- Ein konfigurierter Name allein reicht nicht -- config.buffers[1] kann
+  -- immer noch der ausgelieferte Platzhalter-Default ("chemical_tank_0",
+  -- siehe config.lua's DEFAULT_BUFFERS) sein, wenn der Betreiber die
+  -- PUFFER-Seite im Router-UI noch nie geoeffnet hat. Ohne diesen Check
+  -- versucht export_to() stumm gegen eine nicht existierende Peripherie
+  -- und scheitert nur mit einem generischen "export failed" (feed_fail) --
+  -- diese Warnung benennt die eigentliche Ursache klar.
+  if not peripheral.isPresent(buffer_name) then
+    self.warn_once("buffer_abs", "FeedRouter: Puffer-Kiste nicht gefunden: " .. tostring(buffer_name) .. ", Feed übersprungen (im Router-UI unter PUFFER die echte Kiste waehlen)")
+    return
+  end
 
   local item   = cfg.waste_item or "bigreactors:cyanite_ingot"
   local amount = tonumber(cfg.feed_amount) or 2

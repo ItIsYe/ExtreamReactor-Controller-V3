@@ -16,7 +16,7 @@ _G.os = _G.os or {}
 os.epoch = function() return now_ms end
 
 _G.peripheral = {
-  isPresent = function(name) return name == 'sorter_0' or name == 'me_bridge' end,
+  isPresent = function(name) return name == 'sorter_0' or name == 'me_bridge' or name == 'puffer_chest_0' end,
   getMethods = function(name)
     if name == 'sorter_0' then return { 'setDefaultColor', 'getDefaultColor' } end
     return {}

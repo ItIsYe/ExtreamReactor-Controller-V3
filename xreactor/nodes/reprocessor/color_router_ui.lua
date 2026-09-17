@@ -359,7 +359,13 @@ function M:_render_buffers(mon, w, h)
   local y = list_top
   for i = first, last do
     local name = self.buffers[i]
-    mux.text(mon, 2, y, left_padded_fit(string.format("%d. %s", i, tostring(name)), del_x - 3),
+    -- Nur Eintrag 1 ist das tatsaechliche ME-Bridge-Exportziel (siehe
+    -- feed_router.lua's feed_one()) -- weitere Eintraege dienen nur der
+    -- Kapazitaets-Anzeige (Overview/Details-Seiten). Ohne diese Markierung
+    -- ist im UI nicht erkennbar, welcher Eintrag fuers Feeding zaehlt.
+    local label = string.format("%d. %s", i, tostring(name))
+    if i == 1 then label = label .. "  <- EXPORT-ZIEL" end
+    mux.text(mon, 2, y, left_padded_fit(label, del_x - 3),
       colorset.get("text"), colorset.get("background"))
     local del_btn = mux.button(mon, del_x, y, del_w, "X", "WARNING", 1)
     del_btn.action, del_btn.index = "buffer_delete", i
