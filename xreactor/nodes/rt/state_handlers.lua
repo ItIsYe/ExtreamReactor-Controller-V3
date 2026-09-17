@@ -233,15 +233,29 @@ function M.request_capacity_learning_startup_if_needed(ctx, reason)
   end
   local ns = (ctx.constants or constants).node_states
   local machine_state = ctx.get_node_state_machine() and ctx.get_node_state_machine().state and ctx.get_node_state_machine():state() or nil
-  -- LIMITED zaehlt jetzt auch: genau dort parkt MASTER einen Knoten, dessen
-  -- Kapazitaet noch unbekannt ist (node_capacity() liefert 0 solange
-  -- capacity_ready~=true, siehe master/rt_sync.lua -- der proportionale
-  -- Planer sortiert 0-Kapazitaet immer ans Ende und weist "standby"/"shed"
-  -- zu, was hier zu LIMITED wird). Ohne LIMITED hier blieb ein einmal so
-  -- geparkter Knoten fuer immer unklassifiziert: er erreichte nie wieder
-  -- RUNNING/OFF von selbst, um erneut zu lernen -- ein Deadlock, bestaetigt
-  -- 2026-09-17 ("Node in Kapazitaet-lernen, Reaktor aus").
-  if machine_state ~= ns.RUNNING and machine_state ~= ns.OFF and machine_state ~= ns.LIMITED then
+  -- NUR OFF -- Regression behoben (2026-09-17, "haengt im learning fest,
+  -- keine turbinen flow steuerung, keine induction coil steuerung, reaktor
+  -- auch nicht zuverlaessig"): eine fruehere Version dieser Funktion liess
+  -- auch RUNNING und LIMITED zu. Sowohl running_on_tick() ALS AUCH
+  -- limited_on_tick() rufen aber bereits jeden Tick unbedingt
+  -- adjust_reactors()/adjust_turbines() UND monitor_master() auf (siehe
+  -- oben in M.build()) -- das faellige Kapazitaetslernen laeuft in beiden
+  -- Zustaenden also schon passiv mit, ganz ohne Neustart. Weil diese
+  -- Funktion aber unbedingt (ns.STARTUP) transitioniert und startup_on_tick
+  -- bei leerer Queue (kein Modul mit state=="OFF", der Normalfall sobald
+  -- einmal RUNNING erreicht wurde) noch im selben Tick sofort zurueck nach
+  -- RUNNING wechselt, entstand ein Tick-fuer-Tick-Pendeln RUNNING<->STARTUP,
+  -- solange learning.ready==false blieb: jeder monitor_master()-Aufruf aus
+  -- RUNNING heraus loeste die naechste STARTUP-Transition sofort wieder
+  -- aus. startup_on_enter() setzt dabei u.a. ctx.targets.steam=0 und den
+  -- Startup-Watchdog jedes Mal neu -- genau dieses staendige Zuruecksetzen
+  -- verhinderte, dass sich Flow-/Coil-Regelung je stabilisierte, wodurch
+  -- echte Turbinen nie zuverlaessig 900 RPM erreichten und das Lernen sich
+  -- selbst permanent blockierte (ein neuer, selbst verursachter Deadlock).
+  -- OFF ist der einzige Zustand, dessen on_tick (off_on_tick) den
+  -- Regelkreislauf NICHT von selbst laufen laesst -- nur dort ist ein
+  -- erzwungener STARTUP-Neustart tatsaechlich noetig.
+  if machine_state ~= ns.OFF then
     return false
   end
   if ctx.get_active_startup() then
