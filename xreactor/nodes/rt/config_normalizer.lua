@@ -289,6 +289,10 @@ function M.validate_config(config_values, defaults, add_warning, utils)
   -- Veraltete Felder bereinigen
   autonom.min_rods = nil
   autonom.max_rods = nil
+  if config_values.engine ~= "v1" and config_values.engine ~= "v2" then
+    config_values.engine = defaults.engine or "v1"
+    add_warning("engine missing/invalid; defaulting to " .. tostring(config_values.engine))
+  end
   if type(config_values.monitor_interval) ~= "number" or config_values.monitor_interval <= 0 then
     config_values.monitor_interval = defaults.monitor_interval
     add_warning("monitor_interval missing/invalid; defaulting to " .. tostring(defaults.monitor_interval))

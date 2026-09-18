@@ -76,6 +76,11 @@ local flow_apply_helpers  = require("nodes.rt.flow_apply_helpers")
 local reactor_steam_guard = require("nodes.rt.reactor_steam_guard")
 local turbine_regulator   = require("core.turbine_regulator")
 local machine             = require("core.state_machine")
+-- Rewritten control engine (config.engine=="v2", opt-in per node -- see
+-- config.lua's "engine" field). Kept import-only here; whether it's
+-- actually initialized/ticked depends entirely on that config flag, see
+-- init()/control_tick()/build_status_payload() below.
+local rt2_engine          = require("nodes.rt.rt2_engine")
 
 -- Neue Fachmodule
 local reactor_control   = require("nodes.rt.reactor_control")
@@ -195,6 +200,9 @@ local comms, services, slow_services
 local node_state_machine
 local current_state_value = "INIT"
 local states_table
+-- Set once in init() from config.engine ("v2" AND at most one reactor
+-- discovered). See rt2_engine.lua's module header for what "v2" replaces.
+local engine_v2 = false
 
 local STATE = {
   INIT   = "INIT", AUTONOM = "AUTONOM",
@@ -606,6 +614,18 @@ local function build_status_payload(status_level)
     status_snapshot      = status_snapshot_lib,
   }
   local payload = status_snapshot_lib.build_status_payload(ctx_snap)
+  if engine_v2 then
+    -- v2 bypasses ctx.capacity_learning/current_state_value entirely --
+    -- override only the fields that actually come from those (mode,
+    -- capacity), leaving v1's real turbine/reactor hardware snapshots
+    -- (fuel amount, health, etc. -- still genuinely read this tick) as-is.
+    local v2 = rt2_engine.status_fields()
+    payload.mode = v2.mode
+    payload.control_mode = v2.mode
+    if v2.capacity_ready ~= nil then payload.capacity_ready = v2.capacity_ready end
+    if v2.capacity_max then payload.capacity_max = v2.capacity_max end
+    return payload
+  end
   -- Learning-State zurückschreiben
   if ctx then ctx.capacity_learning = ctx_snap.capacity_learning end
   writeback_ctx()
@@ -694,6 +714,10 @@ local function control_tick()
   -- A dedicated safe-state writer owns the hardware from the first update
   -- quiesce attempt onward. Normal regulation/startup must not race it.
   if rt_update_quiescing then return end
+  if engine_v2 then
+    rt2_engine.tick(ctx)
+    return
+  end
   -- Safety-first order: update_module_states() (detects/reacts to danger
   -- states across ALL modules, e.g. TEMP/WATER limits -> ERROR/SAFE/
   -- EMERGENCY) runs BEFORE process_startup() (advances only the currently
@@ -806,6 +830,38 @@ local function build_command_ctx()
     log = log,
     capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state,
   }
+end
+
+-- v2 command entry point (config.engine=="v2"): same protocol validation
+-- as command_handler_lib's dispatcher (is_for_node/proto compatibility),
+-- then delegates straight to rt2_engine.handle_command() -- see that
+-- module and rt2_command_handler.lua's header for why there is no
+-- SET_MODE handling to duplicate here.
+local function handle_command_v2(message)
+  local network_id = comms and comms.network and comms.network.id or config.node_id
+  if not protocol.is_for_node(message, network_id) then
+    return
+  end
+  if not protocol.is_proto_compatible(message.proto_ver) then
+    local result = { ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" }
+    last_command, last_command_ts = result.error, os.epoch("utc")
+    return result
+  end
+  local payload = type(message.payload) == "table" and message.payload or nil
+  local command = payload and payload.command
+  if type(command) ~= "table" then
+    local result = { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
+    last_command, last_command_ts = result.error, os.epoch("utc")
+    return result
+  end
+  master_seen_ts = os.epoch("utc")
+  rt2_engine.note_master_seen(master_seen_ts)
+  local result = rt2_engine.handle_command(command)
+  last_command, last_command_ts = (result.ok and "ok" or (result.error or "error")), os.epoch("utc")
+  log(result.ok == false and "WARN" or "INFO", ("v2 command target=%s ok=%s%s"):format(
+    tostring(command.target), tostring(result.ok),
+    result.ok == false and (" error=" .. tostring(result.error) .. " reason=" .. tostring(result.reason_code)) or ""))
+  return { ok = result.ok, error = result.error, reason_code = result.reason_code }
 end
 
 -- ── Init ─────────────────────────────────────────────────────────────────────
@@ -1043,6 +1099,24 @@ local function init()
   log("INFO", string.format("Discovery: reactors=%d turbines=%d",
     #devices.reactors, #devices.turbines))
 
+  -- v2-Engine-Auswahl (siehe config.lua's "engine"-Feld): nur mit genau
+  -- einem Reaktor unterstuetzt (rt2_reactor.lua regelt einen einzelnen
+  -- Dampf-Tank-Fuellstand, kein Multi-Reaktor-Aggregat wie reactor_
+  -- control.lua's controlReactorsIndividually()). Faellt bei mehr als
+  -- einem Reaktor mit einer WARN-Zeile auf v1 zurueck, statt eine
+  -- Reaktor-Node unregelmt zu lassen.
+  if config.engine == "v2" then
+    if #devices.reactors > 1 then
+      log("WARN", string.format(
+        "engine=v2 requires exactly one reactor (found %d) -- falling back to v1 for this node",
+        #devices.reactors))
+    else
+      engine_v2 = true
+      rt2_engine.init({})
+      log("INFO", "engine=v2 active (rewritten control engine)")
+    end
+  end
+
   -- Reaktor/Turbinen-State initialisieren
   reactor_control.init_reactor_ctrl(ctx)
   turbine_control.init_turbine_ctrl(ctx)
@@ -1063,7 +1137,7 @@ local function init()
   services = service_manager.new({ log_prefix = "RT" })
   slow_services = service_manager.new({ log_prefix = "RT-BG" })
 
-  handle_command = command_handler_lib.new(build_command_ctx())
+  handle_command = engine_v2 and handle_command_v2 or command_handler_lib.new(build_command_ctx())
 
   comms = comms_service.new({
     config = config, log_prefix = "RT",
@@ -1076,6 +1150,7 @@ local function init()
       if message.role == constants.roles.MASTER then
         local was_connected = master_seen_ts ~= nil
         master_seen_ts = os.epoch("utc")
+        if engine_v2 then rt2_engine.note_master_seen(master_seen_ts) end
         if message.type == constants.message_types.STATUS
             and message.payload and message.payload.alerts then
           master_alerts = message.payload.alerts

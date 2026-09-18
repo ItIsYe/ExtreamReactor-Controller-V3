@@ -21,6 +21,15 @@ return {
   version = CURRENT_VERSION,
   role = "RT-NODE",
   node_id = DEFAULT_NODE_ID,
+  -- "v1" (default) = the existing state_handlers/module_lifecycle/
+  -- turbine_control/reactor_control engine. "v2" = the rewritten
+  -- rt2_*.lua engine (single unified state machine, mode-independent
+  -- steam-tank reactor control, AUS-slot overspeed fix). Per-node
+  -- opt-in for canary rollout -- set explicitly in /xreactor_config/
+  -- rt.lua on ONE node first, compare, then widen. v2 only supports a
+  -- single reactor per node; main.lua falls back to v1 with a WARN log
+  -- if more than one reactor is discovered while engine="v2".
+  engine = "v1",
   debug_logging = true,
   reset_log_on_start = true,
   log_dir = "/disk/xreactor_logs",
