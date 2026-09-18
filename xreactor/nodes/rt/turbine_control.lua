@@ -837,6 +837,22 @@ end
 
 function M.updateControl(ctx)
   if ctx.current_state() == ctx.STATE.INIT then return end
+  -- P0 Safety-Fix (2026-09-18, unabhaengig verifizierter externer Codeanalyse-
+  -- Befund): reactor_control.updateReactorControl() haelt in SAFE bereits
+  -- korrekt die Regelstaebe auf 100% und kehrt fruehzeitig zurueck (siehe
+  -- dort, Zeile ~774). Dieser Guard hier fehlte bisher komplett -- diese
+  -- Funktion lief nach einem SCRAM im selben und in JEDEM folgenden Tick
+  -- unbedingt weiter: M.setTurbineActive(..., true, ...) und (weiter unten)
+  -- ctx.reactor_control.setReactorActive(..., true, ...) reaktivierten
+  -- Reaktor UND Turbinen sofort wieder, obwohl module_lifecycle.scram()
+  -- genau eine Zeile vorher beide explizit deaktiviert hatte
+  -- (set_reactors_active/set_turbines_active(..., false, "SCRAM_SAFE_STATE")).
+  -- Ein SCRAM blieb dadurch faktisch wirkungslos, sobald der naechste
+  -- Regel-Tick lief. Kein zusaetzlicher Deaktivierungs-Aufruf hier noetig --
+  -- schlichtes fruehes Zurueckkehren genuegt, damit die von scram() bereits
+  -- gesetzte "false" bestehen bleibt, statt jeden Tick erneut ueberschrieben
+  -- zu werden.
+  if ctx.current_state() == ctx.STATE.SAFE then return end
 
   -- Reaktoren aktiv halten (delegiert an reactor_control)
   for _, name in ipairs(ctx.config.reactors or {}) do

@@ -344,16 +344,44 @@ local function build_ctx()
     end,
     warned            = {},   -- Dedup-Map für warn_once
     -- reactor_control.lua's SAFE-recovery path calls ctx.setState(...) --
-    -- this context needs the field. node_state_machine is a module-level
-    -- upvalue, assigned after build_ctx() runs but before setState is ever
-    -- actually called, so the closure sees the real value fine.
+    -- this context needs the field.
+    --
+    -- P0 Safety-Fix (2026-09-18, unabhaengig verifizierter externer Codeanalyse-
+    -- Befund): setState() reichte next_state bisher UNGESCHUETZT an
+    -- node_state_machine:transition() weiter. Alle vier tatsaechlichen
+    -- Aufrufer (reactor_control.lua: ctx.STATE.MASTER; module_lifecycle.lua
+    -- x2: ctx.STATE.SAFE) uebergeben aber ausschliesslich Werte aus dem
+    -- BETRIEBSMODUS-Namensraum (ctx.STATE: INIT/AUTONOM/MASTER/SAFE) -- ein
+    -- komplett anderes System als node_state_machine's Lifecycle-Zustaende
+    -- (OFF/STARTUP/RUNNING/LIMITED/AUTONOM/MANUAL/EMERGENCY, siehe shared/
+    -- constants.lua). Weder "MASTER" noch "SAFE" existieren dort als gueltiger
+    -- Zustand -- core/state_machine.lua's transition() wirft dafuer
+    -- ungeschuetzt error("invalid state: ..."). Da control_tick() nur von
+    -- aussen (service_manager's pcall) abgefangen wird, crashte das JEDEN
+    -- einzelnen control_tick() sofort an dieser Stelle:
+    --   - reactor_control.lua's SAFE-Auto-Recovery (Temperatur wieder unter
+    --     dem Hysterese-Schwellwert) konnte den Betriebsmodus dadurch nie
+    --     tatsaechlich zurueck auf MASTER setzen -- der Knoten blieb
+    --     PERMANENT im SAFE-Betriebsmodus haengen, ganz ohne dass der
+    --     Operator das jemals in einem Log als expliziten Fehler sehen
+    --     wuerde (nur wiederholte "Service tick failed (control)"-Retries).
+    --   - Noch schwerer: module_lifecycle.lua ruft ctx.setState(SAFE, ...)
+    --     ZUERST auf, dann erst (in derselben if-current_state~=SAFE-
+    --     Bedingung, direkt danach) node_state_machine:transition(EMERGENCY)
+    --     -- die eigentliche SCRAM-Sicherheitsreaktion. Der Crash bei
+    --     setState() verhinderte, dass dieser zweite, tatsaechlich gueltige
+    --     Transition-Aufruf je erreicht wurde -- ein realer Temperatur-/
+    --     Kuehlmittel-Trip haette so NIE zu einem SCRAM gefuehrt, sondern
+    --     nur zu endlosen crashenden Regel-Ticks.
+    -- Fix: setState() setzt einfach nur current_state_value (das Betriebsmodus-
+    -- Feld, das ctx.current_state() liest) -- exakt was alle vier Aufrufer
+    -- tatsaechlich brauchen. node_state_machine-Uebergaenge laufen bereits
+    -- an anderer Stelle ueber eigene, direkte, korrekte Aufrufe (z.B.
+    -- module_lifecycle.lua's ctx.node_state_machine:transition(EMERGENCY)
+    -- direkt daneben) und muessen hier nicht mehr dupliziert werden.
     setState = function(next_state, reason)
       log("INFO", "State-Uebergang: " .. tostring(next_state) .. (reason and (" (" .. tostring(reason) .. ")") or ""))
-      if node_state_machine then
-        node_state_machine:transition(next_state)
-      else
-        warn_once("setState_no_machine", "setState aufgerufen bevor node_state_machine bereit war")
-      end
+      current_state_value = next_state
     end,
   }
 end
