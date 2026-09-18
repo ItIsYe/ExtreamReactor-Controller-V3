@@ -389,6 +389,11 @@ function M.sync_rt_node(ctx, node)
         tostring(node_id), tostring(node.mode or "UNKNOWN"), tostring(desired_mode), tostring(mode_reason)
       ), "WARN")
     end
+    -- Fix: anders als "send"/"wait" fehlte hier ein return -- eine Node, die
+    -- OFFLINE, SAFE oder EMERGENCY ist (genau die Faelle, die "blocked"
+    -- ausloesen), fiel bisher trotzdem in die Setpoint-Plan/Sende-Logik
+    -- unten durch, statt hier abzubrechen.
+    return
   end
 
   local plan = ctx.plan or M.build_node_setpoint_plan(ctx)

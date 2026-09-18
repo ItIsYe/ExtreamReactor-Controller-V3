@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 702,
-  manifest_id = "manifest-v702",
+  manifest_version = 703,
+  manifest_id = "manifest-v703",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "afc47367", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "4ee12ce0", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -74,10 +74,10 @@ return {
     { path = "master/fuel_relay.lua", size_bytes = 3413, hash = "0b9f8c37", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 9800, hash = "83305912", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
-    { path = "master/message_handlers.lua", size_bytes = 29825, hash = "713f2d82", required_for={"MASTER"} },
+    { path = "master/message_handlers.lua", size_bytes = 31337, hash = "4cb4a393", required_for={"MASTER"} },
     { path = "master/monitor_sessions.lua", size_bytes = 10402, hash = "3aa0b249", required_for={"MASTER"} },
     { path = "master/profiles.lua", size_bytes = 275, hash = "59bdc157", required_for={"MASTER"} },
-    { path = "master/rt_sync.lua", size_bytes = 18531, hash = "0df418bc", required_for={"MASTER"} },
+    { path = "master/rt_sync.lua", size_bytes = 18810, hash = "7627734f", required_for={"MASTER"} },
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"} },
     { path = "master/runtime_loop.lua", size_bytes = 16707, hash = "6159038e", required_for={"MASTER"} },
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"} },

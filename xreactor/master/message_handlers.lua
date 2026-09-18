@@ -540,6 +540,27 @@ function M.new(opts)
         else
           log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN")
         end
+        -- Fix (Log-Analyse 2026-09-18, disk8.zip): eine Node kann nach einem
+        -- Master-Verbindungsabbruch dauerhaft in AUTONOM stecken bleiben,
+        -- waehrend node.mode im Master noch "MASTER" zeigt -- der Status-
+        -- Payload-basierte Mode-Abgleich (runtime_ops_rt.sync_rt_node)
+        -- erkannte den Rueckfall in diesem Fall nie, sodass NIE ein neues
+        -- SET_MODE gesendet wurde: node.mode == node.desired_mode ("MASTER")
+        -- blieb fuer den Abgleich unveraendert "gleich", waehrend die Node
+        -- jedes SET_SETPOINTS ununterbrochen mit reason_code=INVALID_STATE
+        -- ablehnte (beobachtet: 20+ Minuten Dauerschleife, node-102). Ein
+        -- INVALID_STATE-ACK ist der direkteste, unzweideutigste Beweis, den
+        -- der Master fuer den echten RT-Modus bekommen kann -- zuverlaessiger
+        -- als auf den naechsten Status-Payload zu warten. node.mode wird
+        -- deshalb hier sofort verworfen (nicht auf einen bestimmten Modus
+        -- geraten -- der Fehlertext haengt vom tatsaechlichen RT-Zustand ab),
+        -- damit der naechste sync_rt_node()-Lauf den Mismatch garantiert
+        -- erkennt und sofort ein neues SET_MODE nachsendet.
+        if reason_code == "INVALID_STATE" and nodes[id].mode ~= nil then
+          log(("Node %s mode desync detected via rejected command (INVALID_STATE) -- forcing SET_MODE re-sync"):format(tostring(id)), "WARN")
+          nodes[id].mode = nil
+          mark_rt_sync_dirty(nodes[id], "mode_desync")
+        end
       end
       sequencer:notify_ack(id, result.module_id)
       local workflow_stage = nodes[id].shutdown_workflow and nodes[id].shutdown_workflow.stage or nil
