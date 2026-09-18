@@ -559,9 +559,17 @@ function M.controlReactorsIndividually(ctx)
   -- gemittelter Wert. Ueberschreibbar via config.rails.reactor_rods_individual.
   local individual_rod_cfg_override = ctx.config.rails and ctx.config.rails.reactor_rods_individual
   local base_rod_cfg = ctx.config.rails and ctx.config.rails.reactor_rods or {}
-  local rod_cfg = individual_rod_cfg_override or {
-    deadband_up = 5000, deadband_down = 5000,
-    hysteresis_up = 500, hysteresis_down = 500,
+  -- Deadband/Hysterese sind PROZENTPUNKTE des Fuellstand-Fehlers (0-100
+  -- skaliert wie der Rod-Level selbst), NICHT mehr absolute mB -- externe
+  -- Codeanalyse (2026-09-18): ein absolutes Deadband von 5000 mB bedeutet
+  -- bei einem 10.000 mB kleinen Reaktor beinahe den gesamten Arbeitsbereich
+  -- (50% Fuellstand-Fehler!), bei einem 100.000 mB grossen Reaktor nur 5%
+  -- -- kleine Reaktoren konnten dadurch praktisch nie regeln. Siehe
+  -- fill_margin unten (jetzt Prozentpunkte statt fill_capacity-skalierte
+  -- mB-Menge).
+  local rod_cfg_defaults = {
+    deadband_up = 3, deadband_down = 3,
+    hysteresis_up = 1, hysteresis_down = 1,
     max_step_up = 20, max_step_down = 20,
     max_apply_step_up = 20, max_apply_step_down = 20,
     cooldown_s = 0.5, apply_cooldown_s = 0.5,
@@ -572,6 +580,20 @@ function M.controlReactorsIndividually(ctx)
     min = base_rod_cfg.min or 80, max = base_rod_cfg.max or 100,
     ema_alpha = 0.4,
   }
+  -- Deep-Merge statt kompletter Ersetzung -- externe Codeanalyse
+  -- (2026-09-18): eine Teilkonfiguration wie
+  -- reactor_rods_individual = { cooldown_s = 0.2 } ersetzte bisher die
+  -- GESAMTE Default-Tabelle (der "or"-Operator greift schon bei jeder
+  -- Wahrheit, auch einer nur-teilweise befuellten Tabelle) -- max_step_up/
+  -- down, Deadband, min/max fehlten dann komplett, was den Regler
+  -- effektiv stilllegen konnte (step=0). ctx.utils.merge_defaults() fuellt
+  -- nur fehlende Schluessel auf, ueberschreibt nie einen vom Operator
+  -- gesetzten Wert.
+  local rod_cfg = rod_cfg_defaults
+  if individual_rod_cfg_override then
+    rod_cfg = ctx.utils.deep_copy(individual_rod_cfg_override)
+    ctx.utils.merge_defaults(rod_cfg, rod_cfg_defaults)
+  end
   local steam_guard_cfg = ctx.config.rails and ctx.config.rails.reactor_steam_guard or {}
   local fill_target = (ctx.config.rails and ctx.config.rails.reactor_fill_target) or 0.5
 
@@ -602,7 +624,12 @@ function M.controlReactorsIndividually(ctx)
     -- Leistung) bei POSITIVEM error. Muss daher (fill_ratio - fill_target)
     -- sein, NICHT umgekehrt -- ein leerer Tank (fill_ratio klein) muss zu
     -- einem negativen Wert fuehren (= Rods runter, mehr Leistung).
-    local fill_margin = (fill_ratio - fill_target) * (fill_capacity or 1)
+    --
+    -- Prozentpunkte (0-100 skaliert), NICHT mehr mit fill_capacity (mB)
+    -- multipliziert -- siehe Begruendung bei rod_cfg oben. fill_amount wird
+    -- dadurch ungenutzt; behalten fuer den Fall, dass ein zukuenftiger
+    -- Diagnose-Log-Eintrag den absoluten Fuellstand mit ausgeben will.
+    local fill_margin = (fill_ratio - fill_target) * 100
 
     local smoothed_margin = ctx.rails.smooth(
       ctrl.rails_state, "steam_margin", fill_margin, rod_cfg.ema_alpha)

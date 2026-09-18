@@ -893,9 +893,9 @@ local function configure_state_machine()
     clamp_autonom_targets = function()
       if ctx and ctx.targets then
         local t = ctx.targets
-        t.power   = math.max(0, t.power   or 0)
-        t.steam   = math.max(0, t.steam   or 0)
-        t.rpm     = math.max(0, t.rpm     or CONFIG.TARGET_RPM)
+        t.power = 0
+        t.steam = 0
+        t.rpm   = turbine_control.get_target_rpm(ctx)
       end
     end,
     -- Master-Monitoring

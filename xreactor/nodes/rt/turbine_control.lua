@@ -216,7 +216,17 @@ function M.get_turbine_target_rpm(ctx, turbine_index)
   if ctx.current_state() ~= ctx.STATE.MASTER then return base end
 
   local n = #(ctx.config.turbines or {})
-  if n <= 1 then return base end
+  -- Nur n==0 (kann in der Praxis nicht vorkommen, da diese Funktion je
+  -- konfigurierter Turbine aufgerufen wird) muss hier abgefangen werden --
+  -- der Slot-Algorithmus unten macht sonst eine Modulo-durch-0-Division.
+  -- Ein frueherer "n <= 1"-Guard hier ignorierte power_percent komplett
+  -- bei genau einer Turbine (externe Codeanalyse, 2026-09-18): 20%/50%/80%
+  -- Sollleistung ergaben alle dasselbe Ziel von 900 RPM. Der Algorithmus
+  -- unten generalisiert fuer n=1 aber bereits korrekt von selbst (es gibt
+  -- dort nie Platz fuer eine "Vollast"-Turbine ausser bei genau 100%, die
+  -- einzige Turbine landet also exakt im PUFFER-Zweig mit partial_rpm =
+  -- base * power_pct/100) -- kein Sonderfall mehr noetig.
+  if n <= 0 then return base end
 
   local power_pct = ctx.targets and ctx.targets.power_percent or 100
   if type(power_pct) ~= "number" then power_pct = 100 end

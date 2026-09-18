@@ -161,26 +161,39 @@ local function set_setpoints(command, ctx, record)
   })
 end
 
+-- Fix (externe Codeanalyse, 2026-09-18): frueher gaben set_scalar_target()
+-- und transition_mode() bei einer Ablehnung (falscher Modus, ungueltiger
+-- Zielwert) einfach `return` (nil) zurueck. Der Dispatcher unten wandelt
+-- JEDES nil-Ergebnis in {ok=true} um -- der MASTER glaubte also, ein
+-- abgelehntes Kommando sei erfolgreich angewendet worden. Beide Funktionen
+-- geben jetzt explizit (ok, error, reason_code) zurueck, damit die
+-- aufrufenden Handler ein echtes {ok=false,...} melden koennen.
 local function set_scalar_target(command, ctx, key, fallback)
   if ctx.get_current_state() ~= ctx.STATE.MASTER then
-    return
+    return false, "autonom: ignoring " .. key .. " target", "INVALID_STATE"
   end
   if fallback ~= nil then
     ctx.targets[key] = command.value or fallback
   else
     ctx.targets[key] = command.value
   end
+  return true
 end
 
 local function transition_mode(command, ctx)
   if ctx.get_current_state() ~= ctx.STATE.MASTER then
-    return
+    return false, "autonom: ignoring MODE command", "INVALID_STATE"
   end
   local states = ctx.get_states()
-  local machine = get_machine(ctx)
-  if states[command.value] and machine then
-    machine:transition(command.value)
+  if not states[command.value] then
+    return false, "invalid MODE value: " .. tostring(command.value), "INVALID_VALUE"
   end
+  local machine = get_machine(ctx)
+  if not machine then
+    return false, "node state machine not ready", "NOT_READY"
+  end
+  machine:transition(command.value)
+  return true
 end
 
 local function startup_stage(command, ctx, record)
@@ -204,20 +217,24 @@ local function make_dispatch()
       return nil
     end,
     ["SET_SETPOINTS"] = set_setpoints,
-    ["POWER_TARGET"] = function(command, ctx)
-      set_scalar_target(command, ctx, "power")
+    ["POWER_TARGET"] = function(command, ctx, record)
+      local ok, err, reason_code = set_scalar_target(command, ctx, "power")
+      if not ok then return record({ ok = false, error = err, reason_code = reason_code }) end
       return nil
     end,
-    ["STEAM_TARGET"] = function(command, ctx)
-      set_scalar_target(command, ctx, "steam")
+    ["STEAM_TARGET"] = function(command, ctx, record)
+      local ok, err, reason_code = set_scalar_target(command, ctx, "steam")
+      if not ok then return record({ ok = false, error = err, reason_code = reason_code }) end
       return nil
     end,
-    ["TURBINE_RPM"] = function(command, ctx)
-      set_scalar_target(command, ctx, "rpm", ctx.TARGET_RPM)
+    ["TURBINE_RPM"] = function(command, ctx, record)
+      local ok, err, reason_code = set_scalar_target(command, ctx, "rpm", ctx.TARGET_RPM)
+      if not ok then return record({ ok = false, error = err, reason_code = reason_code }) end
       return nil
     end,
-    ["MODE"] = function(command, ctx)
-      transition_mode(command, ctx)
+    ["MODE"] = function(command, ctx, record)
+      local ok, err, reason_code = transition_mode(command, ctx)
+      if not ok then return record({ ok = false, error = err, reason_code = reason_code }) end
       return nil
     end,
     ["STARTUP_STAGE"] = startup_stage,
@@ -232,13 +249,13 @@ local function make_dispatch()
     -- dass der RAM-Wert sofort uebernommen wurde; `persisted` zeigt
     -- ehrlich an, ob ctx.set_reactor_fill_target() den Wert auch
     -- persistieren konnte (analog zu WATER's SET_TARGET).
-    ["SET_REACTOR_FILL_TARGET"] = function(command, ctx)
+    ["SET_REACTOR_FILL_TARGET"] = function(command, ctx, record)
       local value = tonumber(command.value)
       if type(value) ~= "number" or value < 0 or value > 1 then
         if type(ctx.log) == "function" then
           ctx.log("WARN", "SET_REACTOR_FILL_TARGET rejected: invalid value=" .. tostring(command.value))
         end
-        return nil
+        return record({ ok = false, error = "invalid fill target value=" .. tostring(command.value), reason_code = "INVALID_VALUE" })
       end
       local persisted = true
       if type(ctx.set_reactor_fill_target) == "function" then
@@ -291,7 +308,12 @@ local function new(ctx)
       log_result("UNKNOWN", result)
       return result
     end
-    if ctx.get_current_state() == ctx.STATE.SAFE then
+    -- SCRAM ist idempotent (erneutes Anwenden von SAFE aendert nichts) und
+    -- darf daher auch im SAFE-Zustand selbst durch -- z.B. damit der MASTER
+    -- einen SCRAM erneut zustellen kann, ohne dass die Node "ignoring
+    -- commands" meldet, waehrend sie bereits sicher ist. Alle anderen
+    -- Kommandos bleiben im SAFE-Zustand weiterhin blockiert.
+    if ctx.get_current_state() == ctx.STATE.SAFE and command.target ~= "SCRAM" then
       local result = record({ ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" })
       log_result(command.target or "UNKNOWN", result)
       return result
