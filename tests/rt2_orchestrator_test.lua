@@ -125,4 +125,43 @@ do
   assert_eq(result.turbines[1].flow_decision.flow, 0, 'a safety trip must force flow to zero')
 end
 
+-- SCRAM via handle_command() must latch a safety trip that persists
+-- across ticks until explicitly cleared -- not just for the one tick it
+-- was received on.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+
+  local ack = o.handle_command({ target = 'SCRAM' })
+  assert_true(ack.ok, 'SCRAM must be accepted')
+
+  local result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  assert_eq(result.state, rt2_state.states.SAFE, 'a latched SCRAM must force SAFE on the very next tick')
+
+  -- Even a later tick, with no safety condition active otherwise, must
+  -- stay SAFE until explicitly cleared.
+  result = o.tick({ now_ms = 3000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  assert_eq(result.state, rt2_state.states.SAFE, 'SCRAM must remain latched across ticks, not just the one it was issued on')
+
+  o.clear_manual_safety_trip()
+  result = o.tick({ now_ms = 4000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  assert_eq(result.state, rt2_state.states.MASTER, 'clearing the trip must allow recovery back to MASTER (capacity already known)')
+end
+
+-- SET_SETPOINTS via handle_command() must actually steer the turbine
+-- targets on the next tick.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  o.tick({ now_ms = 2000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+
+  local ack = o.handle_command({ target = 'SET_SETPOINTS', value = { power_target_percent = 20 } })
+  assert_true(ack.ok, 'SET_SETPOINTS must be accepted once in MASTER state')
+
+  local result = o.tick({ now_ms = 3000, hardware_ready = true, turbines = { turbine('T1', 100, 0, false) }, reactor = { fill_ratio = 0.5 } })
+  assert_eq(result.turbines[1].target_rpm, 180, 'a stored master_percent from handle_command() must steer the next tick target (single turbine at 20% = 180 RPM)')
+end
+
 print('rt2_orchestrator_test.lua: ok')

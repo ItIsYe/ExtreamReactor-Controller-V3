@@ -13,6 +13,7 @@ local rt2_capacity = require('nodes.rt.rt2_capacity')
 local rt2_master_link = require('nodes.rt.rt2_master_link')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_reactor = require('nodes.rt.rt2_reactor')
+local rt2_command_handler = require('nodes.rt.rt2_command_handler')
 
 local M = {}
 
@@ -26,6 +27,8 @@ function M.new(opts)
     master_link = rt2_master_link.new({ timeout_ms = opts.master_timeout_ms }),
     rotation_offset = 0,
     last_rotate_ms = 0,
+    manual_safety_trip = false,
+    master_percent = 100,
   }
 
   function self.current_state()
@@ -34,6 +37,30 @@ function M.new(opts)
 
   function self.note_master_seen(now_ms)
     self.master_link.note_seen(now_ms)
+  end
+
+  -- Applies rt2_command_handler.M.handle()'s result to this orchestrator's
+  -- own state and returns it unchanged so the caller (comms layer) can
+  -- ACK it. A manual SCRAM latches until explicitly cleared -- exactly
+  -- like the old module_lifecycle.scram()'s "manual reset required"
+  -- behaviour, just with one obvious place that owns the latch instead of
+  -- being spread across ctx.setState()/node_state_machine:transition()
+  -- calls that could (and once did) fall out of sync.
+  function self.handle_command(command)
+    local result = rt2_command_handler.handle(command, { state = self.machine.current() })
+    if result.ok and result.effects then
+      if result.effects.manual_safety_trip then
+        self.manual_safety_trip = true
+      end
+      if type(result.effects.master_percent) == "number" then
+        self.master_percent = result.effects.master_percent
+      end
+    end
+    return result
+  end
+
+  function self.clear_manual_safety_trip()
+    self.manual_safety_trip = false
   end
 
   local function rotated_slot(turbine_index, turbine_count, now_ms)
@@ -77,7 +104,7 @@ function M.new(opts)
       hardware_ready   = input.hardware_ready,
       capacity_ready   = self.capacity.ready,
       master_connected = self.master_link.is_connected(now_ms),
-      safety_tripped   = input.safety_tripped,
+      safety_tripped   = input.safety_tripped or self.manual_safety_trip,
     })
 
     local safety_override = (state == rt2_state.states.SAFE)
@@ -95,7 +122,7 @@ function M.new(opts)
       local target_rpm = rt2_turbine.compute_target_rpm(state, {
         turbine_count = turbine_count,
         slot_index = slot_index,
-        power_percent = input.master_percent,
+        power_percent = input.master_percent or self.master_percent,
       })
       local flow_decision = rt2_turbine.compute_flow_decision({
         rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
