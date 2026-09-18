@@ -228,11 +228,11 @@ function M.process_startup(ctx)
     if module.caps then
       local ok_active, active_result = pcall(ctx.setTurbineActive, module.peripheral, module.caps, true)
       if ok_active and not active_result then
-        ctx.warn_unsupported(module.name)
+        ctx.warn_unsupported(module.name, "setTurbineActive returned false")
       end
     end
     if not module.caps or not module.caps.setInductorEngaged then
-      ctx.warn_unsupported(module.name)
+      ctx.warn_unsupported(module.name, "missing setInductorEngaged")
       module.state = "ERROR"
       module.progress = 0
       module.limits = { "CONTROL" }
@@ -240,7 +240,7 @@ function M.process_startup(ctx)
       return
     end
     if not module.caps or not (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-      ctx.warn_unsupported(module.name)
+      ctx.warn_unsupported(module.name, "missing setFluidFlowRate/setFluidFlowRateMax")
       module.state = "ERROR"
       module.progress = 0
       module.limits = { "CONTROL" }
@@ -259,7 +259,7 @@ function M.process_startup(ctx)
       return
     end
     if not inductor_result then
-      ctx.warn_unsupported(module.name)
+      ctx.warn_unsupported(module.name, "update_inductor_for_rpm returned false")
       module.state = "ERROR"
       module.progress = 0
       module.limits = { "CONTROL" }
@@ -281,7 +281,7 @@ function M.process_startup(ctx)
         return
       end
       if not flow_result then
-        ctx.warn_unsupported(module.name)
+        ctx.warn_unsupported(module.name, "setTurbineFlow returned false")
         module.state = "ERROR"
         module.progress = 0
         module.limits = { "CONTROL" }
@@ -308,11 +308,11 @@ function M.process_startup(ctx)
     if module.caps then
       local ok_active, active_result = pcall(ctx.setReactorActive, module.peripheral, module.caps, true)
       if ok_active and not active_result then
-        ctx.warn_unsupported(module.name)
+        ctx.warn_unsupported(module.name, "setReactorActive returned false")
       end
     end
     if not has_reactor_rod_write_path(module.caps) then
-      ctx.warn_unsupported(module.name)
+      ctx.warn_unsupported(module.name, "missing rod write path (setAllControlRodLevels/setControlRodLevel/getControlRods)")
       module.state = "ERROR"
       module.progress = 0
       module.limits = { "CONTROL" }
@@ -570,7 +570,7 @@ function M.set_reactors_active(ctx, active, reason)
     if not ok then
       ctx.warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(result))
     elseif not result then
-      ctx.warn_unsupported(name)
+      ctx.warn_unsupported(name, "setReactorActive returned false")
     else
       ctx.log("INFO", ("Reactor active name=%s active=%s reason=%s"):format(tostring(name), tostring(active), tostring(reason or "UNSPECIFIED")))
     end
@@ -613,7 +613,7 @@ function M.apply_safe_controls(ctx)
       local ctrl = ctx.ensure_reactor_ctrl(name)
       ctrl.last_applied = nil
     else
-      ctx.warn_unsupported(name)
+      ctx.warn_unsupported(name, "missing rod write path (setAllControlRodLevels/setControlRodLevel/getControlRods)")
     end
   end
   ctx.applyReactorRods(100, true, "SAFE_SCRAM")
@@ -631,7 +631,7 @@ function M.apply_safe_controls(ctx)
       if not ok then
         ctx.warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(result))
       elseif not result then
-        ctx.warn_unsupported(name)
+        ctx.warn_unsupported(name, "update_inductor_for_rpm returned false")
       end
     end
     if caps.setFluidFlowRate or caps.setFluidFlowRateMax then
@@ -647,10 +647,10 @@ function M.apply_safe_controls(ctx)
       if not ok then
         ctx.warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
       elseif not result then
-        ctx.warn_unsupported(name)
+        ctx.warn_unsupported(name, "setTurbineFlow returned false")
       end
     else
-      ctx.warn_unsupported(name)
+      ctx.warn_unsupported(name, "missing setFluidFlowRate/setFluidFlowRateMax")
     end
   end
 end

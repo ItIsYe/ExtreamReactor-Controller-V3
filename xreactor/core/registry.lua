@@ -4,6 +4,25 @@ local registry = {}
 
 local SCHEMA_VERSION = 2
 
+-- Fix (2026-09-18, Log-Audit): sync() markierte ein nicht mehr gesehenes
+-- Geraet bisher nur mit missing=true, aber entfernte es NIE aus
+-- self.state.devices/order/name_index. In dieser Welt wechselt der rohe
+-- Peripherie-Name eines Turbinen-/Reaktor-Multiblocks (z.B.
+-- "BigReactors-Turbine_244") bei praktisch jedem Server-Neustart (CC:Tweaked
+-- vergibt die interne Registrierungs-ID nach jedem Weltreload neu) -- jeder
+-- Neustart erzeugt dadurch fuer JEDES Geraet einen KOMPLETT NEUEN Registry-
+-- Eintrag (neuer Name -> neue gehashte ID), waehrend der alte Eintrag fuer
+-- immer als "missing" stehen blieb. Ohne Bereinigung waechst
+-- registry_rt_<node>.json bei jedem Neustart um die volle Geraeteanzahl,
+-- unbegrenzt, ueber die gesamte Spieldauer -- Speicherplatz (CC:Tweaked-
+-- Laufwerke sind klein) und jede pairs(devices)/list()-Iteration (get_summary,
+-- get_bound_devices, jede Statusabfrage) werden linear langsamer.
+-- Ein wirklich nur kurz getrenntes Geraet erscheint im naechsten sync()
+-- wieder (missing wird dann zurueck auf false gesetzt, siehe unten) --
+-- MISSING_RETENTION_MS ist grosszuegig genug, um das nicht zu verwechseln
+-- mit einem dauerhaft ersetzten/umbenannten Geraet.
+local MISSING_RETENTION_MS = 30 * 60 * 1000
+
 local function djb2_hash(text)
   local hash = 5381
   for i = 1, #text do
@@ -305,16 +324,40 @@ function registry:sync(devices)
     seen[entry.id] = true
     changed = changed or entry_changed
   end
+  local expired_ids = {}
+  local scan_now = now()
   for id, entry in pairs(self.state.devices) do
     if not seen[id] then
       if entry.missing ~= true then entry.missing = true changed = true persist_changed = true end
       if entry.found ~= false then entry.found = false changed = true persist_changed = true end
       if entry.bound ~= false then entry.bound = false changed = true persist_changed = true end
+      local missing_since = entry.last_seen or entry.first_seen
+      if type(missing_since) == "number" and (scan_now - missing_since) >= MISSING_RETENTION_MS then
+        table.insert(expired_ids, id)
+      end
     else
       if entry.missing ~= false then entry.missing = false changed = true persist_changed = true end
     end
   end
-  self.state.last_scan = now()
+  for _, id in ipairs(expired_ids) do
+    local entry = self.state.devices[id]
+    self.state.devices[id] = nil
+    if entry and entry.name and self.state.name_index[entry.name] == id then
+      self.state.name_index[entry.name] = nil
+    end
+    changed = true
+    persist_changed = true
+  end
+  if #expired_ids > 0 then
+    local kept = {}
+    for _, id in ipairs(self.state.order) do
+      if self.state.devices[id] then kept[#kept + 1] = id end
+    end
+    self.state.order = kept
+    utils.log(self.log_prefix, ("Registry purged %d stale device(s), missing >= %ds"):format(
+      #expired_ids, math.floor(MISSING_RETENTION_MS / 1000)), "INFO")
+  end
+  self.state.last_scan = scan_now
   self._dirty = self._dirty or changed
   self._persist_dirty = self._persist_dirty or persist_changed
   self:save()
