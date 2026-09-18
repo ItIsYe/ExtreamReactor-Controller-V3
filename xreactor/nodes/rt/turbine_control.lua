@@ -736,6 +736,26 @@ function M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
     decision.defer_cooldown = true; decision.defer_reason = defer_reason
   end
 
+  -- Diagnose (2026-09-18, gemeldet: schnell drehende Turbinen behalten
+  -- vollen Flow): bisherige Logs zeigten weder "Overspeed brake pending"
+  -- noch einen Write-Fehler, obwohl RPM weit ueber Ziel+Toleranz lag --
+  -- ohne diese Zeile war nicht sichtbar, was overspeed_brake_state() pro
+  -- Turbine tatsaechlich als rpm/target/Entscheidung ansetzt. Rate-limited
+  -- auf 1x/5s pro Turbine, DEBUG-Level (wie die bestehenden Coolant-/
+  -- Temperature-Diag-Zeilen), damit das im laufenden Betrieb keine
+  -- Log-Last erzeugt.
+  if type(ctx.log) == "function" then
+    local now_ms = os.epoch and os.epoch("utc") or (now_ts * 1000)
+    if (now_ms - (ctrl.last_flow_diag_log_ms or 0)) >= 5000 then
+      ctrl.last_flow_diag_log_ms = now_ms
+      ctx.log("DEBUG", ("Turbine flow diag name=%s rpm=%s smoothed_rpm=%s target=%s hold_band=%s overspeed_active=%s target_zero_active=%s next_flow=%s decision=%s"):format(
+        tostring(ctrl.name), tostring(rpm), tostring(smoothed_rpm), tostring(target), tostring(hold_band),
+        tostring(overspeed_state.active), tostring(target_zero_active), tostring(next_flow),
+        tostring(decision and decision.reason or "nil")
+      ))
+    end
+  end
+
   local hold_sample_target = math.max(1, rail_cfg.target_trim_hold_samples or 2)
   if (not flow_locked) and target_band and target_band.in_band
       and target_band.mode == "HOLDING_TARGET_ACTIVE" then
@@ -801,6 +821,7 @@ end
 
 function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
   local ctrl = get_turbine_ctrl(ctx, name)
+  ctrl.name = name
   if type(rpm) == "number" then ctrl.rpm = rpm end
 
   if type(ctrl.effective_max_flow) ~= "number"
