@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 699,
-  manifest_id = "manifest-v699",
+  manifest_version = 700,
+  manifest_id = "manifest-v700",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "e01472e1", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "b6ffca28", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -137,7 +137,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 12388, hash = "019f696f", required_for={"RT"} },
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 4274, hash = "ee801517", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
-    { path = "nodes/rt/main.lua", size_bytes = 58203, hash = "a7e5dbcd", required_for={"RT"} },
+    { path = "nodes/rt/main.lua", size_bytes = 59394, hash = "269582ed", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 30245, hash = "fd2b9b6b", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 14482, hash = "7eaf960a", required_for={"RT"} },
     { path = "nodes/rt/mockup_pages.lua", size_bytes = 17358, hash = "88df2569", required_for={"RT"} },

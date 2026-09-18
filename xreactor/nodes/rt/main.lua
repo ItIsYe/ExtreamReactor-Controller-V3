@@ -254,14 +254,30 @@ end
 
 -- ── Capacity Cache ───────────────────────────────────────────────────────────
 
+-- Fix (2026-09-18, Log-Analyse disk6.zip): load_capacity_cache() baute die
+-- Boot-Zeit-Signatur bisher aus config.turbines -- reinen Namen-Strings
+-- ({name=name}, kein .id). capacity_learning.M.update() (Laufzeit, ueber
+-- status_snapshot.lua) berechnet dieselbe Signatur dagegen aus den
+-- Registry-Bindings, deren Eintraege IMMER ein .id-Feld tragen (der
+-- gehashte Geraete-Key aus core/registry.lua) -- M.topology_signature()
+-- bevorzugt turbine.id vor turbine.name. Boot- und Laufzeit-Signatur
+-- verglichen also strukturell zwei verschiedene Dinge (Name vs. Hash-ID)
+-- und stimmten NIE ueberein -- der Cache wurde dadurch bei JEDEM Neustart
+-- verworfen ("Capacity cache rejected: hardware topology changed"), auch
+-- wenn real gar keine Topologie-Aenderung vorlag. Folge: nach jedem
+-- Reboot fehlte capacity_learning fuer die volle Relearn-Dauer, MASTER
+-- meldete waehrenddessen "Profile ... base power is unavailable; target
+-- unchanged at 0.00". Fix: dieselben Registry-Eintraege (devices.turbines,
+-- von discover() bereits vor diesem Aufruf befuellt) fuer die Boot-
+-- Signatur verwenden wie M.update() zur Laufzeit -- id und name mitgeben.
 local function load_capacity_cache()
   local topology = {}
-  for _, name in ipairs(config.turbines or {}) do
-    topology[#topology + 1] = { name = name }
+  for _, turbine in ipairs(devices.turbines or {}) do
+    topology[#topology + 1] = { id = turbine.id, name = turbine.name }
   end
   return capacity_cache.load({
     path = CONFIG.CAPACITY_CACHE_PATH,
-    turbine_count = #(config.turbines or {}),
+    turbine_count = #(devices.turbines or {}),
     topology_signature = capacity_learning.topology_signature(topology),
     log = log
   })
@@ -270,7 +286,7 @@ end
 local function save_capacity_cache(learning)
   return capacity_cache.save(learning, {
     path = CONFIG.CAPACITY_CACHE_PATH,
-    turbine_count = #(config.turbines or {})
+    turbine_count = #(devices.turbines or {})
   })
 end
 
