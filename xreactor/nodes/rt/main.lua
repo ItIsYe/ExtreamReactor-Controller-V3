@@ -383,6 +383,12 @@ local function build_ctx()
       log("INFO", "State-Uebergang: " .. tostring(next_state) .. (reason and (" (" .. tostring(reason) .. ")") or ""))
       current_state_value = next_state
     end,
+    -- reactor_control.lua's SAFE-Exit braucht Zugriff auf node_state_machine
+    -- (fuer den EMERGENCY->RUNNING-Gegenzug, siehe dort), das build_ctx()
+    -- bisher gar nicht bereitstellte. Getter statt direktem Feld: build_ctx()
+    -- laeuft in init() VOR configure_state_machine(), ein direktes Feld
+    -- wuerde also permanent nil einfrieren.
+    get_node_state_machine = function() return node_state_machine end,
   }
 end
 
@@ -675,14 +681,32 @@ local function control_tick()
   -- Safety-first order: update_module_states() (detects/reacts to danger
   -- states across ALL modules, e.g. TEMP/WATER limits -> ERROR/SAFE/
   -- EMERGENCY) runs BEFORE process_startup() (advances only the currently
-  -- starting module) and BEFORE reactor_control/turbine_control -- control
+  -- starting module) and BEFORE the node-state-machine tick -- control
   -- must never act on an already-stale safety state from this same tick.
   module_lifecycle.update_module_states(make_lifecycle_ctx())
   module_lifecycle.process_startup(make_lifecycle_ctx())
-  -- Reaktor-Regelung
-  reactor_control.updateReactorControl(ctx)
-  -- Turbinen-Regelung
-  turbine_control.updateControl(ctx)
+  -- Architektur-Fix (2026-09-18, unabhaengig verifizierter externer
+  -- Codeanalyse-Befund): node_state_machine:tick() wurde bisher NIRGENDS
+  -- aufgerufen (verifiziert per grep + git log -S ueber die komplette
+  -- Historie) -- reactor_control.updateReactorControl()/turbine_control.
+  -- updateControl() liefen bisher direkt und unbedingt hier, unabhaengig
+  -- vom node_state_machine-Zustand. state_handlers.lua's on_tick-Handler
+  -- (STARTUP/RUNNING/LIMITED/AUTONOM rufen adjust_reactors()/adjust_
+  -- turbines() bereits selbst auf; OFF/EMERGENCY/MANUAL bewusst nicht --
+  -- siehe dort) waren dadurch komplett totes Delegations-Ziel: Watchdog,
+  -- Startup-Queue-Verarbeitung, monitor_master() (Master-Verlust-Erkennung,
+  -- Kapazitaetslern-Kickstart) und vor allem die EMERGENCY-Semantik (nach
+  -- SCRAM keine Regelung mehr, bis explizit zurueckgesetzt) griffen nie.
+  -- node_state_machine:tick() ruft jetzt genau EINEN der on_tick-Handler
+  -- auf (je nach aktuellem Zustand) -- diese sind die einzige Quelle fuer
+  -- adjust_reactors()/adjust_turbines() ab jetzt (siehe rt_state_handler_
+  -- context_wiring_test.lua, das genau das schon immer verlangte). Node
+  -- wird bei jedem Boot in configure_state_machine() sofort OFF->RUNNING
+  -- geschaltet, ein EMERGENCY-Trip hat seit dem parallelen Fix in
+  -- reactor_control.lua einen Weg zurueck nach RUNNING (SAFE-Auto-Recovery).
+  if node_state_machine then
+    node_state_machine:tick()
+  end
   -- Learning-Update (als Teil des Status-Snapshots, läuft via build_status_payload)
   writeback_ctx()
 end

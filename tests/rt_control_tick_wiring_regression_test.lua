@@ -4,8 +4,7 @@ local order={
   'if rt_update_quiescing then return end',
   'module_lifecycle.update_module_states(make_lifecycle_ctx())',
   'module_lifecycle.process_startup(make_lifecycle_ctx())',
-  'reactor_control.updateReactorControl(ctx)',
-  'turbine_control.updateControl(ctx)',
+  'node_state_machine:tick()',
   'writeback_ctx()',
 }
 local last=0; for _,t in ipairs(order) do local i=assert(b:find(t,1,true),'missing control tick delegation '..t); assert(i>last,'control tick safety/order drift at '..t); last=i end

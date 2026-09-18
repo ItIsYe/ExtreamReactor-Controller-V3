@@ -41,6 +41,12 @@
 
 local M = {}
 
+-- Fallback identisch zu state_handlers.lua's eigenem Muster: falls ein
+-- Aufrufer ctx.constants nicht mitgibt (dieses Modul verlangt es bisher
+-- nicht), wird trotzdem die reale node_states-Enum fuer den EMERGENCY-
+-- Exit unten benoetigt.
+local constants = require("shared.constants")
+
 -- module_lifecycle.update_module_states() always runs before
 -- updateReactorControl() in the same control_tick() (safety-first
 -- ordering, see main.lua), and unconditionally refreshes every reactor
@@ -840,6 +846,26 @@ function M.updateReactorControl(ctx)
         "SAFE-Mode Exit: alle Reaktoren unter %.0f°C (limit=%.0f hysteresis=%.0f)",
         recover_at, limit, hysteresis))
       ctx.setState(ctx.STATE.MASTER, "SAFETY_TEMPERATURE_RECOVERED")
+      -- Node-Lifecycle-Gegenstueck zu module_lifecycle.lua's EMERGENCY-
+      -- Eintritt (siehe dort: ctx.setState(SAFE, ...) UND ctx.node_state_
+      -- machine:transition(EMERGENCY) werden immer als Paar aufgerufen).
+      -- Ohne dieses Gegenstueck gab es -- sobald node_state_machine:tick()
+      -- tatsaechlich verdrahtet ist (2026-09-18) -- keinen Weg mehr aus
+      -- EMERGENCY heraus: running_on_tick()/limited_on_tick()/etc. sind
+      -- die einzigen on_tick-Handler, die adjust_reactors()/adjust_
+      -- turbines() aufrufen, emergency_on_tick() tut das bewusst nicht
+      -- (SCRAM-Zustand soll bestehen bleiben) -- ein einziger, auch nur
+      -- kurzer Trip haette den Knoten sonst fuer den Rest der Laufzeit
+      -- ungeregelt gelassen, selbst nachdem sich Temperatur/Kuehlmittel
+      -- laengst erholt haben. ctx.node_state_machine/ctx.get_node_state_
+      -- machine() ist optional (aeltere Tests mocken rc_ctx ohne dieses
+      -- Feld) -- einfach uebersprungen, wenn nicht vorhanden.
+      local nsm = type(ctx.get_node_state_machine) == "function"
+        and ctx.get_node_state_machine() or ctx.node_state_machine
+      if nsm and type(nsm.state) == "function" and type(nsm.transition) == "function"
+          and nsm:state() == constants.node_states.EMERGENCY then
+        nsm:transition(constants.node_states.RUNNING)
+      end
     end
     return
   end

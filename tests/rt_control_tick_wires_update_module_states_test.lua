@@ -38,11 +38,16 @@ assert(update_pos, 'control_tick() must call module_lifecycle.update_module_stat
 local startup_pos = body:find('module_lifecycle.process_startup(make_lifecycle_ctx())', 1, true)
 assert(startup_pos, 'control_tick() must still call module_lifecycle.process_startup(make_lifecycle_ctx())')
 
-local reactor_pos = body:find('reactor_control.updateReactorControl(ctx)', 1, true)
-assert(reactor_pos, 'control_tick() must still call reactor_control.updateReactorControl(ctx)')
-
-local turbine_pos = body:find('turbine_control.updateControl(ctx)', 1, true)
-assert(turbine_pos, 'control_tick() must still call turbine_control.updateControl(ctx)')
+-- 2026-09-18: reactor_control.updateReactorControl(ctx)/turbine_control.
+-- updateControl(ctx) are no longer called directly from control_tick() --
+-- node_state_machine:tick() now delegates to state_handlers.lua's
+-- on_tick handlers (running_on_tick()/limited_on_tick()/etc.), which call
+-- adjust_reactors()/adjust_turbines() themselves. See rt_state_handler_
+-- context_wiring_test.lua (drives that delegation directly) and rt_
+-- node_state_machine_tick_wiring_test.lua (structural check that this
+-- exact call exists here).
+local tick_pos = body:find('node_state_machine:tick()', 1, true)
+assert(tick_pos, 'control_tick() must call node_state_machine:tick() to delegate to state_handlers.lua')
 
 -- Documented safety-first ordering: newly dangerous conditions (TEMP/WATER
 -- limits -> ERROR/SAFE/EMERGENCY) must be detected and acted on BEFORE this
@@ -50,9 +55,7 @@ assert(turbine_pos, 'control_tick() must still call turbine_control.updateContro
 -- possibly-stale state.
 assert(update_pos < startup_pos,
   'update_module_states() must run before process_startup() (safety-first ordering)')
-assert(startup_pos < reactor_pos,
-  'process_startup() must run before reactor_control.updateReactorControl()')
-assert(reactor_pos < turbine_pos,
-  'reactor_control.updateReactorControl() must run before turbine_control.updateControl()')
+assert(startup_pos < tick_pos,
+  'process_startup() must run before node_state_machine:tick()')
 
 print('rt_control_tick_wires_update_module_states_test.lua: ok')

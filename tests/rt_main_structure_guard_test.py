@@ -13,6 +13,6 @@ for (i,name),(j,_) in zip(starts,starts[1:]):
 for helper in ['local function configure_lifecycle_context()','local function configure_state_machine()','configure_lifecycle_context()','configure_state_machine()']:
     if helper not in text: raise SystemExit(f'rt init structural delegation missing: {helper}')
 cs=text.index('local function control_tick()'); ce=text.index('-- ── Command-Handler',cs); block=text[cs:ce]
-for t in ['module_lifecycle.update_module_states','module_lifecycle.process_startup','reactor_control.updateReactorControl','turbine_control.updateControl','writeback_ctx()']:
+for t in ['module_lifecycle.update_module_states','module_lifecycle.process_startup','node_state_machine:tick()','writeback_ctx()']:
     if t not in block: raise SystemExit(f'control_tick missing delegation {t}')
 print('rt_main_structure_guard_test.py: ok')
