@@ -621,6 +621,38 @@ function M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
     }
   end
 
+  -- Fix (2026-09-18, gemeldet: "Turbinen bei 2000 RPM bekommen genauso
+  -- vollen Flow wie welche bei 100 RPM"): overspeed_brake_state() aktiviert
+  -- absichtlich NIE fuer target_rpm<=0 ("AUS"-Slot der VOLLAST/PUFFER/AUS-
+  -- Leistungsaufteilung, siehe get_turbine_target_rpm) -- ein frueherer
+  -- Versuch, die Bremse dort greifen zu lassen, verursachte einen
+  -- Dauer-Lock (repeat_count=1490+, TARGET_ZERO_NO_BRAKE-Kommentar oben).
+  -- Ohne die Bremse blieb eine AUS-Turbine aber komplett auf den normalen,
+  -- schrittbegrenzten Abwaerts-Ramp angewiesen (max_step_down=250 alle
+  -- 0.2s) -- bei mehreren tausend RPM Ueberdrehzahl dauert das bis zu
+  -- 20-30 Sekunden, waehrend die Turbine weiterhin mit vollem/hohem Flow
+  -- lief. Anders als die Overspeed-Bremse engagiert dieser Pfad NICHT die
+  -- Induktionsspule (das war die eigentliche Ursache des alten Locks) --
+  -- er setzt nur next_flow direkt auf 0, sofort statt schrittweise, exakt
+  -- wie die Bremse es fuer echte Overspeed-Faelle bereits tut.
+  local target_zero_active = (not overspeed_state.active) and target <= 0
+  if target_zero_active then
+    next_flow = 0; direction = -1
+    decision = {
+      reason = "TARGET_ZERO_FLOW_ZERO", step = math.abs(base_flow),
+      min = 0, max = max_flow, overspeed_brake = false,
+      target_band = false, target_band_mode = "TARGET_ZERO_FLOW_ZERO"
+    }
+  end
+  -- Alle folgenden Entscheidungsbloecke, die next_flow ueberschreiben
+  -- koennten (Zielband-Trim, Notfall-Trim, Readback-Settle-Hold), muessen
+  -- das erzwungene flow=0 von oben genauso respektieren wie den echten
+  -- Overspeed-Bremsfall -- sonst wuerde z.B. should_hold_readback_settle()
+  -- weiter unten next_flow zurueck auf den alten (hohen) base_flow setzen,
+  -- und die AUS-Turbine bliebe trotz des Fixes oben weiterhin bei vollem
+  -- Flow haengen.
+  local flow_locked = overspeed_state.active or target_zero_active
+
   local target_band = ctx.turbine_regulator.target_band_state({
     rpm = smoothed_rpm or rpm or target, live_rpm = rpm, target_rpm = target,
     requested_flow = base_flow, confirmed_flow = ctrl.confirmed_flow,
@@ -630,7 +662,7 @@ function M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
     trim_down_step = rail_cfg.target_trim_step_down  or 75
   })
 
-  if (not overspeed_state.active) and target_band and target_band.in_band then
+  if (not flow_locked) and target_band and target_band.in_band then
     next_flow = target_band.flow; direction = target_band.direction or 0
     decision = {
       reason = target_band.reason,
@@ -659,7 +691,7 @@ function M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
       decision.target_band_at_min_limit = next_flow <= min_flow
       decision.target_band_at_max_limit = next_flow >= max_flow
     end
-  elseif (not overspeed_state.active) and decision
+  elseif (not flow_locked) and decision
       and decision.reason == "DEADBAND" and base_flow >= (max_flow - 1) then
     local emergency_trim = math.max(1, rail_cfg.target_trim_step_down or 50)
     local live_error = target - (rpm or target)
@@ -689,7 +721,7 @@ function M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
     pending_retries = ctrl.pending_retries,
     readback_retry_cap = rail_cfg.readback_retry_cap
   })
-  if (not overspeed_state.active) and hold_for_readback_lag then
+  if (not flow_locked) and hold_for_readback_lag then
     next_flow = base_flow; direction = 0
     decision = {
       reason = "READBACK_SETTLING_HOLD", step = 0, min = min_flow, max = max_flow,
@@ -705,28 +737,30 @@ function M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
   end
 
   local hold_sample_target = math.max(1, rail_cfg.target_trim_hold_samples or 2)
-  if (not overspeed_state.active) and target_band and target_band.in_band
+  if (not flow_locked) and target_band and target_band.in_band
       and target_band.mode == "HOLDING_TARGET_ACTIVE" then
     ctrl.target_hold_hits = (ctrl.target_hold_hits or 0) + 1
   else
     ctrl.target_hold_hits = 0
   end
-  ctrl.target_holding_active = (not overspeed_state.active) and target_band
+  ctrl.target_holding_active = (not flow_locked) and target_band
     and target_band.in_band and target_band.mode == "HOLDING_TARGET_ACTIVE"
     and ctrl.target_hold_hits >= hold_sample_target or false
-  ctrl.target_trim_active = (not overspeed_state.active) and target_band
+  ctrl.target_trim_active = (not flow_locked) and target_band
     and target_band.in_band
     and not (decision and decision.reason == "READBACK_SETTLING_HOLD")
     and (target_band.mode == "TARGET_TRIM_UP" or target_band.mode == "TARGET_TRIM_DOWN")
     or false
-  ctrl.in_target_band = (not overspeed_state.active) and target_band
+  ctrl.in_target_band = (not flow_locked) and target_band
     and target_band.in_band or false
   ctrl.target_band_status = overspeed_state.active and "OVERSPEED_BRAKE"
+    or target_zero_active and "TARGET_ZERO_FLOW_ZERO"
     or (target_band and target_band.mode or "TRACKING")
 
   if ctrl.target_holding_active and type(ctrl.target_band_status) == "string" then
     ctrl.mode = ctrl.target_band_status
   elseif overspeed_state.active then ctrl.mode = "OVERSPEED_BRAKE"
+  elseif target_zero_active then ctrl.mode = "TARGET_ZERO_FLOW_ZERO"
   elseif direction > 0 then ctrl.mode = "UP"
   elseif direction < 0 then ctrl.mode = "DOWN"
   elseif decision and decision.reason == "DEADBAND" then ctrl.mode = "TRACKING_DEADBAND"
