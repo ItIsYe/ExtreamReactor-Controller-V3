@@ -1,5 +1,47 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
+-- fs/textutils stand-ins for core.utils.load_config/write_config (used by
+-- rt2_engine's capacity-cache persistence) -- same minimal fake as
+-- registry_dirty_test.lua/rt_capacity_cache_persistence_regression_test.lua.
+local files = { ['/xreactor_config'] = '<dir>' }
+_G.fs = {
+  exists = function(p) return files[p] ~= nil end,
+  getDir = function() return '/xreactor_config' end,
+  makeDir = function(p) files[p] = '<dir>' end,
+  delete = function(p) files[p] = nil end,
+  move = function(src, dst) files[dst] = files[src]; files[src] = nil end,
+  open = function(p, mode)
+    if mode == 'w' then
+      local buffer = ''
+      return { write = function(v) buffer = buffer .. tostring(v) end, close = function() files[p] = buffer end }
+    elseif mode == 'r' then
+      if files[p] == nil or files[p] == '<dir>' then return nil end
+      return { readAll = function() return files[p] end, close = function() end }
+    end
+    return nil
+  end,
+}
+_G.textutils = {
+  serialize = function(value)
+    local function encode(v)
+      if type(v) == 'string' then return string.format('%q', v) end
+      if type(v) == 'number' or type(v) == 'boolean' then return tostring(v) end
+      if type(v) ~= 'table' then return 'nil' end
+      local parts = {}
+      for k, item in pairs(v) do parts[#parts + 1] = '[' .. encode(k) .. ']=' .. encode(item) end
+      table.sort(parts)
+      return '{' .. table.concat(parts, ',') .. '}'
+    end
+    return encode(value)
+  end,
+  unserialize = function(content)
+    local loader = load('return ' .. content, '=cache', 't', {})
+    if not loader then return nil end
+    local ok, value = pcall(loader)
+    return ok and value or nil
+  end,
+}
+
 local rt2_engine = require('nodes.rt.rt2_engine')
 local rt2_state = require('nodes.rt.rt2_state')
 
@@ -20,6 +62,7 @@ local applied_flow, applied_coil, applied_rods = {}, {}, nil
 local fake_ctx = {
   config = { turbines = { 'T1' }, reactors = { 'R1' } },
   CONFIG = { LOG_PREFIX = 'RT' },
+  log = function() end,
   adapters = {
     turbine = {
       inspect = function(name) return turbine_hardware[name] end,
@@ -58,5 +101,28 @@ assert_true(ack.ok, 'SCRAM must be accepted through the engine facade')
 result = rt2_engine.tick(fake_ctx)
 assert_eq(result.state, rt2_state.states.SAFE, 'a SCRAM issued through the engine facade must force SAFE on the next tick')
 assert_eq(applied_rods, 100, 'SAFE must have written full rod insertion to the fake reactor adapter')
+
+-- Capacity-cache persistence: a fresh init() + a tick that reaches ready
+-- must write the cache file, and a second init() with a matching
+-- turbine_count must load it back and skip relearning (state goes
+-- straight past LEARNING instead of re-measuring from zero).
+local cache_path = '/xreactor_config/rt2_capacity_cache_test.lua'
+files[cache_path] = nil
+
+rt2_engine.init({ cache_path = cache_path, turbine_count = 1 })
+applied_flow, applied_coil, applied_rods = {}, {}, nil
+result = rt2_engine.tick(fake_ctx)
+assert_true(result.capacity.ready, 'a single turbine already at target rpm must be ready after one tick')
+assert_true(files[cache_path] ~= nil, 'a ready capacity measurement must be persisted to the cache file')
+
+-- INIT always spends its first tick becoming LEARNING (rt2_state.lua's
+-- INIT branch does not look at capacity_ready), but with a cache already
+-- loaded the very next tick must leave LEARNING immediately instead of
+-- needing to remeasure from zero.
+rt2_engine.init({ cache_path = cache_path, turbine_count = 1 })
+result = rt2_engine.tick(fake_ctx)
+assert_true(result.capacity.ready, 'a fresh engine loading a matching cache must start already ready, not relearning')
+result = rt2_engine.tick(fake_ctx)
+assert_true(result.state ~= rt2_state.states.LEARNING, 'loading a valid cache must leave LEARNING on the second tick without remeasuring')
 
 print('rt2_engine_test.lua: ok')

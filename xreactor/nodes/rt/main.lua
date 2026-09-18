@@ -1112,7 +1112,7 @@ local function init()
         #devices.reactors))
     else
       engine_v2 = true
-      rt2_engine.init({})
+      rt2_engine.init({ turbine_count = #devices.turbines, log = log })
       log("INFO", "engine=v2 active (rewritten control engine)")
     end
   end

@@ -23,7 +23,10 @@ function M.new(opts)
   opts = opts or {}
   local self = {
     machine = rt2_state.new(opts.initial_state),
-    capacity = rt2_capacity.new_state(),
+    -- A caller that already loaded a persisted capacity (see
+    -- rt2_capacity.load()) passes it in here so a restart doesn't have
+    -- to relearn from zero -- see rt2_engine.lua's init().
+    capacity = opts.initial_capacity or rt2_capacity.new_state(),
     master_link = rt2_master_link.new({ timeout_ms = opts.master_timeout_ms }),
     rotation_offset = 0,
     last_rotate_ms = 0,

@@ -15,14 +15,50 @@
 local orchestrator = require("nodes.rt.rt2_orchestrator")
 local adapter = require("nodes.rt.rt2_adapter")
 local rt2_state = require("nodes.rt.rt2_state")
+local rt2_capacity = require("nodes.rt.rt2_capacity")
+local utils = require("core.utils")
 
 local M = {}
 
+-- Deliberately a SEPARATE file from CONFIG.CAPACITY_CACHE_PATH (v1's
+-- cache): the persisted shape differs (count-keyed, no per-turbine
+-- identity signature -- see rt2_capacity.lua's header on why) and the
+-- two engines must never read each other's cache.
+M.CACHE_PATH = "/xreactor_config/rt2_capacity_cache.lua"
+
 local engine
 local last_result
+local cache_path
+local last_saved_max_output
 
+local function read_config(path)
+  return (utils.load_config(path, {}))
+end
+
+local function write_config(path, data)
+  return (utils.write_config(path, data))
+end
+
+-- opts.turbine_count: how many turbines discovery just found -- required
+-- to validate (or reject) a persisted cache from a genuinely different
+-- fleet size. opts.cache_path overrides M.CACHE_PATH (mainly for tests).
 function M.init(opts)
-  engine = orchestrator.new(opts)
+  opts = opts or {}
+  cache_path = opts.cache_path or M.CACHE_PATH
+  local loaded, load_err = rt2_capacity.load({
+    path = cache_path, read_config = read_config, turbine_count = opts.turbine_count,
+  })
+  if loaded and type(opts.log) == "function" then
+    opts.log("INFO", string.format("v2 capacity loaded from cache: max_output=%.2f", loaded.max_output))
+  elseif load_err and type(opts.log) == "function" then
+    opts.log("INFO", "v2 capacity cache not used: " .. tostring(load_err))
+  end
+  last_saved_max_output = loaded and loaded.max_output or nil
+  engine = orchestrator.new({
+    initial_state = opts.initial_state,
+    master_timeout_ms = opts.master_timeout_ms,
+    initial_capacity = loaded,
+  })
   last_result = nil
   return engine
 end
@@ -79,6 +115,18 @@ function M.tick(ctx)
   end
   if reactor_name then
     adapter.apply_reactor(ctx.adapters.reactor, reactor_name, ctx.CONFIG.LOG_PREFIX, result.reactor_decision)
+  end
+
+  -- Persist only when the learned value actually changed (same
+  -- dirty-check discipline as v1's writeback_ctx) -- writing to disk
+  -- every tick would be needless CC:Tweaked I/O for a value that is
+  -- usually stable for the entire session once learned.
+  if result.capacity.ready and result.capacity.max_output ~= last_saved_max_output then
+    local saved = rt2_capacity.save(result.capacity, { path = cache_path, write_config = write_config })
+    if saved then
+      last_saved_max_output = result.capacity.max_output
+      ctx.log("INFO", string.format("v2 capacity cached: max_output=%.2f", result.capacity.max_output))
+    end
   end
 
   last_result = result
