@@ -20,9 +20,16 @@ end
 
 -- Inside the deadband: no movement.
 do
-  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.51, target_fill = 0.5, current_rods = 60 })
-  assert_eq(r.rods, 60, 'inside the deadband, rods must not move')
+  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.51, target_fill = 0.5, current_rods = 90 })
+  assert_eq(r.rods, 90, 'inside the deadband, rods must not move')
   assert_eq(r.reason, 'DEADBAND')
+end
+
+-- A current_rods reading below the 70% floor (e.g. a stale value from
+-- before the floor was introduced) must be clamped up, not preserved.
+do
+  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.51, target_fill = 0.5, current_rods = 60 })
+  assert_eq(r.rods, 70, 'a below-floor current_rods reading must clamp up to 70 even inside the deadband')
 end
 
 -- Tank too full (more steam than needed) -> INSERT rods (increase level)
@@ -30,15 +37,15 @@ end
 -- backwards (treating a fuller tank as "withdraw more") would silently
 -- run the reactor at the wrong end of its power range.
 do
-  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.9, target_fill = 0.5, current_rods = 50 })
-  assert_true(r.rods > 50, 'a tank fuller than target must INSERT rods (raise the level), reducing power')
+  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.9, target_fill = 0.5, current_rods = 80 })
+  assert_true(r.rods > 80, 'a tank fuller than target must INSERT rods (raise the level), reducing power')
   assert_eq(r.reason, 'TANK_FULL_INSERT')
 end
 
 -- Tank too low (need more steam) -> WITHDRAW rods (decrease level) -> more power.
 do
-  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.1, target_fill = 0.5, current_rods = 50 })
-  assert_true(r.rods < 50, 'a tank emptier than target must WITHDRAW rods (lower the level), increasing power')
+  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.1, target_fill = 0.5, current_rods = 90 })
+  assert_true(r.rods < 90, 'a tank emptier than target must WITHDRAW rods (lower the level), increasing power')
   assert_eq(r.reason, 'TANK_LOW_WITHDRAW')
 end
 
@@ -46,18 +53,29 @@ end
 -- straight to an extreme in one control step.
 do
   local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.0, target_fill = 0.5, current_rods = 100 })
-  assert_true(r.rods > 0, 'even a maximal fill error must be capped by MAX_STEP per control step')
+  assert_true(r.rods > 70, 'even a maximal fill error must be capped by MAX_STEP per control step, not jump straight to the 70% floor')
   assert_true(100 - r.rods <= rt2_reactor.MAX_STEP + 0.0001, 'the step down must never exceed MAX_STEP')
 end
 
--- Rods must clamp at the physical 0/100 bounds regardless of how large the error is.
+-- Rods must clamp at the configured 70/100 bounds regardless of how large
+-- the error is -- the controller may only ever regulate within 70-100%
+-- insertion (confirmed spec 2026-09-19), never withdrawing further than 70.
 do
-  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.0, target_fill = 0.5, current_rods = 2 })
-  assert_true(r.rods >= 0, 'rods must never go below 0')
+  local r = rt2_reactor.compute_rod_level({ fill_ratio = 0.0, target_fill = 0.5, current_rods = 72 })
+  assert_true(r.rods >= 70, 'rods must never withdraw below the 70% floor')
 end
 do
   local r = rt2_reactor.compute_rod_level({ fill_ratio = 1.0, target_fill = 0.5, current_rods = 98 })
   assert_true(r.rods <= 100, 'rods must never exceed 100')
+end
+
+-- Reactor auto-activation: if the reactor reads OFF (or the reading is
+-- missing/unknown), v2 must decide to turn it on. Once it reads ON, no
+-- further activation is needed.
+do
+  assert_true(rt2_reactor.compute_active_decision(false), 'a reactor reading OFF must be turned on')
+  assert_true(rt2_reactor.compute_active_decision(nil), 'an unknown active reading must fail toward turning it on')
+  assert_true(not rt2_reactor.compute_active_decision(true), 'a reactor already ON must not be re-activated every tick')
 end
 
 print('rt2_reactor_test.lua: ok')

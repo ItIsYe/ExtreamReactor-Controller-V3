@@ -34,15 +34,17 @@ end
 -- ── read_reactor ─────────────────────────────────────────────────────────
 
 do
-  local r = adapter.read_reactor({ steam_fill_ratio = 0.42, control_rod_level = 55 })
+  local r = adapter.read_reactor({ steam_fill_ratio = 0.42, control_rod_level = 55, active = true })
   assert_eq(r.fill_ratio, 0.42)
   assert_eq(r.current_rods, 55)
+  assert_eq(r.active, true)
 end
 
 do
   local r = adapter.read_reactor({ steam_fill_ratio = nil, control_rod_level = 'n/a' })
   assert_true(r.fill_ratio == nil, 'a missing fill ratio must stay nil, not default to a made-up number')
   assert_true(r.current_rods == nil, 'a non-numeric rod reading must normalize to nil')
+  assert_eq(r.active, false, 'a missing active reading must default to false, never nil')
 end
 
 -- ── apply_turbine ────────────────────────────────────────────────────────
@@ -73,6 +75,23 @@ do
   local result = adapter.apply_reactor(fake_reactor_adapter, 'R1', 'RT', { rods = 100, reason = 'SAFETY_FULL_INSERT' })
   assert_eq(seen.name, 'R1'); assert_eq(seen.level, 100)
   assert_true(result.ok, 'apply_reactor must report the underlying write result')
+end
+
+-- reactor_decision.activate = true must call set_active(name, true, ...)
+-- when the adapter offers it; a falsy activate must not call it at all.
+do
+  local set_active_calls = {}
+  local fake_reactor_adapter = {
+    apply_rod_level = function() return true end,
+    set_active = function(name, enabled, log_prefix) set_active_calls[#set_active_calls + 1] = { name = name, enabled = enabled }; return true end,
+  }
+  adapter.apply_reactor(fake_reactor_adapter, 'R1', 'RT', { rods = 100, activate = true })
+  assert_eq(#set_active_calls, 1, 'an activate=true decision must call set_active exactly once')
+  assert_eq(set_active_calls[1].name, 'R1'); assert_eq(set_active_calls[1].enabled, true)
+
+  set_active_calls = {}
+  adapter.apply_reactor(fake_reactor_adapter, 'R1', 'RT', { rods = 100, activate = false })
+  assert_eq(#set_active_calls, 0, 'an activate=false decision must not call set_active')
 end
 
 print('rt2_adapter_test.lua: ok')

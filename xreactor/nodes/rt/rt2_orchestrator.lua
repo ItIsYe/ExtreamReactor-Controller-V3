@@ -117,6 +117,7 @@ function M.new(opts)
       current_rods = input.reactor and input.reactor.current_rods or nil,
       safety_override = safety_override,
     })
+    reactor_decision.activate = rt2_reactor.compute_active_decision(input.reactor and input.reactor.active)
 
     local turbine_count = #(input.turbines or {})
     local turbine_results = {}

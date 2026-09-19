@@ -108,6 +108,17 @@ do
   assert_eq(result.reactor_decision.reason, 'TANK_LOW_WITHDRAW', 'AUTONOM reactor control must react only to the steam tank, never to a stray master_percent')
 end
 
+-- reactor_decision.activate must be wired through from the tick's own
+-- reactor.active reading -- true while the reading says OFF/unknown,
+-- false once the reading confirms it is already ON.
+do
+  local o = orchestrator.new()
+  local off_result = o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5, active = false } })
+  assert_true(off_result.reactor_decision.activate, 'a reactor reading active=false must be flagged for activation')
+  local on_result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5, active = true } })
+  assert_true(not on_result.reactor_decision.activate, 'a reactor already reading active=true must not be re-flagged for activation')
+end
+
 -- Safety trip forces full rod insertion and zero flow everywhere,
 -- overriding whatever state the node was in.
 do

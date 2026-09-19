@@ -18,10 +18,16 @@
 -- but it is exactly the kind of off-by-a-sign-convention bug this module
 -- exists to make impossible to get wrong twice: it is asserted by tests
 -- below, not just written in a comment.
+--
+-- Confirmed spec (2026-09-19): the controller may only regulate within
+-- 70-100% rod insertion, never withdrawing further than 70% (i.e. never
+-- exceeding whatever power that corresponds to) -- ROD_MIN raised from 0
+-- to 70 clamps every decision below to that floor, same as the existing
+-- 0/100 clamp test at the bottom of this file already exercises.
 
 local M = {}
 
-M.ROD_MIN = 0
+M.ROD_MIN = 70
 M.ROD_MAX = 100
 M.DEFAULT_TARGET_FILL = 0.5   -- keep the internal steam tank ~50% full
 M.DEADBAND = 0.03             -- +/-3 percentage points: no rod movement inside this
@@ -72,6 +78,21 @@ function M.compute_rod_level(input)
     next_rods = clamp(current_rods - step, M.ROD_MIN, M.ROD_MAX)
   end
   return { rods = next_rods, reason = error_fill > 0 and "TANK_FULL_INSERT" or "TANK_LOW_WITHDRAW" }
+end
+
+-- Confirmed spec (2026-09-19): if the physical reactor reads OFF (e.g.
+-- never switched on after a fresh multiblock assembly, or manually
+-- toggled), v2 must turn it back on itself rather than sit there
+-- regulating rods on a block producing zero power. Only ever turns it
+-- ON -- SAFE already reaches zero power via full rod insertion above, so
+-- there is no case where v2 needs to switch the reactor off itself.
+--
+-- current_active: the last read `active` state (true/false), or nil/
+-- anything non-boolean if unknown -- treated the same as false so an
+-- unreadable state fails toward "make sure it's on" rather than assuming
+-- it already is.
+function M.compute_active_decision(current_active)
+  return current_active ~= true
 end
 
 return M

@@ -55,9 +55,9 @@ local turbine_hardware = {
   T1 = { rpm = 900, energy = 100, coil_engaged = true, flow = 4000 },
 }
 local reactor_hardware = {
-  R1 = { steam_fill_ratio = 0.5, control_rod_level = 50 },
+  R1 = { steam_fill_ratio = 0.5, control_rod_level = 80, active = true },
 }
-local applied_flow, applied_coil, applied_rods = {}, {}, nil
+local applied_flow, applied_coil, applied_rods, applied_active = {}, {}, nil, nil
 
 local fake_ctx = {
   config = { turbines = { 'T1' }, reactors = { 'R1' } },
@@ -72,6 +72,7 @@ local fake_ctx = {
     reactor = {
       inspect = function(name) return reactor_hardware[name] end,
       apply_rod_level = function(name, level) applied_rods = level; return true end,
+      set_active = function(name, enabled) applied_active = enabled; return true end,
     },
   },
 }
@@ -88,6 +89,16 @@ assert_eq(result.turbines[1].target_rpm, 900, 'LEARNING targets the fixed RPM')
 assert_true(applied_flow.T1 ~= nil, 'the flow decision must have been written to the fake turbine adapter')
 assert_true(applied_coil.T1 == true, 'the coil decision must have been written to the fake turbine adapter')
 assert_true(applied_rods ~= nil, 'the rod decision must have been written to the fake reactor adapter')
+assert_true(applied_active == nil, 'a reactor already reading active=true must not trigger a set_active write')
+
+-- A reactor reading active=false must be turned back on through the same
+-- full adapter chain (rt2_engine -> rt2_adapter -> the fake reactor
+-- adapter's set_active), not just decided and dropped.
+reactor_hardware.R1.active = false
+result = rt2_engine.tick(fake_ctx)
+assert_eq(applied_active, true, 'a reactor reading active=false must be turned on via set_active(name, true, ...)')
+reactor_hardware.R1.active = true
+applied_active = nil
 
 -- status_fields() must reflect the last tick without re-reading hardware.
 local fields = rt2_engine.status_fields()

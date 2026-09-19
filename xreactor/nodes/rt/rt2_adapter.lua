@@ -43,6 +43,7 @@ function M.read_reactor(reactor_info)
   return {
     fill_ratio = num_or_nil(reactor_info.steam_fill_ratio),
     current_rods = num_or_nil(reactor_info.control_rod_level),
+    active = reactor_info.active == true,
   }
 end
 
@@ -60,12 +61,20 @@ function M.apply_turbine(turbine_adapter, name, log_prefix, turbine_result)
   return result
 end
 
--- Writes the reactor's rod decision to hardware via the given
--- reactor_adapter module. Reuses apply_rod_level()'s own safe-readback
--- confirmation -- see module header.
+-- Writes the reactor's rod decision (and, if set, an activation request)
+-- to hardware via the given reactor_adapter module. Reuses
+-- apply_rod_level()'s own safe-readback confirmation -- see module header.
+-- reactor_decision.activate is already dirty-checked by
+-- rt2_reactor.compute_active_decision() against this tick's own reading
+-- (false once the reactor reads active), so this never issues a redundant
+-- setActive(true) once the reactor is confirmed on.
 function M.apply_reactor(reactor_adapter, name, log_prefix, reactor_decision)
   local ok, err = reactor_adapter.apply_rod_level(name, reactor_decision.rods, log_prefix)
-  return { ok = ok, err = err }
+  local result = { ok = ok, err = err }
+  if reactor_decision.activate and type(reactor_adapter.set_active) == "function" then
+    result.active_ok, result.active_err = reactor_adapter.set_active(name, true, log_prefix)
+  end
+  return result
 end
 
 return M
