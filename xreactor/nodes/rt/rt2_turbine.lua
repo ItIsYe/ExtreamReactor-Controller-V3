@@ -12,12 +12,12 @@
 local M = {}
 
 M.FULL_TARGET_RPM = 900
-M.RPM_BAND = 30          -- +/- RPM around target considered "on target"
+M.RPM_BAND = 40          -- +/- RPM around target considered "on target"
 M.COIL_ENGAGE_RPM = 900
 M.COIL_DISENGAGE_RPM = 850
 M.MIN_FLOW = 0
 M.MAX_FLOW = 32000
-M.TRIM_STEP = 75
+M.TRIM_STEP = 35
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end

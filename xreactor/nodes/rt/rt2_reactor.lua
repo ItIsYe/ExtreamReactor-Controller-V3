@@ -30,8 +30,8 @@ local M = {}
 M.ROD_MIN = 70
 M.ROD_MAX = 100
 M.DEFAULT_TARGET_FILL = 0.5   -- keep the internal steam tank ~50% full
-M.DEADBAND = 0.03             -- +/-3 percentage points: no rod movement inside this
-M.MAX_STEP = 4                -- max rod-level change per control step
+M.DEADBAND = 0.06             -- +/-6 percentage points: no rod movement inside this
+M.MAX_STEP = 2                -- max rod-level change per control step
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end
