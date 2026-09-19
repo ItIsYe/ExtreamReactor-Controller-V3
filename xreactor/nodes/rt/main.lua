@@ -1110,10 +1110,18 @@ local function init()
       log("WARN", string.format(
         "engine=v2 requires exactly one reactor (found %d) -- falling back to v1 for this node",
         #devices.reactors))
+      pcall(print, string.format(
+        "[RT] engine=v2 abgelehnt: %d Reaktoren gefunden (nur 1 unterstuetzt) -- laeuft auf v1",
+        #devices.reactors))
     else
       engine_v2 = true
       rt2_engine.init({ turbine_count = #devices.turbines, log = log })
       log("INFO", "engine=v2 active (rewritten control engine)")
+      -- utils.log() routet standardmaessig zum Log-Collector, nicht auf
+      -- den lokalen Bildschirm -- diese Zeile ist bewusst ein direktes
+      -- print(), damit am Computer selbst sofort sichtbar ist, dass v2
+      -- aktiv ist, ohne Router-UI oder Log-Collector zu brauchen.
+      pcall(print, "[RT] engine=v2 AKTIV (neue Regel-Engine)")
     end
   end
 
