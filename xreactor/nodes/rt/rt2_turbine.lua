@@ -143,4 +143,20 @@ function M.compute_coil_decision(input)
   return { engaged = currently_engaged, reason = "HOLD" }
 end
 
+-- ── Active decision ──────────────────────────────────────────────────────
+--
+-- Confirmed spec (2026-09-19): same as the reactor -- if a turbine reads
+-- OFF (e.g. never switched on after a fresh multiblock assembly, or
+-- manually toggled), v2 must turn it back on itself. Only ever turns it
+-- ON; an AUS/PUFFER-slot turbine already reaches zero output through
+-- flow=0/coil disengaged above, so there is no case where v2 needs to
+-- switch a turbine off itself.
+--
+-- current_active: the last read `active` state (true/false), or nil/
+-- anything non-boolean if unknown -- treated the same as false so an
+-- unreadable state fails toward "make sure it's on".
+function M.compute_active_decision(current_active)
+  return current_active ~= true
+end
+
 return M

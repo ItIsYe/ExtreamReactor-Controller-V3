@@ -139,6 +139,7 @@ function M.new(opts)
         target_rpm = target_rpm,
         flow_decision = flow_decision,
         coil_decision = coil_decision,
+        activate = rt2_turbine.compute_active_decision(t.active),
       }
     end
 

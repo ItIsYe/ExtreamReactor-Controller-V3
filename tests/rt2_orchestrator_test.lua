@@ -119,6 +119,17 @@ do
   assert_true(not on_result.reactor_decision.activate, 'a reactor already reading active=true must not be re-flagged for activation')
 end
 
+-- Same wiring for turbines[i].activate.
+do
+  local o = orchestrator.new()
+  local t1_off = turbine('T1', 900, 100, true); t1_off.active = false
+  local off_result = o.tick({ now_ms = 1000, hardware_ready = true, turbines = { t1_off }, reactor = { fill_ratio = 0.5 } })
+  assert_true(off_result.turbines[1].activate, 'a turbine reading active=false must be flagged for activation')
+  local t1_on = turbine('T1', 900, 100, true); t1_on.active = true
+  local on_result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = { t1_on }, reactor = { fill_ratio = 0.5 } })
+  assert_true(not on_result.turbines[1].activate, 'a turbine already reading active=true must not be re-flagged for activation')
+end
+
 -- Safety trip forces full rod insertion and zero flow everywhere,
 -- overriding whatever state the node was in.
 do

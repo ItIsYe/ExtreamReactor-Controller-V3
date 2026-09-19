@@ -52,12 +52,12 @@ local function assert_true(v, m) if not v then error(m or 'assert_true failed') 
 -- plain functions, no CC:Tweaked globals, matching the dependency-
 -- injection style rt2_adapter_test.lua already established.
 local turbine_hardware = {
-  T1 = { rpm = 900, energy = 100, coil_engaged = true, flow = 4000 },
+  T1 = { rpm = 900, energy = 100, coil_engaged = true, flow = 4000, active = true },
 }
 local reactor_hardware = {
   R1 = { steam_fill_ratio = 0.5, control_rod_level = 80, active = true },
 }
-local applied_flow, applied_coil, applied_rods, applied_active = {}, {}, nil, nil
+local applied_flow, applied_coil, applied_rods, applied_active, applied_turbine_active = {}, {}, nil, nil, {}
 
 local fake_ctx = {
   config = { turbines = { 'T1' }, reactors = { 'R1' } },
@@ -68,6 +68,7 @@ local fake_ctx = {
       inspect = function(name) return turbine_hardware[name] end,
       set_flow = function(name, value) applied_flow[name] = value; return true end,
       set_coils = function(name, engaged) applied_coil[name] = engaged; return true end,
+      set_active = function(name, enabled) applied_turbine_active[name] = enabled; return true end,
     },
     reactor = {
       inspect = function(name) return reactor_hardware[name] end,
@@ -90,14 +91,18 @@ assert_true(applied_flow.T1 ~= nil, 'the flow decision must have been written to
 assert_true(applied_coil.T1 == true, 'the coil decision must have been written to the fake turbine adapter')
 assert_true(applied_rods ~= nil, 'the rod decision must have been written to the fake reactor adapter')
 assert_true(applied_active == nil, 'a reactor already reading active=true must not trigger a set_active write')
+assert_true(applied_turbine_active.T1 == nil, 'a turbine already reading active=true must not trigger a set_active write')
 
--- A reactor reading active=false must be turned back on through the same
--- full adapter chain (rt2_engine -> rt2_adapter -> the fake reactor
+-- A reactor/turbine reading active=false must be turned back on through
+-- the same full adapter chain (rt2_engine -> rt2_adapter -> the fake
 -- adapter's set_active), not just decided and dropped.
 reactor_hardware.R1.active = false
+turbine_hardware.T1.active = false
 result = rt2_engine.tick(fake_ctx)
 assert_eq(applied_active, true, 'a reactor reading active=false must be turned on via set_active(name, true, ...)')
+assert_eq(applied_turbine_active.T1, true, 'a turbine reading active=false must be turned on via set_active(name, true, ...)')
 reactor_hardware.R1.active = true
+turbine_hardware.T1.active = true
 applied_active = nil
 
 -- status_fields() must reflect the last tick without re-reading hardware.

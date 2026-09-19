@@ -85,4 +85,12 @@ do
   assert_eq(d.engaged, false, 'the same 400 RPM must NOT engage against a 900 RPM target (unscaled would wrongly hold this near the 450 case)')
 end
 
+-- ── compute_active_decision ──────────────────────────────────────────────
+
+do
+  assert_true(rt2_turbine.compute_active_decision(false), 'a turbine reading OFF must be turned on')
+  assert_true(rt2_turbine.compute_active_decision(nil), 'an unknown active reading must fail toward turning it on')
+  assert_true(not rt2_turbine.compute_active_decision(true), 'a turbine already ON must not be re-activated every tick')
+end
+
 print('rt2_turbine_test.lua: ok')

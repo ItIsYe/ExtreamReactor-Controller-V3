@@ -8,12 +8,13 @@ local function assert_true(v, m) if not v then error(m or 'assert_true failed') 
 -- ── read_turbine ─────────────────────────────────────────────────────────
 
 do
-  local r = adapter.read_turbine('T1', { rpm = 900, energy = 120, coil_engaged = true, flow = 4000 })
+  local r = adapter.read_turbine('T1', { rpm = 900, energy = 120, coil_engaged = true, flow = 4000, active = true })
   assert_eq(r.name, 'T1')
   assert_eq(r.rpm, 900)
   assert_eq(r.energy, 120)
   assert_eq(r.coil_engaged, true)
   assert_eq(r.current_flow, 4000)
+  assert_eq(r.active, true)
 end
 
 -- adapters/turbine.lua's read_number() returns the string "n/a" for an
@@ -24,6 +25,7 @@ do
   assert_true(r.rpm == nil, 'a non-numeric rpm reading ("n/a") must normalize to nil, not pass through as-is')
   assert_eq(r.energy, 0, 'a non-numeric energy reading must default to 0')
   assert_eq(r.coil_engaged, false, 'a missing coil reading must default to false, never nil')
+  assert_eq(r.active, false, 'a missing active reading must default to false, never nil')
 end
 
 do
@@ -63,6 +65,28 @@ do
   assert_eq(calls[1].fn, 'set_flow'); assert_eq(calls[1].value, 0)
   assert_eq(calls[2].fn, 'set_coils'); assert_eq(calls[2].enabled, false)
   assert_true(result.flow_ok and result.coil_ok, 'both writes must report ok')
+end
+
+-- turbine_result.activate = true must call set_active(name, true, ...)
+-- when the adapter offers it; a falsy activate must not call it at all.
+do
+  local set_active_calls = {}
+  local fake_turbine_adapter = {
+    set_flow = function() return true end,
+    set_coils = function() return true end,
+    set_active = function(name, enabled, log_prefix) set_active_calls[#set_active_calls + 1] = { name = name, enabled = enabled }; return true end,
+  }
+  adapter.apply_turbine(fake_turbine_adapter, 'T1', 'RT', {
+    flow_decision = { flow = 4000 }, coil_decision = { engaged = true }, activate = true,
+  })
+  assert_eq(#set_active_calls, 1, 'an activate=true decision must call set_active exactly once')
+  assert_eq(set_active_calls[1].name, 'T1'); assert_eq(set_active_calls[1].enabled, true)
+
+  set_active_calls = {}
+  adapter.apply_turbine(fake_turbine_adapter, 'T1', 'RT', {
+    flow_decision = { flow = 4000 }, coil_decision = { engaged = true }, activate = false,
+  })
+  assert_eq(#set_active_calls, 0, 'an activate=false decision must not call set_active')
 end
 
 -- ── apply_reactor ────────────────────────────────────────────────────────
