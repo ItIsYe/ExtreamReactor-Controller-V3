@@ -30,6 +30,7 @@ local engine
 local last_result
 local cache_path
 local last_saved_max_output
+local last_logged_capacity_diag
 
 local function read_config(path)
   return (utils.load_config(path, {}))
@@ -117,6 +118,24 @@ function M.tick(ctx)
     adapter.apply_reactor(ctx.adapters.reactor, reactor_name, ctx.CONFIG.LOG_PREFIX, result.reactor_decision)
   end
 
+  -- Surface WHY LEARNING is stuck -- ready/at_target/total_turbines/reason
+  -- are already computed every tick by rt2_capacity.update(), but were
+  -- previously only visible by reading Lua state directly. Log (and print
+  -- locally, same as the engine=v2 activation hint) only when the
+  -- diagnostic actually changes, not every tick -- this is the same
+  -- dirty-check discipline as the capacity-cache save below.
+  if not result.capacity.ready then
+    local diag = string.format("%d/%d %s", result.capacity.at_target or 0,
+      result.capacity.total_turbines or 0, tostring(result.capacity.reason))
+    if diag ~= last_logged_capacity_diag then
+      last_logged_capacity_diag = diag
+      local msg = "v2 Einlernen (LEARNING): " .. diag
+        .. " -- Turbinen im Zielbereich (RPM+Spule engaged+Energieausstoss>0) vs. Gesamtzahl"
+      ctx.log("INFO", msg)
+      pcall(print, "[RT] " .. msg)
+    end
+  end
+
   -- Persist only when the learned value actually changed (same
   -- dirty-check discipline as v1's writeback_ctx) -- writing to disk
   -- every tick would be needless CC:Tweaked I/O for a value that is
@@ -154,6 +173,9 @@ function M.status_fields()
     mode = last_result.state,
     capacity_ready = last_result.capacity.ready,
     capacity_max = last_result.capacity.max_output,
+    capacity_at_target = last_result.capacity.at_target,
+    capacity_total_turbines = last_result.capacity.total_turbines,
+    capacity_reason = last_result.capacity.reason,
     turbines = turbines,
     control_rod_level = last_result.reactor_decision and last_result.reactor_decision.rods or nil,
   }

@@ -110,6 +110,39 @@ local fields = rt2_engine.status_fields()
 assert_eq(fields.mode, result.state)
 assert_eq(fields.turbines[1].id, 'T1')
 
+-- Capacity diagnostics (at_target/total_turbines/reason) must be exposed
+-- through status_fields() so a stuck LEARNING phase is visible without
+-- reading Lua state directly -- this is what surfaced the "capacity
+-- never becomes ready although RPM looks fine" report.
+do
+  local stuck_turbine_hardware = { T2 = { rpm = 500, energy = 0, coil_engaged = false, flow = 4000, active = true } }
+  local stuck_ctx = {
+    config = { turbines = { 'T2' }, reactors = { 'R1' } },
+    CONFIG = { LOG_PREFIX = 'RT' },
+    log = function() end,
+    adapters = {
+      turbine = {
+        inspect = function(name) return stuck_turbine_hardware[name] end,
+        set_flow = function() return true end,
+        set_coils = function() return true end,
+        set_active = function() return true end,
+      },
+      reactor = fake_ctx.adapters.reactor,
+    },
+  }
+  -- A fresh, isolated cache path -- the default path already holds a
+  -- saved cache from the earlier tests in this file (T1 reached ready),
+  -- and reusing it here would load that stale value instead of exercising
+  -- a genuinely fresh, not-yet-ready capacity state.
+  rt2_engine.init({ cache_path = '/xreactor_config/rt2_capacity_cache_stuck_test.lua', turbine_count = 1 })
+  rt2_engine.tick(stuck_ctx)
+  local stuck_fields = rt2_engine.status_fields()
+  assert_eq(stuck_fields.capacity_ready, false, 'a turbine far from target RPM must not be ready')
+  assert_eq(stuck_fields.capacity_at_target, 0, 'a turbine far from target RPM must not count as at_target')
+  assert_eq(stuck_fields.capacity_total_turbines, 1)
+  assert_true(stuck_fields.capacity_reason ~= nil, 'a not-ready capacity state must always carry a diagnostic reason')
+end
+
 -- handle_command() must reach the underlying orchestrator and its
 -- effects must show up on the next tick.
 local ack = rt2_engine.handle_command({ target = 'SCRAM' })
