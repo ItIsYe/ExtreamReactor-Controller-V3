@@ -154,10 +154,21 @@ end
 
 local logged = {}
 local config = { reactors = {}, turbines = {} }
+
+-- discovery_runtime.build_modules() shape: id-keyed, state starts at "OFF"
+-- and is what MASTER and the UI read.
+local modules_registry = {}
+for _, name in ipairs(turbine_names) do
+  modules_registry['turbine:' .. name] = { id = 'turbine:' .. name, type = 'turbine', name = name, state = 'OFF', progress = 0 }
+end
+modules_registry['reactor:' .. REACTOR_NAME] =
+  { id = 'reactor:' .. REACTOR_NAME, type = 'reactor', name = REACTOR_NAME, state = 'OFF', progress = 0 }
+
 local ctx = {
   config = config,
   CONFIG = { LOG_PREFIX = 'RT' },
   adapters = { reactor = require('adapters.reactor'), turbine = require('adapters.turbine') },
+  modules = modules_registry,
   log = function(level, msg) logged[#logged + 1] = tostring(level) .. ' ' .. tostring(msg) end,
 }
 
@@ -213,6 +224,29 @@ assert_true(reached_operational, string.format(
 assert_true(last.capacity.ready, 'capacity must be learned')
 assert_true((last.capacity.max_output or 0) > 0, 'a learned capacity must carry a positive max_output')
 
+-- ── Module-state projection ──────────────────────────────────────────────
+--
+-- Regression: main.lua's control_tick() returns early for v2 and so never
+-- runs module_lifecycle.update_module_states(). Every module therefore
+-- stayed frozen at its boot state "OFF" -- MASTER counts state=="RUNNING"/
+-- "STABLE" and its startup sequencer WAITS for "STABLE", so a perfectly
+-- regulating v2 node looked dead and stalled MASTER forever.
+local stable_turbines, off_modules = 0, 0
+for id, module in pairs(modules_registry) do
+  if module.state == 'OFF' then off_modules = off_modules + 1 end
+  if module.type == 'turbine' and module.state == 'STABLE' then stable_turbines = stable_turbines + 1 end
+  assert_true(module.state ~= nil, 'module ' .. id .. ' must carry a projected state')
+end
+assert_eq(off_modules, 0, 'no module may still sit at its boot state "OFF" once the node is running')
+assert_true(stable_turbines > 0, 'turbines at target must be reported STABLE so MASTER can advance its sequencer')
+assert_eq(modules_registry['reactor:' .. REACTOR_NAME].state, 'STABLE', 'a running reactor must be reported STABLE')
+
+-- status_fields() must carry the node state payload.state should report,
+-- since node_state_machine itself is deliberately never driven under v2.
+local fields = rt2_engine.status_fields()
+assert_true(fields.node_state == 'RUNNING' or fields.node_state == 'AUTONOM',
+  'an operational v2 node must project to RUNNING/AUTONOM, got ' .. tostring(fields.node_state))
+
 -- ── Safety trip ──────────────────────────────────────────────────────────
 --
 -- Regression: rt2_engine.tick() never passed safety_tripped into the
@@ -245,5 +279,21 @@ for _ = 1, 20 do
 end
 assert_true(recovered.state ~= rt2_state.states.SAFE,
   'the node must leave SAFE by itself once the temperature is back to normal')
+
+-- The SAFE trip must also have been visible in the projected module states
+-- and node state, not just internally.
+do
+  plant.reactor.temperature = 2600
+  for _ = 1, 20 do
+    rt2_engine.tick(ctx)
+    step_physics()
+    clock_ms = clock_ms + 500
+  end
+  assert_eq(rt2_engine.status_fields().node_state, 'EMERGENCY',
+    'a safety trip must be reported as EMERGENCY, not left at the last healthy node state')
+  for id, module in pairs(modules_registry) do
+    assert_eq(module.state, 'ERROR', 'module ' .. id .. ' must report ERROR while the node is tripped')
+  end
+end
 
 print('rt2_engine_integration_test.lua: ok')

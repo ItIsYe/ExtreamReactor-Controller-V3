@@ -140,6 +140,12 @@ function M.new(opts)
         flow_decision = flow_decision,
         coil_decision = coil_decision,
         activate = rt2_turbine.compute_active_decision(t.active),
+        -- The MEASURED values this decision was made from, carried through
+        -- so consumers (rt2_projection's module states, status payloads)
+        -- do not have to re-read hardware to know where the turbine
+        -- actually is versus where it was told to go.
+        rpm = t.rpm,
+        coil_engaged = t.coil_engaged == true,
       }
     end
 

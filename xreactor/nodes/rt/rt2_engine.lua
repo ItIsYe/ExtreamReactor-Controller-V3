@@ -17,6 +17,7 @@ local adapter = require("nodes.rt.rt2_adapter")
 local rt2_state = require("nodes.rt.rt2_state")
 local rt2_capacity = require("nodes.rt.rt2_capacity")
 local rt2_safety = require("nodes.rt.rt2_safety")
+local rt2_projection = require("nodes.rt.rt2_projection")
 local utils = require("core.utils")
 
 local M = {}
@@ -34,6 +35,7 @@ local last_saved_max_output
 local last_logged_capacity_diag
 local safety_state
 local last_logged_safety_reason
+local last_projection
 
 local function read_config(path)
   return (utils.load_config(path, {}))
@@ -60,6 +62,7 @@ function M.init(opts)
   last_saved_max_output = loaded and loaded.max_output or nil
   safety_state = rt2_safety.new_state()
   last_logged_safety_reason = nil
+  last_projection = nil
   engine = orchestrator.new({
     initial_state = opts.initial_state,
     master_timeout_ms = opts.master_timeout_ms,
@@ -176,6 +179,20 @@ function M.tick(ctx)
     end
   end
 
+  -- Project this tick onto the module/node vocabulary the UI, the status
+  -- payload and MASTER read. Without this, v2 regulates correctly but every
+  -- module stays frozen at its boot state ("OFF") and MASTER's startup
+  -- sequencer waits forever for a "STABLE" that never comes -- see
+  -- rt2_projection.lua's header.
+  last_projection = rt2_projection.project(result, ctx.modules, reactor_reading)
+  for id, projected in pairs(last_projection.modules) do
+    local module = ctx.modules and ctx.modules[id]
+    if module then
+      module.state = projected.state
+      module.progress = projected.progress
+    end
+  end
+
   last_result = result
   return result
 end
@@ -186,7 +203,7 @@ end
 -- branching to read it.
 function M.status_fields()
   if not last_result then
-    return { mode = M.current_state() }
+    return { mode = M.current_state(), node_state = rt2_projection.node_state(M.current_state()) }
   end
   local turbines = {}
   for _, t in ipairs(last_result.turbines) do
@@ -199,6 +216,10 @@ function M.status_fields()
   end
   return {
     mode = last_result.state,
+    -- What payload.state should report -- node_state_machine itself stays
+    -- untouched under v2 (see rt2_projection.lua's header on why).
+    node_state = last_projection and last_projection.node_state
+      or rt2_projection.node_state(last_result.state),
     capacity_ready = last_result.capacity.ready,
     capacity_max = last_result.capacity.max_output,
     capacity_at_target = last_result.capacity.at_target,

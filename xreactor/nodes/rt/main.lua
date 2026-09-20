@@ -622,8 +622,15 @@ local function build_status_payload(status_level)
     local v2 = rt2_engine.status_fields()
     payload.mode = v2.mode
     payload.control_mode = v2.mode
+    -- node_state_machine is intentionally never driven under v2 (its
+    -- transitions fire v1's on_enter control work -- see rt2_projection.lua),
+    -- so payload.state would otherwise report the frozen boot value forever.
+    if v2.node_state then payload.state = v2.node_state end
     if v2.capacity_ready ~= nil then payload.capacity_ready = v2.capacity_ready end
     if v2.capacity_max then payload.capacity_max = v2.capacity_max end
+    if v2.capacity_at_target then payload.capacity_stable_turbines = v2.capacity_at_target end
+    if v2.capacity_total_turbines then payload.capacity_total_turbines = v2.capacity_total_turbines end
+    if v2.capacity_reason then payload.capacity_source = v2.capacity_reason end
     return payload
   end
   -- Learning-State zurückschreiben
