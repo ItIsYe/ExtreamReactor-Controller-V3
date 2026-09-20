@@ -39,12 +39,19 @@ function M.read_turbine(name, turbine_info)
 end
 
 -- reactor_info: the table returned by adapters/reactor.lua's inspect().
+-- temperature/coolant_* are the inputs rt2_safety.evaluate() needs -- they
+-- are read from the SAME inspect() call the control decision already uses,
+-- so wiring safety in costs no extra peripheral round-trip per tick.
 function M.read_reactor(reactor_info)
   if type(reactor_info) ~= "table" then return nil end
   return {
     fill_ratio = num_or_nil(reactor_info.steam_fill_ratio),
     current_rods = num_or_nil(reactor_info.control_rod_level),
     active = reactor_info.active == true,
+    temperature = num_or_nil(reactor_info.temperature),
+    coolant_ratio = num_or_nil(reactor_info.coolant_ratio),
+    coolant_amount = num_or_nil(reactor_info.coolant_amount),
+    coolant_amount_max = num_or_nil(reactor_info.coolant_amount_max),
   }
 end
 

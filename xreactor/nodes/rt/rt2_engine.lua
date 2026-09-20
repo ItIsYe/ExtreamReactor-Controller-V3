@@ -16,6 +16,7 @@ local orchestrator = require("nodes.rt.rt2_orchestrator")
 local adapter = require("nodes.rt.rt2_adapter")
 local rt2_state = require("nodes.rt.rt2_state")
 local rt2_capacity = require("nodes.rt.rt2_capacity")
+local rt2_safety = require("nodes.rt.rt2_safety")
 local utils = require("core.utils")
 
 local M = {}
@@ -31,6 +32,8 @@ local last_result
 local cache_path
 local last_saved_max_output
 local last_logged_capacity_diag
+local safety_state
+local last_logged_safety_reason
 
 local function read_config(path)
   return (utils.load_config(path, {}))
@@ -55,6 +58,8 @@ function M.init(opts)
     opts.log("INFO", "v2 capacity cache not used: " .. tostring(load_err))
   end
   last_saved_max_output = loaded and loaded.max_output or nil
+  safety_state = rt2_safety.new_state()
+  last_logged_safety_reason = nil
   engine = orchestrator.new({
     initial_state = opts.initial_state,
     master_timeout_ms = opts.master_timeout_ms,
@@ -104,9 +109,32 @@ function M.tick(ctx)
     reactor_reading = adapter.read_reactor(info) or {}
   end
 
+  -- Safety evaluation MUST happen before the control decision -- SAFE has
+  -- to win this tick, not the next one. Skipped entirely when there is no
+  -- reactor to read (hardware_ready is false then anyway, so the state
+  -- machine stays in INIT and nothing is written to hardware).
+  local safety_result = { tripped = false }
+  if reactor_name then
+    safety_result = rt2_safety.evaluate(safety_state, reactor_reading,
+      (ctx.config and ctx.config.safety) or nil)
+    local previous_reason = last_logged_safety_reason
+    if safety_result.reason ~= previous_reason then
+      last_logged_safety_reason = safety_result.reason
+      if safety_result.tripped then
+        local msg = string.format("v2 SAFETY-TRIP: %s (Temperatur=%s, Kuehlmittel=%s) -- Staebe voll eingefahren, Flow 0",
+          tostring(safety_result.reason), tostring(safety_result.temperature), tostring(safety_result.coolant_ratio))
+        ctx.log("WARN", msg)
+        pcall(print, "[RT] " .. msg)
+      elseif previous_reason ~= nil then
+        ctx.log("INFO", "v2 Sicherheitslage wieder normal -- SAFE aufgehoben")
+      end
+    end
+  end
+
   local result = engine.tick({
     now_ms = now_ms,
     hardware_ready = (reactor_name ~= nil) and (#turbine_readings > 0),
+    safety_tripped = safety_result.tripped,
     turbines = turbine_readings,
     reactor = reactor_reading,
   })
