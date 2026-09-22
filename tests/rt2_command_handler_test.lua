@@ -69,4 +69,24 @@ do
   assert_eq(r.reason_code, 'INVALID_COMMAND')
 end
 
+-- Regression: SAFE must not be a state with no exit. SCRAM latched
+-- manual_safety_trip forever and the SAFE blanket block rejected every
+-- other command, so a SCRAMmed node stayed dead until a physical reboot.
+do
+  local r = handler.handle({ target = 'REQUEST_STARTUP_MODULE' }, { state = rt2_state.states.SAFE })
+  assert_true(r.ok, 'the restart command must be accepted while SAFE -- it is the only way back')
+  assert_true(r.effects.clear_safety_trip, 'it must clear the manual trip latch')
+
+  local staged = handler.handle({ target = 'STARTUP_STAGE' }, { state = rt2_state.states.SAFE })
+  assert_true(staged.ok and staged.effects.clear_safety_trip, 'STARTUP_STAGE must work the same way')
+end
+
+-- Everything else stays blocked while SAFE.
+do
+  local r = handler.handle({ target = 'SET_SETPOINTS', value = { power_target_percent = 50 } },
+    { state = rt2_state.states.SAFE })
+  assert_true(r.ok == false, 'setpoints must still be blocked while SAFE')
+  assert_eq(r.reason_code, 'SAFE_MODE')
+end
+
 print('rt2_command_handler_test.lua: ok')

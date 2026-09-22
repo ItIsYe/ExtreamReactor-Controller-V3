@@ -58,6 +58,34 @@ handlers.SCRAM = function(_, _)
   return ok({ manual_safety_trip = true })
 end
 
+-- The way BACK from a manual SCRAM. Without this the manual trip latch
+-- could only ever be set, never released: SCRAM latched manual_safety_trip
+-- forever and the SAFE blanket block below rejected every other command,
+-- so a SCRAMmed v2 node stayed dead until someone physically rebooted the
+-- computer -- MASTER had no way to restart the plant at all.
+--
+-- Reuses the command MASTER already sends to bring modules back up
+-- (REQUEST_STARTUP_MODULE/STARTUP_STAGE in v1's command_handler.lua)
+-- rather than inventing a new protocol verb MASTER would have to learn.
+--
+-- This clears ONLY the manual latch. A still-active physical condition
+-- (temperature/coolant) is evaluated independently from the live reading
+-- every tick in rt2_engine, so an operator cannot "acknowledge away" a
+-- reactor that is genuinely still over its limit -- it simply trips again
+-- on the next tick.
+local function clear_trip()
+  return ok({ clear_safety_trip = true })
+end
+handlers.REQUEST_STARTUP_MODULE = clear_trip
+handlers.STARTUP_STAGE = clear_trip
+
+-- The only command targets that get through while SAFE.
+local SAFE_ALLOWED = {
+  SCRAM = true,
+  REQUEST_STARTUP_MODULE = true,
+  STARTUP_STAGE = true,
+}
+
 -- MODE/SET_MODE: accepted, deliberately a no-op (see module header).
 handlers.SET_MODE = function(_, _) return ok({}) end
 handlers.MODE = function(_, _) return ok({}) end
@@ -72,11 +100,13 @@ function M.handle(command, world)
   if type(command) ~= "table" or type(command.target) ~= "string" then
     return fail("invalid command", "INVALID_COMMAND")
   end
-  -- SAFE only ever allows SCRAM (idempotent re-assert). Every other
-  -- target is blocked before even reaching its handler -- one rule, one
-  -- place, instead of a per-handler INVALID_STATE check that a future
+  -- SAFE allows exactly two things: SCRAM (idempotent re-assert) and the
+  -- restart commands that release the manual trip -- without the latter,
+  -- SAFE would be a state with no exit (see clear_trip above). Every
+  -- other target is blocked before even reaching its handler -- one rule,
+  -- one place, instead of a per-handler INVALID_STATE check that a future
   -- handler could forget to add.
-  if world.state == rt2_state.states.SAFE and command.target ~= "SCRAM" then
+  if world.state == rt2_state.states.SAFE and not SAFE_ALLOWED[command.target] then
     return fail("safe: ignoring commands", "SAFE_MODE")
   end
   local handler = handlers[command.target]

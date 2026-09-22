@@ -171,6 +171,41 @@ do
   assert_eq(result.state, rt2_state.states.MASTER, 'clearing the trip must allow recovery back to MASTER (capacity already known)')
 end
 
+-- Regression: the latch must be releasable THROUGH A COMMAND, not only by
+-- the internal clear_manual_safety_trip() helper -- nothing in production
+-- ever called that helper, so a SCRAMmed node had no way back at all short
+-- of a physical reboot.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  o.handle_command({ target = 'SCRAM' })
+  local result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  assert_eq(result.state, rt2_state.states.SAFE)
+
+  local ack = o.handle_command({ target = 'REQUEST_STARTUP_MODULE' })
+  assert_true(ack.ok, 'the restart command must be accepted while SAFE')
+  o.note_master_seen(3000)
+  result = o.tick({ now_ms = 3000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  assert_eq(result.state, rt2_state.states.MASTER,
+    'a restart command must bring a manually SCRAMmed node back out of SAFE')
+end
+
+-- ...but a still-active PHYSICAL trip must not be clearable that way:
+-- safety_tripped is re-read from hardware every tick.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  o.handle_command({ target = 'SCRAM' })
+  o.tick({ now_ms = 2000, hardware_ready = true, safety_tripped = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  o.handle_command({ target = 'REQUEST_STARTUP_MODULE' })
+  local result = o.tick({ now_ms = 3000, hardware_ready = true, safety_tripped = true,
+    turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  assert_eq(result.state, rt2_state.states.SAFE,
+    'clearing the manual latch must not override a physical trip condition that is still active')
+end
+
 -- SET_SETPOINTS via handle_command() must actually steer the turbine
 -- targets on the next tick.
 do

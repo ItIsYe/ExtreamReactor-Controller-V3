@@ -90,4 +90,33 @@ do
   assert_eq(h[2].to, rt2_state.states.AUTONOM, 'second transition to AUTONOM')
 end
 
+-- Regression: a safety trip that happens DURING learning must resume
+-- LEARNING on recovery, not jump into MASTER/AUTONOM with an unlearned
+-- capacity (MASTER would then split power against a capacity_max of 0).
+do
+  local m = rt2_state.new()
+  m.tick({ hardware_ready = true })                       -- INIT -> LEARNING
+  assert_eq(m.current(), rt2_state.states.LEARNING)
+  m.tick({ hardware_ready = true, safety_tripped = true }) -- trip mid-learning
+  assert_eq(m.current(), rt2_state.states.SAFE)
+  m.tick({ hardware_ready = true, capacity_ready = false, master_connected = true })
+  assert_eq(m.current(), rt2_state.states.LEARNING,
+    'recovering from SAFE without a learned capacity must resume LEARNING, not go operational')
+  m.tick({ hardware_ready = true, capacity_ready = true, master_connected = true })
+  assert_eq(m.current(), rt2_state.states.MASTER, 'once learned it may go operational')
+end
+
+-- A trip AFTER learning still recovers straight to MASTER/AUTONOM --
+-- there is nothing left to relearn.
+do
+  local m = rt2_state.new()
+  m.tick({ hardware_ready = true })
+  m.tick({ hardware_ready = true, capacity_ready = true, master_connected = false })
+  assert_eq(m.current(), rt2_state.states.AUTONOM)
+  m.tick({ hardware_ready = true, capacity_ready = true, safety_tripped = true })
+  assert_eq(m.current(), rt2_state.states.SAFE)
+  m.tick({ hardware_ready = true, capacity_ready = true, master_connected = false })
+  assert_eq(m.current(), rt2_state.states.AUTONOM, 'a learned node recovers straight to AUTONOM')
+end
+
 print('rt2_state_machine_test.lua: ok')

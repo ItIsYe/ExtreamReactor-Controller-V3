@@ -75,8 +75,16 @@ function M.decide_next_state(current, inputs)
 
   if current == M.states.SAFE then
     -- Recovery: safety_tripped is already false here (checked above), so
-    -- it is safe to leave SAFE. Capacity is already known -- go straight
-    -- to MASTER/AUTONOM, never back through LEARNING.
+    -- it is safe to leave SAFE.
+    --
+    -- A trip that happened DURING the learning phase leaves capacity
+    -- unlearned -- going straight to MASTER/AUTONOM there would run the
+    -- node on a capacity_max of 0 (MASTER would split power against a
+    -- capacity it never measured). Rule 1 of the spec is that learning
+    -- always completes first, so an unlearned node resumes LEARNING.
+    if not inputs.capacity_ready then
+      return M.states.LEARNING
+    end
     if inputs.master_connected then
       return M.states.MASTER
     end

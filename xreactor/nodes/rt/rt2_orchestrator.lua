@@ -55,6 +55,12 @@ function M.new(opts)
       if result.effects.manual_safety_trip then
         self.manual_safety_trip = true
       end
+      -- Releases the manual latch only. A physical trip condition is
+      -- re-evaluated from the live reading every tick (input.safety_tripped),
+      -- so this cannot acknowledge away a reactor that is still over limit.
+      if result.effects.clear_safety_trip then
+        self.manual_safety_trip = false
+      end
       if type(result.effects.master_percent) == "number" then
         self.master_percent = result.effects.master_percent
       end
