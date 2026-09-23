@@ -30,6 +30,7 @@ function M.new(opts)
     master_link = rt2_master_link.new({ timeout_ms = opts.master_timeout_ms }),
     rotation_offset = 0,
     last_rotate_ms = 0,
+    last_rod_change_ms = 0,
     manual_safety_trip = false,
     master_percent = 100,
   }
@@ -117,12 +118,40 @@ function M.new(opts)
     })
 
     local safety_override = (state == rt2_state.states.SAFE)
+    local reactor_fill = input.reactor and input.reactor.fill_ratio or nil
+
+    -- compute_rod_level() is pure and knows nothing about time, so both the
+    -- rate limit and the trend sampling live here, where now_ms is. An
+    -- "adjustment tick" comes round every MIN_ADJUST_INTERVAL_MS; between
+    -- them ordinary regulation holds still, so the tank gets a chance to
+    -- show the effect of the last move before the next one is decided. The
+    -- fill is sampled on that same cadence, which is what gives
+    -- compute_rod_level a trend it can actually project forward.
+    local adjust_due = (now_ms or 0) - self.last_rod_change_ms >= rt2_reactor.MIN_ADJUST_INTERVAL_MS
+
     local reactor_decision = rt2_reactor.compute_rod_level({
-      fill_ratio = input.reactor and input.reactor.fill_ratio or nil,
+      fill_ratio = reactor_fill,
       target_fill = input.reactor and input.reactor.target_fill or nil,
       current_rods = input.reactor and input.reactor.current_rods or nil,
       safety_override = safety_override,
+      previous_fill = adjust_due and self.last_rod_fill or nil,
     })
+
+    -- Only ordinary tank regulation is throttled: a safety trip, a missing
+    -- steam reading and every other fail-safe path takes effect immediately.
+    if not adjust_due
+        and (reactor_decision.reason == "TANK_FULL_INSERT" or reactor_decision.reason == "TANK_LOW_WITHDRAW") then
+      local current_rods = tonumber(input.reactor and input.reactor.current_rods)
+      if current_rods then
+        reactor_decision = { rods = current_rods, reason = "RATE_LIMITED" }
+      end
+    end
+
+    if adjust_due then
+      self.last_rod_change_ms = now_ms or self.last_rod_change_ms
+      self.last_rod_fill = reactor_fill
+    end
+
     reactor_decision.activate = rt2_reactor.compute_active_decision(input.reactor and input.reactor.active)
 
     local turbine_count = #(input.turbines or {})

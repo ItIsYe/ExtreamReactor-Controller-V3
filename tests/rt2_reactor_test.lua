@@ -69,6 +69,53 @@ do
   assert_true(r.rods <= 100, 'rods must never exceed 100')
 end
 
+-- The step must be genuinely PROPORTIONAL. It used to be
+--   clamp(|error| * 100, 1, MAX_STEP)
+-- which always returned MAX_STEP, because leaving the 0.06 deadband already
+-- means |error| * 100 > 6. Measured over the whole error range it produced
+-- exactly one distinct value -- a two-point controller wearing a P label.
+do
+  local seen, steps = {}, 0
+  for e = 7, 50 do
+    local d = rt2_reactor.compute_rod_level({ fill_ratio = 0.5 + e / 100, current_rods = 85 })
+    local step = d.rods - 85
+    if not seen[step] then seen[step] = true; steps = steps + 1 end
+  end
+  assert_true(steps > 3, 'the step must take on a range of values, not a single saturated one -- got ' .. steps)
+
+  -- Small deviation just past the deadband -> the smallest useful move.
+  local near = rt2_reactor.compute_rod_level({ fill_ratio = 0.5 + rt2_reactor.DEADBAND + 0.001, current_rods = 85 })
+  assert_eq(near.rods - 85, rt2_reactor.MIN_STEP, 'right at the deadband edge the correction is minimal')
+
+  -- Far outside -> full authority, but never more than MAX_STEP.
+  local far = rt2_reactor.compute_rod_level({ fill_ratio = 1.0, current_rods = 85 })
+  assert_eq(far.rods - 85, rt2_reactor.MAX_STEP, 'a large deviation gets the full step')
+
+  -- MIN_STEP must stay at least 1: the mod stores rod levels as integers,
+  -- so a smaller step would be rounded away on write and the controller
+  -- would stall just outside the deadband.
+  assert_true(rt2_reactor.MIN_STEP >= 1, 'a sub-integer step would be lost on write')
+end
+
+-- Trend damping: if the tank is already heading back toward target on its
+-- own, adding more correction only overshoots. Same reading, same rods --
+-- only the direction of travel differs.
+do
+  local still_falling = rt2_reactor.compute_rod_level({
+    fill_ratio = 0.62, current_rods = 85, previous_fill = 0.70 })
+  assert_eq(still_falling.reason, 'CONVERGING', 'a tank already falling toward target must be left alone')
+  assert_eq(still_falling.rods, 85, 'and its rods must not move')
+
+  local still_rising = rt2_reactor.compute_rod_level({
+    fill_ratio = 0.62, current_rods = 85, previous_fill = 0.60 })
+  assert_eq(still_rising.reason, 'TANK_FULL_INSERT', 'a tank still moving away must be corrected')
+  assert_true(still_rising.rods > 85)
+
+  -- Without a previous reading the damping simply does not apply.
+  local no_history = rt2_reactor.compute_rod_level({ fill_ratio = 0.62, current_rods = 85 })
+  assert_eq(no_history.reason, 'TANK_FULL_INSERT', 'no trend available -> plain proportional response')
+end
+
 -- Reactor auto-activation: if the reactor reads OFF (or the reading is
 -- missing/unknown), v2 must decide to turn it on. Once it reads ON, no
 -- further activation is needed.
