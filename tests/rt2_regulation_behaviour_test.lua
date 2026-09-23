@@ -115,12 +115,15 @@ do
   assert_eq(targets[3], 900, 'the VOLLAST slots must target the full rpm')
   assert_eq(targets[4], 900)
 
-  -- An AUS-slot turbine must be flow-zeroed and uncoupled even though it is
-  -- still spinning -- this is the regression from the original report.
+  -- An AUS-slot turbine must be flow-zeroed -- that is the regression from
+  -- the original report -- but it keeps its coil ENGAGED while it is still
+  -- spinning, because the coil is the brake: that stops the rotor faster
+  -- than coasting and recovers the energy instead of wasting it.
   for _, entry in ipairs(r.turbines) do
     if entry.target_rpm == 0 then
       assert_eq(entry.flow_decision.flow, 0, 'AUS slot must be flow-zeroed')
-      assert_eq(entry.coil_decision.engaged, false, 'AUS slot must uncouple its coil')
+      assert_eq(entry.coil_decision.engaged, true, 'AUS slot still spinning must brake through its coil')
+      assert_eq(entry.coil_decision.reason, 'BRAKE_TO_STOP')
     end
   end
 end

@@ -23,6 +23,10 @@ M.RPM_BAND = 40          -- +/- RPM around target considered "on target"
 M.OVERSPEED_MARGIN = 150
 M.COIL_ENGAGE_RPM = 900
 M.COIL_DISENGAGE_RPM = 850
+-- A parked turbine keeps braking through its coil until it has practically
+-- stopped; below this it releases, because there is nothing left to harvest
+-- and an engaged coil on a standing rotor serves no purpose.
+M.COIL_BRAKE_RELEASE_RPM = 50
 M.MIN_FLOW = 0
 -- Gegen den Mod-Quellcode verifiziert (Extreme Reactors 2.4.27, MC 1.21.1 /
 -- ATM10): TurbineVariant setzt setMaxPermittedFlow(1000) fuer Basic und
@@ -153,17 +157,44 @@ end
 
 -- ── Coil decision ────────────────────────────────────────────────────────
 --
--- One hysteresis rule, scaled to the CURRENT target (a PUFFER-slot turbine
--- at 450 RPM must engage/disengage around 450, not around the full 900).
--- target_rpm<=0 (AUS/SAFE) always disengages -- there is nothing to
--- extract energy from a turbine that is supposed to be off.
+-- The coil IS the brake: engaging the inductor extracts energy from the
+-- rotor and slows it down. So the rule is not "couple once we are at
+-- speed", it is "couple whenever we are at or above where we want to be".
+-- That covers three cases with one idea:
+--   - holding the target      -> hysteresis around the scaled target
+--   - genuine overspeed       -> couple, the load brakes it
+--   - target lowered (VOLLAST -> PUFFER, or parked) -> couple, same reason
+--
+-- The hysteresis is scaled to the CURRENT target, so a PUFFER-slot turbine
+-- at a 450 RPM target engages/disengages around 450, not around 900.
+--
+-- FIXED 2026-09-23: target_rpm<=0 used to uncouple unconditionally, on the
+-- reasoning that there is nothing to harvest from a turbine that is meant
+-- to be off. That got it backwards for a rotor that is still spinning: an
+-- AUS-slot turbine at 900 RPM was left to coast down with no load at all,
+-- so it braked slowly AND threw away the rotational energy instead of
+-- recovering it. A parked turbine now brakes through the coil for as long
+-- as it still turns, and only releases once it has essentially stopped.
 function M.compute_coil_decision(input)
   local rpm = tonumber(input.rpm) or 0
   local target_rpm = tonumber(input.target_rpm) or 0
   local currently_engaged = input.currently_engaged == true
+  local band = tonumber(input.band) or M.RPM_BAND
 
+  -- Parked (AUS slot or SAFE): no target to hold, but braking a spinning
+  -- rotor is still the right thing to do -- and it harvests on the way down.
   if target_rpm <= 0 then
-    return { engaged = false, reason = "TARGET_ZERO" }
+    if rpm > M.COIL_BRAKE_RELEASE_RPM then
+      return { engaged = true, reason = "BRAKE_TO_STOP" }
+    end
+    return { engaged = false, reason = "STOPPED" }
+  end
+
+  -- Above the band: overspeed, or a target that was just lowered. Couple
+  -- regardless of the hysteresis -- waiting for the threshold here would
+  -- mean coasting exactly when braking is wanted.
+  if rpm > target_rpm + band then
+    return { engaged = true, reason = "BRAKE_TO_TARGET" }
   end
 
   local scale = target_rpm / M.FULL_TARGET_RPM

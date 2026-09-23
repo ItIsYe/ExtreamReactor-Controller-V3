@@ -71,7 +71,35 @@ end
 
 -- ── compute_coil_decision ────────────────────────────────────────────────
 
-assert_eq(rt2_turbine.compute_coil_decision({ rpm = 2000, target_rpm = 0, currently_engaged = true }).engaged, false, 'target_rpm<=0 must always disengage the coil')
+-- The coil is the brake, so a parked turbine that is STILL SPINNING keeps
+-- it engaged: that slows the rotor down and harvests the energy on the way
+-- instead of letting it coast. It only releases once basically stopped.
+do
+  local spinning = rt2_turbine.compute_coil_decision({ rpm = 2000, target_rpm = 0, currently_engaged = true })
+  assert_eq(spinning.engaged, true, 'a parked turbine that still spins must brake through its coil, not coast')
+  assert_eq(spinning.reason, 'BRAKE_TO_STOP')
+
+  local stopped = rt2_turbine.compute_coil_decision({ rpm = 10, target_rpm = 0, currently_engaged = true })
+  assert_eq(stopped.engaged, false, 'once stopped there is nothing left to brake or harvest')
+  assert_eq(stopped.reason, 'STOPPED')
+end
+
+-- Braking toward a LOWER target must couple too, even from uncoupled --
+-- waiting for the engage threshold there would mean coasting exactly when
+-- braking is wanted.
+do
+  local d = rt2_turbine.compute_coil_decision({ rpm = 900, target_rpm = 450, currently_engaged = false })
+  assert_eq(d.engaged, true, 'a turbine well above a lowered target must couple to brake down to it')
+  assert_eq(d.reason, 'BRAKE_TO_TARGET')
+end
+
+-- Spinning UP must stay uncoupled so the rotor can accelerate unloaded.
+do
+  assert_eq(rt2_turbine.compute_coil_decision({ rpm = 100, target_rpm = 900, currently_engaged = false }).engaged, false,
+    'a turbine ramping up must not be braked by its own coil')
+  assert_eq(rt2_turbine.compute_coil_decision({ rpm = 850, target_rpm = 900, currently_engaged = false }).engaged, false,
+    'still below the engage threshold on the way up -- stays uncoupled')
+end
 
 -- A PUFFER-slot turbine at 450 RPM target must engage/disengage scaled to
 -- 450, not the full 900 -- otherwise it would never appear to reach target.

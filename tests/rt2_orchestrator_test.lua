@@ -90,7 +90,11 @@ do
   local t1 = result.turbines[1]
   assert_eq(t1.target_rpm, 0, 'sanity: T1 must be the AUS-slot turbine at 50%/2 turbines')
   assert_eq(t1.flow_decision.flow, 0, 'an AUS-slot turbine massively overspeeding must be forced to flow=0 this very tick')
-  assert_eq(t1.coil_decision.engaged, false, 'an AUS-slot turbine must never have its coil engaged')
+  -- The steam is cut, and the coil stays engaged so the rotor is actually
+  -- braked down instead of coasting -- the coil is the brake, and braking
+  -- an AUS-slot turbine also recovers its rotational energy.
+  assert_eq(t1.coil_decision.engaged, true, 'a parked turbine still spinning at 2000 rpm must brake through its coil')
+  assert_eq(t1.coil_decision.reason, 'BRAKE_TO_STOP')
 end
 
 -- AUTONOM reactor regulation: purely steam-tank driven, MASTER's percent
