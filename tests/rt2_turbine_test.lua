@@ -57,6 +57,35 @@ do
   assert_eq(d.reason, 'OVERSPEED', 'reason must reflect genuine overspeed, distinct from TARGET_ZERO')
 end
 
+-- The overspeed cut is an ABSOLUTE machine limit, not a margin on top of
+-- the target: a PUFFER-slot turbine holding 450 has exactly the same
+-- physical limit as one at full load. Getting back down to the target is
+-- RAMP_DOWN's job, so everything between the band and the limit ramps.
+do
+  local limit = rt2_turbine.OVERSPEED_RPM
+  for _, target in ipairs({ 900, 450, 180 }) do
+    local below = rt2_turbine.compute_flow_decision({ rpm = limit - 1, target_rpm = target, current_flow = 1000 })
+    assert_eq(below.reason, 'RAMP_DOWN', 'below the machine limit a turbine ramps down toward target ' .. target)
+    local above = rt2_turbine.compute_flow_decision({ rpm = limit + 1, target_rpm = target, current_flow = 1000 })
+    assert_eq(above.reason, 'OVERSPEED', 'the same absolute limit applies at target ' .. target)
+    assert_eq(above.flow, 0)
+  end
+end
+
+-- The RAMP_DOWN branch must stay reachable. It was dead code once before:
+-- the overspeed cut fired at target+band, which is the exact condition of
+-- the RAMP_DOWN test below it, so the cut always won and the turbine had
+-- no proportional downward control at all.
+do
+  local reached = {}
+  for rpm = 0, 3000 do
+    reached[rt2_turbine.compute_flow_decision({ rpm = rpm, target_rpm = 900, current_flow = 1000 }).reason] = true
+  end
+  assert_true(reached.RAMP_DOWN, 'RAMP_DOWN must be reachable -- the overspeed cut must not swallow it')
+  assert_true(reached.RAMP_UP and reached.HOLD_TRIM_UP and reached.HOLD_TRIM_DOWN and reached.OVERSPEED,
+    'every other flow branch must stay reachable too')
+end
+
 -- Well under target: ramp up, not directly to max.
 do
   local d = rt2_turbine.compute_flow_decision({ rpm = 100, target_rpm = 900, current_flow = 500, max_flow = 2000 })

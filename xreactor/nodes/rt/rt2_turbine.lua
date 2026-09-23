@@ -13,14 +13,21 @@ local M = {}
 
 M.FULL_TARGET_RPM = 900
 M.RPM_BAND = 40          -- +/- RPM around target considered "on target"
--- How far above target counts as a genuine runaway worth cutting the flow
--- to zero for, rather than ramping down. Must stay comfortably above
--- RPM_BAND or the RAMP_DOWN branch becomes unreachable again (see the
--- header of compute_flow_decision). 150 puts the hard cut at 1050 RPM for
--- the standard 900 target, so normal overshoot is regulated away while a
--- real runaway -- the 2866 RPM AUS-slot turbine from the original report --
--- is still caught immediately.
-M.OVERSPEED_MARGIN = 150
+-- Absolute hard-cut speed: above this the flow drops to zero immediately
+-- instead of being ramped down. Deliberately an ABSOLUTE rpm and not a
+-- margin on top of the target, because overspeed protection guards the
+-- MACHINE, not whatever setpoint it currently happens to hold -- a
+-- PUFFER-slot turbine running a 450 target has exactly the same physical
+-- limit as one at full load. Regulating back down to the target is the
+-- RAMP_DOWN branch's job, not this one's.
+--
+-- 1300 for this plant (operator-specified, standard target 900): normal
+-- overshoot -- the flow is a little sluggish, so turbines routinely settle
+-- slightly above 900 -- is ramped down, while a real runaway such as the
+-- 2866 RPM turbine from the original report is cut instantly. Must stay
+-- comfortably above FULL_TARGET_RPM + RPM_BAND, otherwise the hard cut
+-- swallows the RAMP_DOWN branch again (see compute_flow_decision's header).
+M.OVERSPEED_RPM = 1300
 M.COIL_ENGAGE_RPM = 900
 M.COIL_DISENGAGE_RPM = 850
 -- A parked turbine keeps braking through its coil until it has practically
@@ -114,9 +121,9 @@ end
 -- plausible reason capacity learning struggled to catch every turbine
 -- inside its 900 +/- 15 measurement window at the same moment.
 --
--- Now the two cases are actually distinct: OVERSPEED_MARGIN marks a real
--- runaway worth cutting to zero for, and the span between the band and
--- that margin ramps down proportionally like any normal controller.
+-- Now the two cases are actually distinct: OVERSPEED_RPM marks a real
+-- runaway worth cutting to zero for, and everything between the band and
+-- that limit ramps down proportionally like any normal controller.
 function M.compute_flow_decision(input)
   local rpm = tonumber(input.rpm) or 0
   local target_rpm = tonumber(input.target_rpm) or 0
@@ -125,12 +132,12 @@ function M.compute_flow_decision(input)
   local max_flow = tonumber(input.max_flow) or M.MAX_FLOW
   local band = tonumber(input.band) or M.RPM_BAND
 
-  local overspeed_margin = tonumber(input.overspeed_margin) or M.OVERSPEED_MARGIN
+  local overspeed_rpm = tonumber(input.overspeed_rpm) or M.OVERSPEED_RPM
 
   if target_rpm <= 0 then
     return { flow = 0, reason = "TARGET_ZERO" }
   end
-  if rpm > target_rpm + overspeed_margin then
+  if rpm > overspeed_rpm then
     return { flow = 0, reason = "OVERSPEED" }
   end
 
