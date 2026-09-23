@@ -142,9 +142,12 @@ function M.compute_rod_level(input)
   -- Proportional: how far past the deadband edge are we, relative to the
   -- proportional band? Right at the edge that is 0 -> MIN_STEP; at or beyond
   -- the band it saturates at MAX_STEP.
+  -- max_step may be overridden by a measured plant profile (see
+  -- rt2_tuning.lua) -- passed in rather than stored, so this stays pure.
+  local max_step = tonumber(input.max_step) or M.MAX_STEP
   local excess = math.abs(error_fill) - M.DEADBAND
   local ratio = M.PROPORTIONAL_BAND > 0 and (excess / M.PROPORTIONAL_BAND) or 1
-  local step = clamp(M.MAX_STEP * ratio, M.MIN_STEP, M.MAX_STEP)
+  local step = clamp(max_step * ratio, M.MIN_STEP, max_step)
   local next_rods
   if error_fill > 0 then
     next_rods = clamp(current_rods + step, M.ROD_MIN, M.ROD_MAX)

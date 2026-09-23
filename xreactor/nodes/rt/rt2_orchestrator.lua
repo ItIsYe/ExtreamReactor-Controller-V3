@@ -14,6 +14,7 @@ local rt2_master_link = require('nodes.rt.rt2_master_link')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_reactor = require('nodes.rt.rt2_reactor')
 local rt2_command_handler = require('nodes.rt.rt2_command_handler')
+local rt2_tuning = require('nodes.rt.rt2_tuning')
 
 local M = {}
 
@@ -31,6 +32,11 @@ function M.new(opts)
     rotation_offset = 0,
     last_rotate_ms = 0,
     last_rod_change_ms = 0,
+    -- Measured plant profile (rt2_tuning). tuning_state accumulates the
+    -- observations; tuning_profile is the derived result once it is good
+    -- enough, or whatever a previous run persisted and the caller passed in.
+    tuning_state = rt2_tuning.new_state(),
+    tuning_profile = opts.tuning_profile,
     manual_safety_trip = false,
     master_percent = 100,
   }
@@ -127,7 +133,25 @@ function M.new(opts)
     -- show the effect of the last move before the next one is decided. The
     -- fill is sampled on that same cadence, which is what gives
     -- compute_rod_level a trend it can actually project forward.
-    local adjust_due = (now_ms or 0) - self.last_rod_change_ms >= rt2_reactor.MIN_ADJUST_INTERVAL_MS
+    -- Watch the plant and, once the observations are good enough, let the
+    -- measured profile replace the hand-picked constants. Purely passive --
+    -- see rt2_tuning.lua's header. Never while SAFE: the rods are pinned at
+    -- full insertion there, so nothing measured would describe regulation.
+    if not safety_override and reactor_fill then
+      self.tuning_state = rt2_tuning.observe(self.tuning_state, {
+        now_ms = now_ms, fill = reactor_fill,
+        rods = input.reactor and input.reactor.current_rods or nil,
+      })
+      if not self.tuning_profile then
+        local profile = rt2_tuning.derive(self.tuning_state,
+          { proportional_band = rt2_reactor.PROPORTIONAL_BAND })
+        if profile then self.tuning_profile = profile end
+      end
+    end
+
+    local tuned_interval = self.tuning_profile and self.tuning_profile.min_adjust_interval_ms
+      or rt2_reactor.MIN_ADJUST_INTERVAL_MS
+    local adjust_due = (now_ms or 0) - self.last_rod_change_ms >= tuned_interval
 
     local reactor_decision = rt2_reactor.compute_rod_level({
       fill_ratio = reactor_fill,
@@ -135,6 +159,7 @@ function M.new(opts)
       current_rods = input.reactor and input.reactor.current_rods or nil,
       safety_override = safety_override,
       previous_fill = adjust_due and self.last_rod_fill or nil,
+      max_step = self.tuning_profile and self.tuning_profile.max_step or nil,
     })
 
     -- Only ordinary tank regulation is throttled: a safety trip, a missing
@@ -189,6 +214,8 @@ function M.new(opts)
       reactor_decision = reactor_decision,
       turbines = turbine_results,
       capacity = self.capacity,
+      tuning = self.tuning_profile,
+      tuning_samples = self.tuning_state.n,
     }
   end
 

@@ -18,6 +18,7 @@ local rt2_state = require("nodes.rt.rt2_state")
 local rt2_capacity = require("nodes.rt.rt2_capacity")
 local rt2_safety = require("nodes.rt.rt2_safety")
 local rt2_projection = require("nodes.rt.rt2_projection")
+local rt2_tuning = require("nodes.rt.rt2_tuning")
 local utils = require("core.utils")
 
 local M = {}
@@ -27,6 +28,11 @@ local M = {}
 -- identity signature -- see rt2_capacity.lua's header on why) and the
 -- two engines must never read each other's cache.
 M.CACHE_PATH = "/xreactor_config/rt2_capacity_cache.lua"
+-- The measured reactor plant profile (see rt2_tuning.lua). Separate file
+-- from the capacity cache: it is derived from entirely different readings
+-- and stays valid when the turbine count changes, which invalidates the
+-- capacity but says nothing about how the steam tank responds.
+M.TUNING_PATH = "/xreactor_config/rt2_reactor_tuning.lua"
 
 local engine
 local last_result
@@ -36,6 +42,8 @@ local last_logged_capacity_diag
 local safety_state
 local last_logged_safety_reason
 local last_projection
+local tuning_path
+local tuning_saved
 
 local function read_config(path)
   return (utils.load_config(path, {}))
@@ -60,6 +68,18 @@ function M.init(opts)
     opts.log("INFO", "v2 capacity cache not used: " .. tostring(load_err))
   end
   last_saved_max_output = loaded and loaded.max_output or nil
+
+  -- A previously measured plant profile makes the node skip the whole
+  -- self-measurement on later boots -- the steam tank does not change.
+  tuning_path = opts.tuning_path or M.TUNING_PATH
+  local tuned = rt2_tuning.load({ path = tuning_path, read_config = read_config })
+  tuning_saved = tuned ~= nil
+  if tuned and type(opts.log) == "function" then
+    opts.log("INFO", string.format(
+      "v2 Reaktorprofil aus Messung geladen: max_step=%d Stellintervall=%dms",
+      tuned.max_step, tuned.min_adjust_interval_ms))
+  end
+
   safety_state = rt2_safety.new_state()
   last_logged_safety_reason = nil
   last_projection = nil
@@ -67,6 +87,7 @@ function M.init(opts)
     initial_state = opts.initial_state,
     master_timeout_ms = opts.master_timeout_ms,
     initial_capacity = loaded,
+    tuning_profile = tuned,
   })
   last_result = nil
   return engine
@@ -162,6 +183,24 @@ function M.tick(ctx)
       last_logged_capacity_diag = diag
       local msg = "v2 Einlernen (LEARNING): " .. diag
         .. " -- Turbinen im Zielbereich (RPM+Spule engaged+Energieausstoss>0) vs. Gesamtzahl"
+      ctx.log("INFO", msg)
+      pcall(print, "[RT] " .. msg)
+    end
+  end
+
+  -- The plant measures itself exactly once: the first time the observations
+  -- are good enough to derive a profile, it is written and never touched
+  -- again (the steam tank does not change, and re-deriving it every boot
+  -- would only add noise). Later boots load it in init() and skip straight
+  -- to using it.
+  if result.tuning and not tuning_saved then
+    local saved = rt2_tuning.save(result.tuning, { path = tuning_path, write_config = write_config })
+    if saved then
+      tuning_saved = true
+      local msg = string.format(
+        "v2 Reaktor selbst vermessen: %d Messwerte, %.0f Stab-Punkte Spanne -> max_step=%d, Stellintervall=%dms",
+        result.tuning.samples, result.tuning.rod_spread or 0,
+        result.tuning.max_step, result.tuning.min_adjust_interval_ms)
       ctx.log("INFO", msg)
       pcall(print, "[RT] " .. msg)
     end
