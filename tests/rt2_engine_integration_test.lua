@@ -59,7 +59,13 @@ os.epoch = function() return clock_ms end
 -- only produces energy while its coil is engaged.
 
 local TURBINE_COUNT = 25
-local RPM_PER_FLOW = 900 / 4000 -- 4000 flow ~= 900 rpm at steady state
+-- Calibrated to the real limit, not to rt2_turbine's old (wrong) 32000:
+-- a Reinforced turbine tops out at 2000 mB/t (Extreme Reactors 2.4.27,
+-- TurbineVariant.setMaxPermittedFlow), so the target RPM has to be
+-- reachable well below that -- otherwise the simulated fleet could never
+-- reach 900 RPM and the test would fail for a reason the real plant
+-- does not have.
+local RPM_PER_FLOW = 900 / 1500 -- ~1500 mB/t reaches the 900 rpm target
 
 local plant = { turbines = {}, reactor = {
   active = false, rods = 100, steam = 0, steam_max = 100000,

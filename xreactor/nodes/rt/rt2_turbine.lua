@@ -16,7 +16,16 @@ M.RPM_BAND = 40          -- +/- RPM around target considered "on target"
 M.COIL_ENGAGE_RPM = 900
 M.COIL_DISENGAGE_RPM = 850
 M.MIN_FLOW = 0
-M.MAX_FLOW = 32000
+-- Gegen den Mod-Quellcode verifiziert (Extreme Reactors 2.4.27, MC 1.21.1 /
+-- ATM10): TurbineVariant setzt setMaxPermittedFlow(1000) fuer Basic und
+-- (2000) fuer Reinforced, und TurbineData.setMaxIntakeRate() klemmt jeden
+-- Schreibwert auf min(maxPermittedFlow, max(0, rate)). Der vorherige Wert
+-- 32000 stammte aus der Big-Reactors-Aera und war damit 16-32x zu hoch --
+-- ohne Absturz, weil der Mod klemmt und wir den geklemmten Wert
+-- zurueckgelesen haben, aber die Rampenrechnung lief gegen eine Grenze,
+-- die es nie gab. 2000 entspricht der hier verbauten Reinforced-Turbine
+-- und deckt sich mit config.lua's autonom.max_flow, das v1 schon nutzt.
+M.MAX_FLOW = 2000
 M.TRIM_STEP = 35
 
 local function clamp(v, lo, hi)

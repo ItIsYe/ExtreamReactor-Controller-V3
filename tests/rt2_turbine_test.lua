@@ -42,7 +42,7 @@ assert_eq(rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 1, slot_ind
 -- reported 2026-09-18 (node-101/102/103: STATUS=OFF turbines sitting on
 -- 2.0k-3.0k flow at 1000-3200 RPM while the "ON" ones correctly throttled).
 do
-  local d = rt2_turbine.compute_flow_decision({ rpm = 2866, target_rpm = 0, current_flow = 20000, max_flow = 32000 })
+  local d = rt2_turbine.compute_flow_decision({ rpm = 2866, target_rpm = 0, current_flow = 2000, max_flow = 2000 })
   assert_eq(d.flow, 0, 'AUS-slot turbine massively overspeeding must be forced to flow=0 immediately, not ramped down')
   assert_eq(d.reason, 'TARGET_ZERO', 'reason must reflect the target-zero rule, not a generic ramp')
 end
@@ -52,21 +52,21 @@ end
 -- can tell "parked" apart from "braking" if it needs to (e.g. for coil
 -- engagement decisions elsewhere).
 do
-  local d = rt2_turbine.compute_flow_decision({ rpm = 2000, target_rpm = 900, current_flow = 20000, max_flow = 32000 })
+  local d = rt2_turbine.compute_flow_decision({ rpm = 2000, target_rpm = 900, current_flow = 2000, max_flow = 2000 })
   assert_eq(d.flow, 0, 'genuine overspeed must be forced to flow=0')
   assert_eq(d.reason, 'OVERSPEED', 'reason must reflect genuine overspeed, distinct from TARGET_ZERO')
 end
 
 -- Well under target: ramp up, not directly to max.
 do
-  local d = rt2_turbine.compute_flow_decision({ rpm = 100, target_rpm = 900, current_flow = 5000, max_flow = 32000 })
-  assert_true(d.flow > 5000 and d.flow < 32000, 'well under target must ramp up gradually, not jump to max')
+  local d = rt2_turbine.compute_flow_decision({ rpm = 100, target_rpm = 900, current_flow = 500, max_flow = 2000 })
+  assert_true(d.flow > 500 and d.flow < 2000, 'well under target must ramp up gradually, not jump to max')
 end
 
 -- Inside the band: small trims only, never a big jump.
 do
-  local d = rt2_turbine.compute_flow_decision({ rpm = 905, target_rpm = 900, current_flow = 5000, band = 30 })
-  assert_true(math.abs(d.flow - 5000) <= 1, 'inside the band, flow must only trim by a small step')
+  local d = rt2_turbine.compute_flow_decision({ rpm = 905, target_rpm = 900, current_flow = 1200, band = 30 })
+  assert_true(math.abs(d.flow - 1200) <= 1, 'inside the band, flow must only trim by a small step')
 end
 
 -- ── compute_coil_decision ────────────────────────────────────────────────
