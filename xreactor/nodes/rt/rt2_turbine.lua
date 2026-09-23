@@ -13,6 +13,14 @@ local M = {}
 
 M.FULL_TARGET_RPM = 900
 M.RPM_BAND = 40          -- +/- RPM around target considered "on target"
+-- How far above target counts as a genuine runaway worth cutting the flow
+-- to zero for, rather than ramping down. Must stay comfortably above
+-- RPM_BAND or the RAMP_DOWN branch becomes unreachable again (see the
+-- header of compute_flow_decision). 150 puts the hard cut at 1050 RPM for
+-- the standard 900 target, so normal overshoot is regulated away while a
+-- real runaway -- the 2866 RPM AUS-slot turbine from the original report --
+-- is still caught immediately.
+M.OVERSPEED_MARGIN = 150
 M.COIL_ENGAGE_RPM = 900
 M.COIL_DISENGAGE_RPM = 850
 M.MIN_FLOW = 0
@@ -88,6 +96,23 @@ end
 -- code treated target<=0 as a reason to skip protection entirely, which is
 -- exactly what let an AUS-slot turbine spin at thousands of RPM on full
 -- flow (reported 2026-09-18, node-101/102/103 screenshots).
+--
+-- FIXED 2026-09-23: the overspeed cut used to fire at target+RPM_BAND,
+-- which is the EXACT same condition as the RAMP_DOWN branch below
+-- (error_rpm < -band  <=>  rpm > target + band). The cut came first, so
+-- RAMP_DOWN was unreachable dead code -- proven by sweeping rpm 0..3000 at
+-- target 900: RAMP_DOWN was hit zero times while 2060 of 3001 samples
+-- slammed the flow to 0. The turbine therefore had no proportional
+-- downward control at all: below the band it ramped +TRIM_STEP, inside it
+-- trimmed by 1, and one RPM above the band it dropped straight to zero and
+-- had to climb all the way back. That bang-bang sawtooth is both the
+-- "controller too aggressive" behaviour reported from the plant and a
+-- plausible reason capacity learning struggled to catch every turbine
+-- inside its 900 +/- 15 measurement window at the same moment.
+--
+-- Now the two cases are actually distinct: OVERSPEED_MARGIN marks a real
+-- runaway worth cutting to zero for, and the span between the band and
+-- that margin ramps down proportionally like any normal controller.
 function M.compute_flow_decision(input)
   local rpm = tonumber(input.rpm) or 0
   local target_rpm = tonumber(input.target_rpm) or 0
@@ -96,10 +121,12 @@ function M.compute_flow_decision(input)
   local max_flow = tonumber(input.max_flow) or M.MAX_FLOW
   local band = tonumber(input.band) or M.RPM_BAND
 
+  local overspeed_margin = tonumber(input.overspeed_margin) or M.OVERSPEED_MARGIN
+
   if target_rpm <= 0 then
     return { flow = 0, reason = "TARGET_ZERO" }
   end
-  if rpm > target_rpm + band then
+  if rpm > target_rpm + overspeed_margin then
     return { flow = 0, reason = "OVERSPEED" }
   end
 
