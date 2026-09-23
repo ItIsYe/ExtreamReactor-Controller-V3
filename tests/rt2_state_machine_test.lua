@@ -119,4 +119,34 @@ do
   assert_eq(m.current(), rt2_state.states.AUTONOM, 'a learned node recovers straight to AUTONOM')
 end
 
+-- ── Topologie-Wechsel im Betrieb ─────────────────────────────────────────
+--
+-- Wird im laufenden Betrieb eine Turbine an- oder abgebaut, verwirft
+-- rt2_capacity die eingelernte Kapazitaet (sie invalidiert ueber die
+-- Turbinen-ANZAHL). Vorher gab es aus MASTER/AUTONOM keinen Weg zurueck
+-- ins LEARNING: beide Zweige sahen nur auf die MASTER-Verbindung. Der
+-- Knoten blieb also MASTER mit capacity_ready=false und max_output=0 --
+-- MASTER verteilte Leistung gegen eine Kapazitaet, die er nicht mehr
+-- hatte -- bis jemand den Rechner neu startete. Und einlernen konnte er
+-- sich dort auch nicht mehr, weil die Flotte unter MASTER auf geteilten
+-- Zielen faehrt und die Messung damit nie wieder gelingt.
+do
+  assert_eq(rt2_state.decide_next_state('MASTER',
+    { hardware_ready = true, capacity_ready = false, master_connected = true }),
+    'LEARNING', 'a MASTER node whose capacity was invalidated must relearn')
+  assert_eq(rt2_state.decide_next_state('AUTONOM',
+    { hardware_ready = true, capacity_ready = false, master_connected = false }),
+    'LEARNING', 'an AUTONOM node whose capacity was invalidated must relearn')
+
+  -- Und danach genauso selbstverstaendlich wieder heraus.
+  assert_eq(rt2_state.decide_next_state('LEARNING',
+    { hardware_ready = true, capacity_ready = true, master_connected = true }),
+    'MASTER', 'and returns to MASTER once it has relearned')
+
+  -- Ein Sicherheitsausloeser gewinnt weiterhin gegen alles.
+  assert_eq(rt2_state.decide_next_state('MASTER',
+    { hardware_ready = true, capacity_ready = false, master_connected = true, safety_tripped = true }),
+    'SAFE', 'a trip still wins over the relearn path')
+end
+
 print('rt2_state_machine_test.lua: ok')

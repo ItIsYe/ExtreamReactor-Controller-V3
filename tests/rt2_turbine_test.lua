@@ -92,10 +92,33 @@ do
   assert_true(d.flow > 500 and d.flow < 2000, 'well under target must ramp up gradually, not jump to max')
 end
 
--- Inside the band: small trims only, never a big jump.
+-- Inside the band the trim is PROPORTIONAL: tiny right at the target,
+-- growing toward the band edge. It used to be a flat +/-1 regardless of
+-- the error -- 35x weaker than the ramp branches it takes over from -- so
+-- a turbine knocked off target by the coil engaging needed hundreds of
+-- ticks to recover and sawtoothed across the measurement window instead.
 do
-  local d = rt2_turbine.compute_flow_decision({ rpm = 905, target_rpm = 900, current_flow = 1200, band = 30 })
-  assert_true(math.abs(d.flow - 1200) <= 1, 'inside the band, flow must only trim by a small step')
+  local near = rt2_turbine.compute_flow_decision({ rpm = 901, target_rpm = 900, current_flow = 1200, band = 40 })
+  assert_true(math.abs(near.flow - 1200) <= 2, 'right at the target the trim stays tiny')
+
+  local far = rt2_turbine.compute_flow_decision({ rpm = 870, target_rpm = 900, current_flow = 1200, band = 40 })
+  assert_true(far.flow - 1200 > near.flow - 1200,
+    'further from the target inside the band, the trim must be larger')
+  assert_true(far.flow < 1200 + rt2_turbine.TRIM_STEP,
+    'but never larger than a full ramp step')
+end
+
+-- The trim must join the ramp branches CONTINUOUSLY: one RPM either side of
+-- the band edge must not produce a cliff in the commanded flow. The old
+-- flat trim had a 34-unit jump there, which is precisely what made the
+-- turbine oscillate around the edge.
+do
+  local inside = rt2_turbine.compute_flow_decision({ rpm = 861, target_rpm = 900, current_flow = 1000, band = 40 })
+  local outside = rt2_turbine.compute_flow_decision({ rpm = 859, target_rpm = 900, current_flow = 1000, band = 40 })
+  assert_eq(outside.reason, 'RAMP_UP')
+  assert_true(math.abs(outside.flow - inside.flow) <= 1,
+    'the flow command must be continuous across the band edge, got '
+      .. tostring(inside.flow) .. ' vs ' .. tostring(outside.flow))
 end
 
 -- ── compute_coil_decision ────────────────────────────────────────────────

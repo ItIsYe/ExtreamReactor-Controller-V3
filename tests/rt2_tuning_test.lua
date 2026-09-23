@@ -31,7 +31,7 @@ end
 -- ── Die Ableitung muss die echte Anlagenverstaerkung finden ──────────────
 do
   local real_gain = 0.004   -- Fuellstandsanteil pro Sekunde pro Stab-Punkt
-  local state = simulate(real_gain, 85, { 78, 82, 86, 90 }, 5, 500)
+  local state = simulate(real_gain, 85, { 78, 82, 86, 90 }, 6, 1000)
   local profile, err = tuning.derive(state, { proportional_band = 0.25 })
   assert_true(profile, 'a clean plant must yield a profile, got: ' .. tostring(err))
   assert_near(profile.gain, real_gain, real_gain * 0.2,
@@ -44,8 +44,8 @@ end
 -- A SLOWER plant (smaller gain) must be given a longer adjustment interval
 -- and a bigger step -- that is the whole point of measuring.
 do
-  local fast = tuning.derive(simulate(0.010, 85, { 78, 82, 86, 90 }, 5, 500), {})
-  local slow = tuning.derive(simulate(0.001, 85, { 78, 82, 86, 90 }, 5, 500), {})
+  local fast = tuning.derive(simulate(0.010, 85, { 78, 82, 86, 90 }, 6, 1000), {})
+  local slow = tuning.derive(simulate(0.001, 85, { 78, 82, 86, 90 }, 6, 1000), {})
   assert_true(fast and slow, 'both plants must yield profiles')
   assert_true(slow.min_adjust_interval_ms > fast.min_adjust_interval_ms,
     'a sluggish tank must be given more time between adjustments')
@@ -57,7 +57,7 @@ end
 
 do
   -- Too few samples.
-  local state = simulate(0.004, 85, { 80, 90 }, 2, 500)
+  local state = simulate(0.004, 85, { 80, 90 }, 2, 1000)
   local profile, err = tuning.derive(state, {})
   assert_true(profile == nil, 'too few samples must not yield a profile')
   assert_true(tostring(err):find('Messwerte'), 'and must say why: ' .. tostring(err))
@@ -66,7 +66,7 @@ end
 do
   -- Plenty of samples but all at essentially the same rod level: the slope
   -- through such a cluster is noise, not a measurement.
-  local state = simulate(0.004, 85, { 84, 85, 86 }, 10, 500)
+  local state = simulate(0.004, 85, { 84, 85, 86 }, 10, 1000)
   local profile, err = tuning.derive(state, {})
   assert_true(profile == nil, 'a narrow rod spread must not yield a profile')
   assert_true(tostring(err):find('eng'), 'and must say why: ' .. tostring(err))
@@ -79,10 +79,10 @@ do
   local state = tuning.new_state()
   local now, fill = 1000000, 0.5
   for _, rods in ipairs({ 78, 82, 86, 90 }) do
-    for _ = 1, 5 do
+    for _ = 1, 6 do
       state = tuning.observe(state, { now_ms = now, rods = rods, fill = fill })
-      fill = math.max(0.05, math.min(0.95, fill + (rods - 85) * 0.004 * 0.5))
-      now = now + 500
+      fill = math.max(0.05, math.min(0.95, fill + (rods - 85) * 0.004))
+      now = now + 1000
     end
   end
   local profile, err = tuning.derive(state, {})
@@ -97,11 +97,11 @@ do
   -- attributed to a single rod level.
   local state = tuning.new_state()
   state = tuning.observe(state, { now_ms = 1000, rods = 80, fill = 0.50 })
-  state = tuning.observe(state, { now_ms = 1500, rods = 82, fill = 0.52 })
+  state = tuning.observe(state, { now_ms = 2000, rods = 82, fill = 0.52 })
   assert_eq(state.n, 0, 'a reading where the rods moved must not become a sample')
 
-  -- Same rods, time passed: that IS a sample.
-  state = tuning.observe(state, { now_ms = 2000, rods = 82, fill = 0.54 })
+  -- Same rods, a full sampling interval passed: that IS a sample.
+  state = tuning.observe(state, { now_ms = 3000, rods = 82, fill = 0.54 })
   assert_eq(state.n, 1, 'a steady interval must become a sample')
 end
 
@@ -109,12 +109,12 @@ do
   -- A tank pinned at an end stop is clipped, so its rate is meaningless.
   local state = tuning.new_state()
   state = tuning.observe(state, { now_ms = 1000, rods = 80, fill = 0 })
-  state = tuning.observe(state, { now_ms = 1500, rods = 80, fill = 0 })
+  state = tuning.observe(state, { now_ms = 2000, rods = 80, fill = 0 })
   assert_eq(state.n, 0, 'an empty, pinned tank must not become a sample')
 
   state = tuning.new_state()
   state = tuning.observe(state, { now_ms = 1000, rods = 80, fill = 1 })
-  state = tuning.observe(state, { now_ms = 1500, rods = 80, fill = 1 })
+  state = tuning.observe(state, { now_ms = 2000, rods = 80, fill = 1 })
   assert_eq(state.n, 0, 'a full, pinned tank must not become a sample')
 end
 
@@ -123,8 +123,38 @@ do
   local state = tuning.new_state()
   state = tuning.observe(state, { now_ms = 1000, rods = 80, fill = 0.5 })
   local before = state.n
-  tuning.observe(state, { now_ms = 1500, rods = 80, fill = 0.52 })
+  tuning.observe(state, { now_ms = 2000, rods = 80, fill = 0.52 })
   assert_eq(state.n, before, 'observe() must not mutate the state it was given')
+end
+
+do
+  -- Ticks arrive several times a second. Differencing two of them would
+  -- divide a fill change smaller than the reading's own resolution by a
+  -- tiny dt -- pure noise. The anchor must be HELD instead, so that the
+  -- eventual sample still spans a full interval.
+  local state = tuning.new_state()
+  state = tuning.observe(state, { now_ms = 0, rods = 80, fill = 0.500 })
+  for i = 1, 9 do
+    state = tuning.observe(state, { now_ms = i * 100, rods = 80, fill = 0.500 + i * 0.0001 })
+    assert_eq(state.n, 0, 'readings 100ms apart must not each become a sample')
+  end
+  state = tuning.observe(state, { now_ms = 1000, rods = 80, fill = 0.501 })
+  assert_eq(state.n, 1, 'but once a full interval has passed, one sample is taken')
+  -- ...and it measures the whole second, not the last 100 ms of it.
+  assert_near(state.sum_y, 0.001, 1e-9, 'the sample must span the full held interval')
+end
+
+do
+  -- Observation stops while SAFE and whenever the steam reading is
+  -- missing. A stale anchor differenced across such a gap is one bogus
+  -- sample with enormous leverage on the fit, so it must be dropped.
+  local state = tuning.new_state()
+  state = tuning.observe(state, { now_ms = 1000, rods = 100, fill = 0.80 })
+  state = tuning.observe(state, { now_ms = 1000 + 300000, rods = 100, fill = 0.10 })
+  assert_eq(state.n, 0, 'a reading across a long observation gap must not become a sample')
+  -- The anchor is re-established, so normal sampling resumes immediately.
+  state = tuning.observe(state, { now_ms = 1000 + 301000, rods = 100, fill = 0.11 })
+  assert_eq(state.n, 1, 'and sampling resumes from the fresh anchor')
 end
 
 -- ── Persistenz ───────────────────────────────────────────────────────────

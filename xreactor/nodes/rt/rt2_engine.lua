@@ -19,6 +19,8 @@ local rt2_capacity = require("nodes.rt.rt2_capacity")
 local rt2_safety = require("nodes.rt.rt2_safety")
 local rt2_projection = require("nodes.rt.rt2_projection")
 local rt2_tuning = require("nodes.rt.rt2_tuning")
+local rt2_turbine = require("nodes.rt.rt2_turbine")
+local rt2_reactor = require("nodes.rt.rt2_reactor")
 local utils = require("core.utils")
 
 local M = {}
@@ -183,6 +185,20 @@ function M.tick(ctx)
       last_logged_capacity_diag = diag
       local msg = "v2 Einlernen (LEARNING): " .. diag
         .. " -- Turbinen im Zielbereich (RPM+Spule engaged+Energieausstoss>0) vs. Gesamtzahl"
+      -- FLOW_SATURATED is not "still ramping" -- it means the turbines are
+      -- already drawing every drop the mod lets them and still fall short,
+      -- so waiting changes nothing. Say that outright instead of letting
+      -- the operator watch a counter that will never move.
+      if result.capacity.reason == "FLOW_SATURATED" then
+        msg = msg .. string.format(
+          "\n[RT] >> %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM."
+          .. " Warten hilft hier nicht: entweder liefert der Reaktor zu wenig Dampf"
+          .. " (Staebe stehen auf %s, Untergrenze %d%% = ~%d%% Leistung)"
+          .. " oder es haengen zu viele Turbinen an diesem Reaktor.",
+          result.capacity.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
+          tostring(result.reactor_decision and result.reactor_decision.rods),
+          rt2_reactor.ROD_MIN, 100 - rt2_reactor.ROD_MIN)
+      end
       ctx.log("INFO", msg)
       pcall(print, "[RT] " .. msg)
     end

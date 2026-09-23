@@ -42,6 +42,21 @@ M.MIN_ROD_SPREAD = 6
 M.SETTLE_INTERVALS = 4        -- adjustments allowed to correct a full band
 M.MIN_DETECTABLE_FILL = 0.005 -- a 1-point move must move the tank at least this much
 
+-- A single sample must span enough time to be worth anything. The node
+-- ticks several times a second, so consecutive readings are ~100 ms apart;
+-- across such a span a real plant moves the tank by far less than the
+-- reading's own resolution, and the computed rate is then almost pure
+-- quantisation noise, amplified by the small dt in the division. Holding
+-- the anchor until a full second has passed measures the same plant with
+-- roughly ten times less noise, at no cost -- the rods stand still between
+-- adjustments anyway, which is exactly when sampling happens.
+M.MIN_SAMPLE_DT_MS = 1000
+-- ...and not TOO much time: observation stops while SAFE and whenever the
+-- steam reading is missing, so the anchor can otherwise survive a gap of
+-- minutes and then be differenced against a reading from a completely
+-- different regime -- one bogus sample with enormous leverage on the fit.
+M.MAX_SAMPLE_DT_MS = 10000
+
 -- Hard limits. A bad fit must never be able to produce a dangerous
 -- controller, so the derived values are clamped into a range that is safe
 -- even if the measurement was nonsense.
@@ -87,13 +102,29 @@ function M.observe(state, reading)
   local next_state = copy(state)
   local prev_rods, prev_fill, prev_ms = state.last_rods, state.last_fill, state.last_ms
 
-  next_state.last_rods, next_state.last_fill, next_state.last_ms = rods, fill, now_ms
+  local function reanchor()
+    next_state.last_rods, next_state.last_fill, next_state.last_ms = rods, fill, now_ms
+    return next_state
+  end
 
-  if prev_rods == nil or prev_rods ~= rods then return next_state end
-  local dt = (now_ms - (prev_ms or now_ms)) / 1000
-  if dt <= 0 then return next_state end
+  -- No anchor yet, or the rods moved: this reading becomes the new anchor
+  -- and yields nothing, because a fill change spanning a rod movement
+  -- cannot be attributed to a single rod level.
+  if prev_rods == nil or prev_rods ~= rods then return reanchor() end
+
+  local elapsed_ms = now_ms - (prev_ms or now_ms)
+  if elapsed_ms <= 0 then return reanchor() end
+  -- Too soon: KEEP the anchor and let more time accumulate, rather than
+  -- differencing two readings a tick apart (see MIN_SAMPLE_DT_MS). This is
+  -- the whole reason the anchor is not advanced unconditionally.
+  if elapsed_ms < M.MIN_SAMPLE_DT_MS then return next_state end
+  -- Too long: the anchor survived an observation gap, so drop it and start
+  -- a fresh one (see MAX_SAMPLE_DT_MS).
+  if elapsed_ms > M.MAX_SAMPLE_DT_MS then return reanchor() end
+
+  local dt = elapsed_ms / 1000
   -- Clipped at an end stop: the tank cannot show the true rate there.
-  if (fill <= 0 and prev_fill <= 0) or (fill >= 1 and prev_fill >= 1) then return next_state end
+  if (fill <= 0 and prev_fill <= 0) or (fill >= 1 and prev_fill >= 1) then return reanchor() end
 
   local rate = (fill - prev_fill) / dt
 
@@ -104,7 +135,7 @@ function M.observe(state, reading)
   next_state.sum_xx = state.sum_xx + rods * rods
   next_state.rod_min = math.min(state.rod_min or rods, rods)
   next_state.rod_max = math.max(state.rod_max or rods, rods)
-  return next_state
+  return reanchor()
 end
 
 function M.spread(state)

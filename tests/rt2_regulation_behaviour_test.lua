@@ -60,10 +60,12 @@ do
   assert_eq(t.SLOW.flow_decision.flow, 500 + rt2_turbine.TRIM_STEP, 'SLOW ramps up from its OWN flow, not the fleet average')
 
   assert_eq(t.UNDER.flow_decision.reason,   'HOLD_TRIM_UP')
-  assert_eq(t.UNDER.flow_decision.flow, 1001, 'UNDER trims up by 1 from its OWN 1000')
+  -- 20 RPM unter Ziel bei Band 40 -> halber Rampenschritt (35/2 ~ 18).
+  assert_eq(t.UNDER.flow_decision.flow, 1018, 'UNDER trims up proportionally from its OWN 1000')
 
   assert_eq(t.OVER.flow_decision.reason,    'HOLD_TRIM_DOWN')
-  assert_eq(t.OVER.flow_decision.flow, 1199, 'OVER trims down by 1 from its OWN 1200')
+  -- nur 5 RPM drueber -> entsprechend kleiner Schritt (35 * 5/40 ~ 4).
+  assert_eq(t.OVER.flow_decision.flow, 1196, 'OVER trims down proportionally from its OWN 1200')
 
   assert_eq(t.FAST.flow_decision.reason,    'RAMP_DOWN')
   assert_eq(t.FAST.flow_decision.flow, 1500 - rt2_turbine.TRIM_STEP, 'FAST ramps down from its OWN flow')

@@ -96,6 +96,18 @@ function M.decide_next_state(current, inputs)
   -- own peer-liveness tracking (debounce/grace) already smooths this
   -- signal before it reaches this function.
   if current == M.states.MASTER or current == M.states.AUTONOM then
+    -- A turbine added or removed at runtime invalidates the learned
+    -- capacity (rt2_capacity keys invalidation on the fleet COUNT), and
+    -- without this branch there was no way back: MASTER/AUTONOM only ever
+    -- looked at connectivity, and the fleet is running split targets in
+    -- those states, so the measurement can never succeed again either.
+    -- The node stayed MASTER with capacity_ready=false and max_output=0 --
+    -- MASTER splitting power against a capacity it no longer had -- until
+    -- someone rebooted the computer. Rule 1 of the spec is that learning
+    -- always completes first, so an invalidated node relearns.
+    if not inputs.capacity_ready then
+      return M.states.LEARNING
+    end
     if inputs.master_connected then
       return M.states.MASTER
     end

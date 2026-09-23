@@ -25,6 +25,8 @@
 -- no ctx, no file I/O. Persistence (save/load) is a thin, separate
 -- wrapper below so the learning math itself stays trivially testable.
 
+local rt2_turbine = require("nodes.rt.rt2_turbine")
+
 local M = {}
 
 M.TARGET_RPM = 900
@@ -43,15 +45,25 @@ function M.new_state()
     ready = false,
     max_output = 0,
     at_target = 0,
+    saturated = 0,
     total_turbines = 0,
     reason = "INIT",
   }
 end
 
+-- A turbine whose flow setting is already pegged at (or just under) the
+-- mod's hard limit and which STILL cannot reach the target speed is
+-- saturated: no controller action left to take. Either the reactor cannot
+-- supply that much steam, or the coil load at this target exceeds what the
+-- turbine can carry. Counting these separately is what turns an invisible
+-- hang into a diagnosable condition -- see M.update()'s FLOW_SATURATED.
+M.SATURATION_FRACTION = 0.95
+
 local function measure(turbines)
   local total = #(turbines or {})
-  if total == 0 then return nil, 0, 0 end
-  local at_target, output = 0, 0
+  if total == 0 then return nil, 0, 0, 0 end
+  local max_flow = rt2_turbine.MAX_FLOW
+  local at_target, output, saturated = 0, 0, 0
   for _, t in ipairs(turbines) do
     local rpm = tonumber(t.rpm)
     local energy = tonumber(t.energy) or 0
@@ -60,12 +72,17 @@ local function measure(turbines)
         and energy > 0 then
       at_target = at_target + 1
       output = output + energy
+    elseif rpm and rpm < M.TARGET_RPM - M.TOLERANCE_RPM then
+      local flow = tonumber(t.current_flow)
+      if flow and flow >= max_flow * M.SATURATION_FRACTION then
+        saturated = saturated + 1
+      end
     end
   end
   if at_target < math.max(1, math.ceil(total * M.MIN_FRACTION)) then
-    return nil, at_target, total
+    return nil, at_target, total, saturated
   end
-  return math.floor((output / at_target) * total), at_target, total
+  return math.floor((output / at_target) * total), at_target, total, saturated
 end
 
 -- previous: a state table from M.new_state()/a prior M.update() call.
@@ -74,6 +91,7 @@ end
 function M.update(previous, turbines)
   local state = copy(previous or M.new_state())
   local total = #(turbines or {})
+  local topology_changed = false
 
   if total ~= state.total_turbines then
     -- Turbine COUNT changed: the only signal this module trusts as a real
@@ -83,12 +101,14 @@ function M.update(previous, turbines)
     state.ready = false
     state.max_output = 0
     state.total_turbines = total
+    topology_changed = true
     state.reason = total == 0 and "NO_TURBINES" or "TOPOLOGY_CHANGED"
   end
 
-  local measured, at_target, measured_total = measure(turbines)
+  local measured, at_target, measured_total, saturated = measure(turbines)
   state.at_target = at_target
   state.total_turbines = measured_total
+  state.saturated = saturated
 
   if measured then
     local safe = measured * (1 - M.SAFETY_MARGIN)
@@ -102,8 +122,29 @@ function M.update(previous, turbines)
     else
       state.reason = "STABLE"
     end
-  elseif state.reason ~= "TOPOLOGY_CHANGED" and state.reason ~= "NO_TURBINES" then
-    state.reason = measured_total == 0 and "NO_TURBINES" or "NONE_AT_TARGET"
+  elseif topology_changed then
+    -- Set earlier in THIS call: keep it, so the operator gets one log line
+    -- naming the real cause before the ordinary "still ramping" reasons
+    -- take over on the next tick. Deliberately a local flag and not a test
+    -- on the carried-over state.reason, which is what the previous version
+    -- did -- that made the reason sticky forever, so a fleet stuck after a
+    -- topology change kept reporting TOPOLOGY_CHANGED and never revealed
+    -- whether it was ramping or saturated.
+    state.reason = "TOPOLOGY_CHANGED"
+  elseif measured_total == 0 then
+    state.reason = "NO_TURBINES"
+  elseif saturated > 0 then
+    -- Distinguished from NONE_AT_TARGET on purpose. NONE_AT_TARGET means
+    -- "still ramping, give it time"; FLOW_SATURATED means the turbines are
+    -- asking for all the steam the mod will let them take and still fall
+    -- short -- more time will not fix that. Waiting silently on this is
+    -- exactly what made a stalled learning phase look like a hung node
+    -- ("reaches 900 but no progress": the rotor DOES touch 900 uncoupled,
+    -- the coil engages, the load pulls it back under and the flow has
+    -- nothing left to give).
+    state.reason = "FLOW_SATURATED"
+  else
+    state.reason = "NONE_AT_TARGET"
   end
 
   return state

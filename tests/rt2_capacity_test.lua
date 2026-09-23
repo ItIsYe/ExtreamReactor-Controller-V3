@@ -86,4 +86,35 @@ do
   assert_true(rejected == nil, 'a turbine count mismatch must reject the cached value')
 end
 
+
+-- ── Saettigung vs. "rampt noch hoch" ─────────────────────────────────────
+--
+-- Ein Knoten, dessen Turbinen bei vollem Flow die Zieldrehzahl nicht
+-- erreichen, lernt NIE fertig ein. Vorher sah das exakt aus wie "rampt
+-- noch hoch" (NONE_AT_TARGET) und der Bediener wartete auf einen Zaehler,
+-- der sich nie bewegt. Das muss unterscheidbar sein.
+do
+  local rt2_turbine = require('nodes.rt.rt2_turbine')
+  local saturated_reading = {}
+  for i = 1, 5 do
+    saturated_reading[i] = { rpm = 840, energy = 300, coil_engaged = true,
+                             current_flow = rt2_turbine.MAX_FLOW }
+  end
+  local state = rt2_capacity.update(rt2_capacity.new_state(), saturated_reading)
+  state = rt2_capacity.update(state, saturated_reading)
+  assert_eq(state.ready, false, 'saturated turbines must not count as learned')
+  assert_eq(state.reason, 'FLOW_SATURATED', 'and the reason must name the saturation')
+  assert_eq(state.saturated, 5, 'all five turbines are saturated')
+
+  -- Dieselbe Drehzahl, aber der Flow hat noch Luft: das ist echtes Hochrampen.
+  local ramping = {}
+  for i = 1, 5 do
+    ramping[i] = { rpm = 840, energy = 300, coil_engaged = true, current_flow = 400 }
+  end
+  local ramp_state = rt2_capacity.update(rt2_capacity.new_state(), ramping)
+  ramp_state = rt2_capacity.update(ramp_state, ramping)
+  assert_eq(ramp_state.reason, 'NONE_AT_TARGET', 'a turbine with flow headroom is still ramping')
+  assert_eq(ramp_state.saturated, 0)
+end
+
 print('rt2_capacity_test.lua: ok')
