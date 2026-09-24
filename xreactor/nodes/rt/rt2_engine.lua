@@ -291,9 +291,26 @@ function M.status_fields()
     node_state = last_projection and last_projection.node_state
       or rt2_projection.node_state(last_result.state),
     capacity_ready = last_result.capacity.ready,
+    -- Der Zweck des ganzen Einlernens: wieviel RF/t dieser Knoten
+    -- tatsaechlich liefern kann. MASTER teilt seinen Bedarf gegen genau
+    -- diese Zahl auf (rt_sync.node_capacity -> uniform_pct), also muss sie
+    -- gemessen und nicht hochgerechnet sein -- siehe rt2_capacity.
     capacity_max = last_result.capacity.max_output,
-    capacity_at_target = last_result.capacity.at_target,
     capacity_total_turbines = last_result.capacity.total_turbines,
+    -- MASTER liest diese beiden Namen (message_handlers.lua) und baut
+    -- daraus seine Lernanzeige. v2 schickte stattdessen capacity_at_target
+    -- und capacity_reason -- also Felder, die MASTER gar nicht kennt. Auf
+    -- dem MASTER-Schirm stand deshalb waehrend des gesamten Einlernens
+    -- "LEARNING 0/25 Turbinen stabil", egal wie weit der Knoten war.
+    capacity_stable_turbines = last_result.capacity.at_target,
+    capacity_source = last_result.capacity.reason,
+    -- Neu: wieviele Turbinen diese Anlage nachweislich traegt. Damit kann
+    -- MASTER den Fortschritt des Suchlaufs zeigen und erkennen, dass ein
+    -- Knoten seine Flotte bewusst nur teilweise fahren kann.
+    capacity_sustainable_turbines = last_result.capacity.sustainable_turbines,
+    -- Aliase unter den alten v2-Namen beibehalten: die RT-eigene UI und
+    -- der Integrationstest lesen sie.
+    capacity_at_target = last_result.capacity.at_target,
     capacity_reason = last_result.capacity.reason,
     turbines = turbines,
     control_rod_level = last_result.reactor_decision and last_result.reactor_decision.rods or nil,

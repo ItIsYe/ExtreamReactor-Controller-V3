@@ -252,6 +252,12 @@ function M.new(opts)
     rt.capacity_source  = payload.capacity_source or rt.capacity_source
     rt.capacity_stable_turbines  = number_or_nil(payload.capacity_stable_turbines) or rt.capacity_stable_turbines
     rt.capacity_total_turbines   = number_or_nil(payload.capacity_total_turbines) or rt.capacity_total_turbines
+    -- Wieviele Turbinen der Knoten nachweislich gleichzeitig tragen kann.
+    -- Ein dampfbegrenzter Knoten faehrt bewusst nur einen Teil seiner
+    -- Flotte; ohne diesen Wert sieht das von hier aus wie ein Defekt.
+    -- Nur v2-Knoten schicken ihn -- bei v1 bleibt er schlicht nil.
+    rt.capacity_sustainable_turbines = number_or_nil(payload.capacity_sustainable_turbines)
+      or rt.capacity_sustainable_turbines
     if rt.capacity_ready == true then node.capacity_ready = true end
     node.capacity_max   = rt.capacity_max or node.capacity_max
     -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0

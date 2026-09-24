@@ -256,15 +256,40 @@ function M.new(opts)
         rt_node.capacity_stable_turbines= rt_data.capacity_stable_turbines or 0
         rt_node.capacity_total_turbines = rt_data.capacity_total_turbines or 0
         rt_node.capacity_source         = rt_data.capacity_source or "UNKNOWN"
+        rt_node.capacity_sustainable_turbines = rt_data.capacity_sustainable_turbines
         -- Learning-Meldung für die UI aufbauen
         if not rt_node.capacity_ready then
-          rt_node.learning_note = string.format(
-            "LEARNING %d/%d Turbinen stabil (%d Samples)",
-            rt_node.capacity_stable_turbines,
-            rt_node.capacity_total_turbines,
-            rt_node.capacity_stable_samples
-          )
+          -- Ein v2-Knoten sucht die tragbare Turbinenzahl stufenweise, statt
+          -- auf eine Mindestzahl gleichzeitig stabiler Turbinen zu warten.
+          -- Dafür ist "x/y stabil (z Samples)" die falsche Beschreibung --
+          -- der Fortschritt steckt in der erreichten Stufe. v1-Knoten
+          -- schicken capacity_sustainable_turbines nicht und behalten die
+          -- alte Meldung.
+          if rt_node.capacity_sustainable_turbines then
+            rt_node.learning_note = string.format(
+              "EINLERNEN: %d/%d Turbinen tragen",
+              rt_node.capacity_sustainable_turbines,
+              rt_node.capacity_total_turbines
+            )
+          else
+            rt_node.learning_note = string.format(
+              "LEARNING %d/%d Turbinen stabil (%d Samples)",
+              rt_node.capacity_stable_turbines,
+              rt_node.capacity_total_turbines,
+              rt_node.capacity_stable_samples
+            )
+          end
           rt.rt_learning = (rt.rt_learning or 0) + 1
+        elseif rt_node.capacity_sustainable_turbines
+            and rt_node.capacity_total_turbines > 0
+            and rt_node.capacity_sustainable_turbines < rt_node.capacity_total_turbines then
+          -- Dieser Knoten traegt seine Flotte nicht vollstaendig. Das ist
+          -- kein Fehler, aber es gehoert sichtbar gemacht: sonst sucht
+          -- jemand den Defekt an den abgestellten Turbinen.
+          rt_node.learning_note = string.format(
+            "READY %.0f RF/t (%d/%d Turbinen)", rt_node.capacity_max,
+            rt_node.capacity_sustainable_turbines, rt_node.capacity_total_turbines
+          )
         else
           rt_node.learning_note = string.format(
             "READY %.0f RF/t", rt_node.capacity_max
