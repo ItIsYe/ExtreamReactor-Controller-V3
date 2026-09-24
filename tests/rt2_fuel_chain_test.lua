@@ -144,4 +144,45 @@ for _, entry in pairs(stale_entries) do
 end
 assert_true(not stale_found, 'ein als veraltet markierter Knoten darf nicht mehr einspeisen')
 
+-- ── 5. Der zweite Weg: FUEL hoert RT direkt mit ──────────────────────────
+--
+-- Neben dem Relay ueber MASTER lauscht die FUEL-Node selbst auf dem
+-- STATUS-Kanal. Dieser Weg traegt auch dann, wenn MASTER gerade weg ist --
+-- und er liest dasselbe Feld aus demselben Payload, greift also genauso
+-- ins Leere, wenn die Reaktorliste fehlt.
+do
+  local fuel_status_network = require('nodes.fuel.fuel_status_network')
+  local protocol = require('core.protocol')
+
+  local cache = fuel_status_network.new()
+  local service = fuel_status_network.make_overhear_service(cache, constants)
+
+  local message = {
+    type = constants.message_types.STATUS,
+    role = constants.roles.RT_NODE,
+    sender_id = 'node-101',
+    src = 'node-101',
+    ts = NOW,
+    proto_ver = constants.proto_ver,
+    payload = payload,          -- exakt der Payload von oben, inkl. v2-Uebersteuerung
+  }
+  assert_true(select(1, protocol.validate(message)) == true,
+    'Vorbedingung: die nachgebaute Statusmeldung muss gueltig sein')
+
+  service.tick(service, 0, { 'modem_message', 'back', constants.channels.STATUS, 0, message })
+
+  -- Mitgehoerte Werte landen in cache.direct_heard (die vom MASTER
+  -- gemeldeten daneben in cache.master_relay -- beide Quellen werden
+  -- getrennt gefuehrt, damit sich eine veraltete nicht als frisch ausgibt).
+  local heard
+  for _, entry in pairs(cache.direct_heard or {}) do
+    if type(entry) == 'table' and entry.fuel_amount == 3200 then heard = entry end
+  end
+  assert_true(heard ~= nil,
+    'FUEL muss den Fuellstand auch direkt aus der RT-Statusmeldung lesen koennen')
+  assert_eq(heard.fuel_capacity, 4000)
+  assert_true(next(cache.master_relay) == nil,
+    'und das darf nicht faelschlich als MASTER-Meldung verbucht werden')
+end
+
 print('rt2_fuel_chain_test.lua: ok')
