@@ -154,6 +154,17 @@ end
 -- runaway worth cutting to zero for, and everything between the band and
 -- that limit ramps down proportionally like any normal controller.
 function M.compute_flow_decision(input)
+  -- Keine Drehzahlmessung -> kein Dampf. Vorher wurde ein fehlender Wert
+  -- wie "0 RPM" behandelt, und das ist genau die falsche Richtung: der
+  -- Regler haelt die Turbine fuer stehend, faehrt den Flow aufs Maximum
+  -- hoch und laesst die Spule getrennt -- volle Foerderung ohne Last und
+  -- ohne Rueckmeldung, also der Zustand, gegen den die
+  -- Ueberdrehzahl-Abschaltung eigentlich schuetzen soll. Der Reaktor
+  -- faellt bei einem fehlenden Dampfwert laengst auf die sichere Seite
+  -- (NO_STEAM_READING -> Staebe 100); die Turbine tut es jetzt auch.
+  if tonumber(input.rpm) == nil then
+    return { flow = 0, reason = "NO_RPM_READING" }
+  end
   local rpm = tonumber(input.rpm) or 0
   local target_rpm = tonumber(input.target_rpm) or 0
   local current_flow = tonumber(input.current_flow) or 0
@@ -227,6 +238,13 @@ end
 -- recovering it. A parked turbine now brakes through the coil for as long
 -- as it still turns, and only releases once it has essentially stopped.
 function M.compute_coil_decision(input)
+  -- Ohne Drehzahl laesst sich nicht entscheiden, ob gekuppelt werden soll
+  -- -- also nichts veraendern. Vorher wurde der fehlende Wert als 0 RPM
+  -- gelesen und die Spule geloest, womit ausgerechnet ein womoeglich noch
+  -- drehender Rotor seine Bremse verloren haette.
+  if tonumber(input.rpm) == nil then
+    return { engaged = input.currently_engaged == true, reason = "HOLD_NO_RPM" }
+  end
   local rpm = tonumber(input.rpm) or 0
   local target_rpm = tonumber(input.target_rpm) or 0
   local currently_engaged = input.currently_engaged == true

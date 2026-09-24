@@ -64,6 +64,13 @@ M.MIN_FRACTION = 0.8
 -- Steigt der Hoechstwert eine Weile nicht mehr, ist die Anlage ausgemessen.
 M.STABLE_MS = 6000  -- so lange darf sich der Hoechstwert nicht mehr verbessern
 
+-- So lange muss eine geaenderte Turbinenzahl ANHALTEN, bevor sie als
+-- Umbau gilt. Ein Peripheral, das einen Takt lang nicht antwortet (Chunk
+-- laedt nach, Serverhaenger), faellt sonst aus der Liste und sieht aus
+-- wie eine abgebaute Turbine -- der gelernte Wert waere weg und die
+-- Messung liefe von vorn los, wegen eines Wimpernschlags.
+M.TOPOLOGY_DEBOUNCE_MS = 3000
+
 local function copy(t)
   local out = {}
   for k, v in pairs(t or {}) do out[k] = v end
@@ -92,6 +99,9 @@ function M.new_state()
     -- jeder Verbesserung erneut abgezogen wird.
     best_output = 0,
     last_improved_ms = nil,
+    -- Eine noch nicht bestaetigte Aenderung der Turbinenzahl.
+    pending_total = nil,
+    pending_since_ms = nil,
   }
 end
 
@@ -155,6 +165,19 @@ function M.update(previous, turbines, opts)
     -- hardware change. A rename-only reshuffle (same count) never reaches
     -- this branch, so it can never invalidate a learned value the way the
     -- old identity-signature cache did.
+    --
+    -- Aber erst, wenn die neue Anzahl auch anhaelt -- siehe
+    -- TOPOLOGY_DEBOUNCE_MS. Bis dahin gilt weiter, was gelernt wurde.
+    if state.pending_total ~= total then
+      state.pending_total = total
+      state.pending_since_ms = now_ms
+    end
+    if state.ready and (now_ms - (state.pending_since_ms or now_ms)) < M.TOPOLOGY_DEBOUNCE_MS then
+      state.at_target, state.saturated = 0, 0
+      state.reason = "TOPOLOGY_PENDING"
+      return state
+    end
+    state.pending_total, state.pending_since_ms = nil, nil
     state.ready = false
     state.max_output = 0
     state.best_output = 0
@@ -164,6 +187,7 @@ function M.update(previous, turbines, opts)
     state.reason = "TOPOLOGY_CHANGED"
     return state
   end
+  state.pending_total, state.pending_since_ms = nil, nil
 
   local output, at_target, _, saturated = measure(turbines)
   state.at_target, state.saturated = at_target, saturated

@@ -166,11 +166,30 @@ do
   assert_true(s.ready)
   local learned_max = s.max_output
 
-  -- Umbau: andere Turbinenzahl -> der Suchlauf beginnt von vorn.
-  local changed = rt2_capacity.update(s, plant(3, 3, 100), { now_ms = 99000 })
-  assert_true(not changed.ready, 'eine geaenderte Turbinenzahl verwirft den Wert')
-  assert_eq(changed.reason, 'TOPOLOGY_CHANGED')
-  assert_eq(changed.max_output, 0, 'der alte Wert darf nicht stehenbleiben')
+  -- Ein Peripheral, das einen Takt lang nicht antwortet, sieht aus wie
+  -- eine abgebaute Turbine. Das darf den gelernten Wert NICHT kosten --
+  -- sonst liefe die Messung wegen eines Wimpernschlags von vorn los.
+  local blip = rt2_capacity.update(s, plant(3, 3, 100), { now_ms = 99000 })
+  assert_true(blip.ready, 'ein kurzer Ausfall verwirft nichts')
+  assert_eq(blip.reason, 'TOPOLOGY_PENDING')
+  assert_eq(blip.max_output, learned_max, 'der gelernte Wert gilt weiter')
+
+  -- Kommt die Turbine zurueck, ist die Sache erledigt.
+  local recovered = rt2_capacity.update(blip, plant(2, 2, 100), { now_ms = 99500 })
+  assert_true(recovered.ready, 'nach der Rueckkehr laeuft alles normal weiter')
+  assert_eq(recovered.max_output, learned_max)
+
+  -- Haelt die neue Anzahl dagegen an, IST es ein Umbau.
+  local changed = blip
+  for i = 1, 5 do
+    changed = rt2_capacity.update(changed, plant(3, 3, 100),
+      { now_ms = 99000 + i * rt2_capacity.TOPOLOGY_DEBOUNCE_MS })
+  end
+  -- Der alte Wert ist weg, und die neue Flotte wurde eigenstaendig
+  -- ausgemessen: 3 x 100 statt der frueheren 2 x 100.
+  assert_eq(changed.total_turbines, 3, 'die neue Turbinenzahl gilt')
+  assert_eq(changed.max_output, 300 * (1 - rt2_capacity.SAFETY_MARGIN),
+    'und die Anlage wurde neu vermessen, nicht der alte Wert weitergeschleppt')
 
   -- Ein Takt ganz ohne Turbinen-Lesung ist KEIN Umbau, sondern eine
   -- fehlende Messung (Discovery-Aussetzer). Der wuerde sonst einen
