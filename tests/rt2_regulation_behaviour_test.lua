@@ -202,30 +202,29 @@ do
   end
 
   -- Beim Einlernen wird nichts gedeckelt -- alle fahren auf Ziel.
-  local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
   assert_true(r.max_active == nil, 'beim Einlernen deckelt der Knoten nichts')
   for _, t in ipairs(r.turbines) do
     assert_eq(t.target_rpm, 900, 'jede Turbine bekommt das volle Ziel')
   end
 
-  -- Drei liefern -> das ist der Messwert. Drei von fuenf haette die alte
-  -- 80-%-Regel (vier noetig) verworfen und gar nichts gelernt.
-  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  -- Vier von fuenf liefern -> genau die 80 %, ab denen ein Takt zaehlt.
+  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
   assert_eq(r.capacity.reason, 'MEASURING')
   assert_true(not r.capacity.ready, 'ein einzelner Messwert legt noch nichts fest')
 
   r = o.tick({ now_ms = 2000 + rt2_capacity.STABLE_MS + 1, hardware_ready = true,
-               reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+               reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
   assert_true(r.capacity.ready, 'bleibt der Hoechstwert stehen, ist die Anlage ausgemessen')
-  assert_eq(r.capacity.sustainable_turbines, 3, 'drei Turbinen lieferten den Hoechstwert')
-  -- Gemessen, NICHT hochgerechnet: 3 x 100 minus 5 % Reserve. Die alte
-  -- Formel haette (300/3) * 5 = 500 eingetragen -- das Ausstossmass von
-  -- fuenf Turbinen fuer eine Anlage, bei der drei lieferten.
-  assert_eq(r.capacity.max_output, 285)
+  assert_eq(r.capacity.sustainable_turbines, 4, 'vier Turbinen lieferten den Hoechstwert')
+  -- Gemessen, NICHT hochgerechnet: 4 x 100 minus 5 % Reserve. Die alte
+  -- Formel haette (400/4) * 5 = 500 eingetragen -- also Leistung fuer eine
+  -- fuenfte Turbine erfunden, die in dem Moment gar nichts lieferte.
+  assert_eq(r.capacity.max_output, 380)
 
   -- Und erst JETZT, nach dem Einlernen, wirkt die beobachtete Grenze.
-  r = o.tick({ now_ms = 400000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
-  assert_eq(r.max_active, 3, 'im Betrieb faehrt der Knoten nicht mehr an, als je getragen haben')
+  r = o.tick({ now_ms = 400000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
+  assert_eq(r.max_active, 4, 'im Betrieb faehrt der Knoten nicht mehr an, als je gleichzeitig lieferten')
 end
 
 -- ═══ 4. Reaktorregelung: nur Dampftank, in JEDEM Modus gleich ═══

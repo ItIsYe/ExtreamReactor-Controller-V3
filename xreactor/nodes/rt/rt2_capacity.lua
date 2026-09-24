@@ -33,29 +33,35 @@ M.TARGET_RPM = 900
 M.TOLERANCE_RPM = 15
 M.SAFETY_MARGIN = 0.05 -- store max_output as 95% of the measured peak
 
+-- Ein Messwert zaehlt nur, wenn mindestens dieser Anteil der Flotte
+-- gleichzeitig im Zielbereich steht (bestaetigte Vorgabe). Eine Summe aus
+-- wenigen Turbinen beschreibt die Anlage nicht -- sie waere je nach
+-- Augenblick beliebig niedrig.
+M.MIN_FRACTION = 0.8
+
 -- Was hier gemessen wird: der hoechste Gesamtausstoss, den dieser Knoten
 -- jemals nachweislich GLEICHZEITIG geliefert hat. Genau diese Zahl braucht
 -- MASTER, um seinen Leistungsbedarf gegen die Knoten aufzuteilen.
 --
--- Zwei frueher hier verbaute Verfahren waren beide falsch:
+-- Zwei Dinge dabei, die sich leicht verwechseln lassen:
 --
---   1. Hochrechnen. Es wurden ein paar Turbinen gemessen und mit der
---      GESAMTZAHL multipliziert. Das setzt voraus, dass alle zugleich auf
---      Ziel laufen koennten -- wo das nicht gilt, stand eine Zahl im
---      Cache, die die Anlage nie liefern konnte.
---   2. Eine Mindestzahl gleichzeitig stabiler Turbinen (80 % der Flotte)
---      als Bedingung ueberhaupt zu messen. Das macht die Messung von
---      einem Zufall abhaengig -- alle muessen im selben Augenblick im
---      Messfenster stehen -- und liefert bei Nichterfuellen gar nichts,
---      ohne zu sagen warum.
+--   MIN_FRACTION entscheidet, WELCHER Takt als Messwert taugt: mindestens
+--   80 % der Flotte muessen gleichzeitig im Zielbereich stehen. Eine Summe
+--   aus drei zufaellig gerade laufenden Turbinen beschreibt die Anlage
+--   nicht.
 --
--- Beides faellt weg, wenn man einfach das Maximum dessen behaelt, was
--- tatsaechlich geflossen ist: Jeden Takt die Energie aller Turbinen
--- summieren, die gerade am Ziel UND gekuppelt sind, und davon den
--- Hoechstwert merken. Der kann die Anlage nicht ueberschaetzen (er zaehlt
--- nur, was wirklich zugleich floss) und braucht keine Schwelle, keine
--- Staffelung und keinen guenstigen Augenblick. Steigt er eine Weile nicht
--- mehr, ist die Anlage ausgemessen.
+--   Der HOECHSTWERT entscheidet, welcher der tauglichen Messwerte gilt.
+--   Das ist der Unterschied zu frueher: damals wurde der erste taugliche
+--   Takt genommen und dann mit
+--       (Summe Ausstoss / am Ziel) * GESAMTZAHL
+--   auf die ganze Flotte hochgerechnet -- also eine Zahl erfunden fuer
+--   Turbinen, die in dem Moment gar nicht lieferten. Jetzt wird einfach
+--   ueber die Zeit der beste tatsaechlich geflossene Gesamtausstoss
+--   behalten. Laeuft die Flotte irgendwann vollstaendig, steht damit der
+--   echte Vollwert da -- ohne Hochrechnung, und ohne dass genau EIN
+--   Augenblick alles entscheiden muss.
+--
+-- Steigt der Hoechstwert eine Weile nicht mehr, ist die Anlage ausgemessen.
 M.STABLE_MS = 6000  -- so lange darf sich der Hoechstwert nicht mehr verbessern
 
 local function copy(t)
@@ -74,6 +80,10 @@ function M.new_state()
     -- "100 %" wieder "alle Turbinen", was die Anlage nicht kann.
     sustainable_turbines = 0,
     at_target = 0,
+    -- Wieviele im Zielbereich stehen MUESSEN, damit ein Takt als Messwert
+    -- zaehlt. Mitgefuehrt, damit die Diagnose beide Zahlen nennen kann --
+    -- "18 von 25" allein sieht nach Fortschritt aus.
+    required_at_target = 0,
     saturated = 0,
     total_turbines = 0,
     reason = "INIT",
@@ -157,6 +167,25 @@ function M.update(previous, turbines, opts)
 
   local output, at_target, _, saturated = measure(turbines)
   state.at_target, state.saturated = at_target, saturated
+  state.required_at_target = math.max(1, math.ceil(total * M.MIN_FRACTION))
+
+  -- Zu wenige Turbinen im Zielbereich: dieser Takt taugt nicht als
+  -- Messwert. Ein bereits gelernter Hoechstwert bleibt davon unberuehrt --
+  -- er beschreibt ja, was die Anlage schon einmal geliefert hat.
+  if at_target < state.required_at_target then
+    if state.ready then
+      state.reason = "STABLE"
+      return state
+    end
+    if not state.last_improved_ms then state.last_improved_ms = now_ms end
+    if (state.best_output or 0) > 0 and now_ms - state.last_improved_ms >= M.STABLE_MS then
+      state.ready = true
+      state.reason = "MEASURED"
+      return state
+    end
+    state.reason = (saturated > 0) and "FLOW_SATURATED" or "BELOW_FRACTION"
+    return state
+  end
 
   if output > (state.best_output or 0) then
     state.best_output = output
@@ -185,17 +214,11 @@ function M.update(previous, turbines, opts)
     return state
   end
 
-  -- Noch nichts gemessen: sagen, woran es liegt. Volle Foerderung und
-  -- trotzdem unter der Zieldrehzahl heisst, dass keine Reglerreserve mehr
-  -- da ist -- daran aendert Warten nichts, und das soll der Bediener
-  -- sehen, statt auf einen stehenden Zaehler zu starren.
-  if (state.best_output or 0) > 0 then
-    state.reason = "MEASURING"
-  elseif saturated > 0 then
-    state.reason = "FLOW_SATURATED"
-  else
-    state.reason = "SPINNING_UP"
-  end
+  -- Hier unten sind IMMER genug Turbinen im Zielbereich (sonst waere die
+  -- Schwellen-Pruefung oben schon zurueckgekehrt), also liegt auch immer
+  -- ein Messwert vor. Ein eigener "laeuft noch hoch"-Zweig waere an
+  -- dieser Stelle unerreichbar.
+  state.reason = "MEASURING"
   return state
 end
 

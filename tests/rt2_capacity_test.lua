@@ -64,17 +64,56 @@ do
 end
 
 do
-  -- Nur drei von fuenf am Ziel. Frueher war das der Totalausfall: die
-  -- 80-%-Schwelle (4 von 5) wurde nie erreicht, der Knoten lernte nie
-  -- fertig und meldete auch keine Zahl. Jetzt ist "was drei liefern" das
-  -- Ergebnis -- gemessen, nicht geschaetzt.
-  local s = measure_until_ready(plant(5, 3, 100))
-  assert_true(s.ready, 'auch eine nur teilweise laufende Flotte liefert ein Ergebnis')
+  -- Nur drei von fuenf am Ziel -> unter der 80-%-Schwelle (vier noetig).
+  -- So ein Takt taugt nicht als Messwert: drei zufaellig gerade laufende
+  -- Turbinen beschreiben die Anlage nicht.
+  -- Variante A: die fehlenden zwei haben noch Flow-Reserve, laufen also
+  -- schlicht noch hoch.
+  local ramping = {
+    turbine(900, 100, true, 1200), turbine(900, 100, true, 1200), turbine(900, 100, true, 1200),
+    turbine(780, 0, false, 400), turbine(780, 0, false, 400),
+  }
+  local state, now = rt2_capacity.new_state(), 1000
+  for _ = 1, 10 do
+    state = rt2_capacity.update(state, ramping, { now_ms = now })
+    now = now + rt2_capacity.STABLE_MS
+  end
+  assert_true(not state.ready, 'unter der Schwelle wird nichts gelernt')
+  assert_eq(state.reason, 'BELOW_FRACTION')
+  assert_eq(state.at_target, 3)
+  assert_eq(state.required_at_target, 4, 'und die Diagnose nennt, wieviele noetig waeren')
+  assert_eq(state.max_output, 0)
+
+  -- Variante B: die fehlenden zwei fahren vollen Flow und schaffen es
+  -- trotzdem nicht. Dann ist die Saettigung die genauere Auskunft --
+  -- Warten aendert daran nichts.
+  local saturated_state = rt2_capacity.update(rt2_capacity.new_state(), plant(5, 3, 100), { now_ms = 1000 })
+  saturated_state = rt2_capacity.update(saturated_state, plant(5, 3, 100), { now_ms = 2000 })
+  assert_eq(saturated_state.reason, 'FLOW_SATURATED')
+  assert_eq(saturated_state.at_target, 3)
+  assert_eq(saturated_state.required_at_target, 4)
+end
+
+do
+  -- Vier von fuenf reichen (80 %). Gemessen wird dann aber, was WIRKLICH
+  -- floss -- 4 x 100 -- und nicht (400/4) * 5 = 500 wie die alte Formel,
+  -- die fuer die fuenfte, gar nicht liefernde Turbine eine Zahl erfand.
+  local s = measure_until_ready(plant(5, 4, 100))
+  assert_true(s.ready, 'ab der Schwelle taugt der Takt als Messwert')
   assert_eq(s.reason, 'MEASURED')
-  assert_eq(s.sustainable_turbines, 3, 'und die dabei beobachtete Anzahl')
-  -- Entscheidend: 3 x 100, NICHT (300/3) * 5 = 500 wie die alte Formel.
-  assert_eq(s.max_output, 300 * (1 - rt2_capacity.SAFETY_MARGIN),
-    'die Kapazitaet ist die gemessene Summe, keine Hochrechnung auf die Flotte')
+  assert_eq(s.sustainable_turbines, 4)
+  assert_eq(s.max_output, 400 * (1 - rt2_capacity.SAFETY_MARGIN),
+    'die gemessene Summe, keine Hochrechnung auf die Flotte')
+end
+
+do
+  -- Und laeuft die Flotte spaeter vollstaendig, wird der Hoechstwert
+  -- nachgezogen -- dafuer braucht es keine Hochrechnung, nur Geduld.
+  local s = measure_until_ready(plant(5, 4, 100))
+  s = rt2_capacity.update(s, plant(5, 5, 100), { now_ms = 500000 })
+  assert_eq(s.max_output, 500 * (1 - rt2_capacity.SAFETY_MARGIN),
+    'ein neuer, besserer Messwert hebt die Kapazitaet an')
+  assert_eq(s.sustainable_turbines, 5)
 end
 
 do
@@ -88,6 +127,7 @@ do
   end
   assert_true(not state.ready, 'ohne eine einzige Turbine am Ziel gibt es nichts zu messen')
   assert_eq(state.reason, 'FLOW_SATURATED', 'volle Foerderung und trotzdem zu langsam')
+  assert_eq(state.required_at_target, 4)
   assert_eq(state.sustainable_turbines, 0)
 end
 
@@ -100,13 +140,13 @@ do
   local s = rt2_capacity.update(rt2_capacity.new_state(), plant(5, 1, 100), { now_ms = 1000 })
   assert_eq(s.reason, 'TOPOLOGY_CHANGED', 'der erste Takt nimmt die Flottengroesse auf')
 
-  s = rt2_capacity.update(s, plant(5, 1, 100), { now_ms = 2000 })
+  s = rt2_capacity.update(s, plant(5, 4, 100), { now_ms = 2000 })
   assert_true(not s.ready, 'ein einzelner Messwert legt noch nichts fest')
   assert_eq(s.reason, 'MEASURING')
 
   -- Es kommen weitere Turbinen dazu -> der Hoechstwert steigt, die Uhr
   -- beginnt jedes Mal von vorn.
-  s = rt2_capacity.update(s, plant(5, 3, 100), { now_ms = 2000 + rt2_capacity.STABLE_MS - 1 })
+  s = rt2_capacity.update(s, plant(5, 4, 110), { now_ms = 2000 + rt2_capacity.STABLE_MS - 1 })
   assert_true(not s.ready, 'solange es besser wird, ist die Messung nicht fertig')
   s = rt2_capacity.update(s, plant(5, 5, 100), { now_ms = 2000 + rt2_capacity.STABLE_MS + 1 })
   assert_true(not s.ready)
@@ -158,7 +198,7 @@ do
   local ramping = { turbine(780, 0, false, 400) }
   local r = rt2_capacity.update(rt2_capacity.new_state(), ramping, { now_ms = 1000 })
   r = rt2_capacity.update(r, ramping, { now_ms = 2000 })
-  assert_eq(r.reason, 'SPINNING_UP', 'mit Flow-Reserve ist es noch Hochlaufen')
+  assert_eq(r.reason, 'BELOW_FRACTION', 'mit Flow-Reserve fehlt schlicht noch die Drehzahl')
   assert_eq(r.saturated, 0)
 end
 

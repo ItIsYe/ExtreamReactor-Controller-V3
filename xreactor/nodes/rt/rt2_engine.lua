@@ -187,10 +187,13 @@ function M.tick(ctx)
   -- staendig aus dem Messfenster heraus und wieder hinein, das allein ist
   -- keine Meldung wert. Gemeldet wird, wenn der gemessene Wert sich
   -- nennenswert bewegt oder die Lage wechselt.
-  local diag = string.format("%s|%d|%s", tostring(cap.reason),
-    math.floor((cap.max_output or 0) / 1000), tostring(cap.ready))
-  if diag ~= last_logged_capacity_diag then
-    last_logged_capacity_diag = diag
+  -- Bewusst ohne at_target im Schluessel: die Flotte pendelt im Betrieb
+  -- staendig aus dem Messfenster heraus und wieder hinein. Gemeldet wird,
+  -- wenn der gemessene Wert sich nennenswert bewegt oder die Lage wechselt.
+  local waiting = (cap.max_output or 0) <= 0
+  local diag = string.format("%s|%d|%s|%s", tostring(cap.reason),
+    math.floor((cap.max_output or 0) / 1000), tostring(cap.ready), tostring(waiting))
+  do
     local msg
     if cap.reason == "MEASURING" then
       msg = string.format("v2 Einlernen laeuft: bisher %.0f RF/t gemessen (%d von %d Turbinen am Ziel)",
@@ -204,20 +207,37 @@ function M.tick(ctx)
       end
     elseif cap.reason == "FLOW_SATURATED" then
       msg = string.format(
-        "v2 Einlernen: %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM."
+        "v2 Einlernen: %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM"
+        .. " -- im Zielbereich %d von %d, noetig %d."
         .. " Staebe stehen auf %s (Untergrenze %d%% = ~%d%% Leistung).",
         cap.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
+        cap.at_target or 0, cap.total_turbines or 0, cap.required_at_target or 0,
         tostring(result.reactor_decision and result.reactor_decision.rods),
         rt2_reactor.ROD_MIN, 100 - rt2_reactor.ROD_MIN)
-    elseif cap.reason == "SPINNING_UP" then
-      msg = string.format("v2 Einlernen: Turbinen laufen hoch (%d von %d am Ziel)",
-        cap.at_target or 0, cap.total_turbines or 0)
+    elseif cap.reason == "BELOW_FRACTION" and waiting then
+      -- Nur solange ueberhaupt noch nichts gemessen wurde. Ist einmal ein
+      -- gueltiger Messwert da, ist ein kurzes Absacken unter die Schwelle
+      -- das normale Pendeln der Flotte und keine Meldung wert.
+      -- Die Zahl, die vorher gefehlt hat: wieviele NOETIG sind. Ohne sie
+      -- sieht "18 von 25 am Ziel" nach Fortschritt aus, obwohl die
+      -- Messung genau daran scheitert.
+      msg = string.format(
+        "v2 Einlernen wartet: %d von %d Turbinen im Zielbereich (%d RPM +/- %d), noetig sind %d",
+        cap.at_target or 0, cap.total_turbines or 0, rt2_capacity.TARGET_RPM,
+        rt2_capacity.TOLERANCE_RPM, cap.required_at_target or 0)
+    elseif cap.reason == "BELOW_FRACTION" then
+      msg = nil
     elseif cap.reason == "TOPOLOGY_CHANGED" then
       msg = string.format("v2 Turbinenzahl geaendert (%d) -- Anlage wird neu vermessen", cap.total_turbines or 0)
     elseif cap.reason == "NO_TURBINES" then
       msg = "v2 keine Turbine lesbar -- gelernter Wert bleibt erhalten"
     end
-    if msg then
+    -- Den Schluessel NUR fortschreiben, wenn auch gemeldet wurde. Sonst
+    -- merkt sich der Knoten einen unterdrueckten Zwischenstand, und die
+    -- naechste echte Meldung gilt faelschlich als Aenderung -- dadurch
+    -- wiederholte sich dieselbe Zeile im Takt der pendelnden Flotte.
+    if msg and diag ~= last_logged_capacity_diag then
+      last_logged_capacity_diag = diag
       ctx.log("INFO", msg)
       pcall(print, "[RT] " .. msg)
     end

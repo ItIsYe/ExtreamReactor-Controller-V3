@@ -16,9 +16,9 @@ local function assert_true(v, m) if not v then error(m or 'assert_true failed') 
 -- ── 1. Die gemessene Zahl ist die, die der Knoten liefern KANN ───────────
 
 do
-  -- 25 Turbinen, aber der Reaktor traegt nur 6 davon auf Zieldrehzahl.
-  -- Jede tragende Turbine liefert 1000 RF/t.
-  local TOTAL, CARRIES, EACH = 25, 6, 1000
+  -- 25 Turbinen; 20 davon stehen im Zielbereich -- genau die 80 %, ab
+  -- denen ein Takt als Messwert zaehlt. Jede liefert 1000 RF/t.
+  local TOTAL, CARRIES, EACH = 25, 20, 1000
   local fleet = {}
   for i = 1, TOTAL do
     if i <= CARRIES then
@@ -39,16 +39,24 @@ do
   assert_eq(state.sustainable_turbines, CARRIES,
     'gemerkt wird, wieviele Turbinen liefen, als der Hoechstwert floss')
 
-  local really_deliverable = CARRIES * EACH                  -- 6000 RF/t
-  local extrapolated_old   = (CARRIES * EACH / CARRIES) * TOTAL -- 25000 RF/t (alte Formel)
+  local really_measured  = CARRIES * EACH                       -- 20000 RF/t, wirklich geflossen
+  local extrapolated_old = (CARRIES * EACH / CARRIES) * TOTAL    -- 25000 RF/t (alte Formel)
 
-  assert_eq(state.max_output, really_deliverable * (1 - rt2_capacity.SAFETY_MARGIN),
+  assert_eq(state.max_output, really_measured * (1 - rt2_capacity.SAFETY_MARGIN),
     'die Kapazitaet muss der gemessene Ausstoss sein')
-  assert_true(state.max_output < really_deliverable,
+  assert_true(state.max_output < really_measured,
     'mit Sicherheitsreserve darunter -- MASTER soll den Knoten nicht randvoll fahren')
-  assert_true(state.max_output < extrapolated_old / 3,
-    'und weit unter dem, was die alte Hochrechnung geliefert haette ('
-      .. tostring(extrapolated_old) .. ' statt ' .. tostring(really_deliverable) .. ')')
+  assert_true(state.max_output < extrapolated_old,
+    'und unter dem, was die alte Hochrechnung fuer die fuenf gerade NICHT liefernden'
+      .. ' Turbinen dazuerfunden haette (' .. tostring(extrapolated_old) .. ')')
+
+  -- Laufen spaeter alle 25, wird der Hoechstwert nachgezogen -- dann steht
+  -- der echte Vollwert da, gemessen statt geschaetzt.
+  local full = {}
+  for i = 1, TOTAL do full[i] = { rpm = 900, energy = EACH, coil_engaged = true, current_flow = 1200 } end
+  local better = rt2_capacity.update(state, full, { now_ms = 999000 })
+  assert_eq(better.max_output, TOTAL * EACH * (1 - rt2_capacity.SAFETY_MARGIN),
+    'die volle Flotte hebt den gelernten Wert auf ihren echten Gesamtausstoss')
 end
 
 -- ── 2. MASTERs Rechnung gegen eine falsche Kapazitaet ────────────────────
@@ -58,20 +66,23 @@ do
   local function uniform_pct(global_target, capacity)
     return capacity > 0 and math.min(100, global_target / capacity * 100) or 0
   end
-  -- Und so setzt der Knoten die Vorgabe in laufende Turbinen um.
+  -- Und so setzt der Knoten die Vorgabe in laufende Turbinen um. Gezaehlt
+  -- werden die auf VOLLER Zieldrehzahl -- der eine Puffer-Slot, der den
+  -- Restanteil traegt, haengt an der Rundung und sagt ueber die Auslegung
+  -- nichts aus.
   local function running(pct, total, max_active)
     local n = 0
     for slot = 1, total do
       if rt2_turbine.compute_target_rpm('MASTER', {
             turbine_count = total, slot_index = slot,
-            power_percent = pct, max_active = max_active }) > 0 then
+            power_percent = pct, max_active = max_active }) >= rt2_turbine.FULL_TARGET_RPM then
         n = n + 1
       end
     end
     return n
   end
 
-  local honest   = 6000 * (1 - rt2_capacity.SAFETY_MARGIN)  -- gemessen
+  local honest   = 20000 * (1 - rt2_capacity.SAFETY_MARGIN) -- gemessen
   local inflated = 25000                                    -- alte Hochrechnung
 
   -- WICHTIG, und anders als man zuerst vermutet: bei NIEDRIGEM Bedarf
@@ -85,8 +96,8 @@ do
     local low = 6000
     assert_eq(running(uniform_pct(low, inflated), 25, 25), 6,
       'alt: 24 % von 25 Turbinen = 6 laufende')
-    assert_eq(running(uniform_pct(low, honest), 25, 6), 6,
-      'neu: 100 % von 6 tragbaren = ebenfalls 6 laufende')
+    assert_eq(running(uniform_pct(low, honest), 25, 20), 6,
+      'neu: 31 % von 20 gemessenen = ebenfalls 6 laufende')
   end
 
   -- Der Schaden zeigt sich bei HOHEM Bedarf. Dann verspricht die
@@ -103,8 +114,8 @@ do
 
     local new_pct = uniform_pct(high, honest)
     assert_eq(new_pct, 100, 'neu: der Knoten meldet ehrlich seine Grenze -- mehr als 100 % gibt es nicht')
-    assert_eq(running(new_pct, 25, 6), 6,
-      'und faehrt genau seine sechs tragbaren Turbinen, statt sich zu uebernehmen')
+    assert_eq(running(new_pct, 25, 20), 20,
+      'und faehrt genau die 20 Turbinen an, die er nachweislich gleichzeitig getragen hat')
   end
 
   -- Und MASTER kann jetzt ueberhaupt erst erkennen, dass der Bedarf
