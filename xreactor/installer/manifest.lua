@@ -5,15 +5,44 @@ local M = {}
 
 local LOG_ROLES = { LOG = true, LOG_COLLECTOR = true }
 
+-- Dateien, die es im Repository gibt, die aber NICHT auf einen Knoten
+-- gehoeren. Sie stehen weiter im Manifest (und werden damit versioniert
+-- und gehasht) -- sie werden nur nicht installiert.
+--
+-- Die frueheren Eintraege hier (nodes/rt/commands.lua, controllers.lua,
+-- discovery.lua, ramp.lua, safety.lua, state.lua, telemetry.lua,
+-- nodes/energy/adapter_probe.lua) sind entfallen: diese Dateien gibt es
+-- laengst nicht mehr, die Liste war wirkungslos geworden.
+--
+-- Was jetzt drinsteht, sind die Installermodule selbst. Ein Knoten liest
+-- KEINES davon jemals von der Platte:
+--
+--   * Der Bootstrap /installer laedt installer/init.lua und die uebrigen
+--     Module bei JEDEM Lauf frisch von GitHub und fuehrt sie per load()
+--     aus dem Speicher aus (siehe dessen Kopfkommentar).
+--   * auto_update.lua's run_update() laedt denselben Bootstrap herunter,
+--     statt etwas Lokales aufzurufen.
+--   * start.lua's Recovery-Resume ebenso.
+--   * start.lua selbst liest aus /xreactor/installer/ ausschliesslich
+--     auto_update.lua -- das bleibt deshalb installiert.
+--
+-- manifest.lua aus demselben Grund: zur Laufzeit wird die Buildkennung aus
+-- release.lua gelesen (shared/build_info.lua), nie aus dem Manifest, und
+-- der Installer holt sich das Manifest ohnehin frisch von GitHub.
+--
+-- Das spart rund 95 kB auf JEDEM Knoten -- bei der Rolle RT (rund 775 kB)
+-- etwa 12 %. Anlass war eine Installation, die genau an manifest.lua aus
+-- Platzmangel abgebrochen ist.
 local SKIP = {
-  ["nodes/energy/adapter_probe.lua"] = true,
-  ["nodes/rt/commands.lua"]          = true,
-  ["nodes/rt/controllers.lua"]       = true,
-  ["nodes/rt/discovery.lua"]         = true,
-  ["nodes/rt/ramp.lua"]              = true,
-  ["nodes/rt/safety.lua"]            = true,
-  ["nodes/rt/state.lua"]             = true,
-  ["nodes/rt/telemetry.lua"]         = true,
+  ["installer/http.lua"]           = true,
+  ["installer/init.lua"]           = true,
+  ["installer/journal.lua"]        = true,
+  ["installer/manifest.lua"]       = true,
+  ["installer/plan_validator.lua"] = true,
+  ["installer/reactor_naming.lua"] = true,
+  ["installer/stage.lua"]          = true,
+  ["installer/ui.lua"]             = true,
+  ["manifest.lua"]                 = true,
 }
 
 local ROLE_EXTRAS = {
@@ -152,13 +181,18 @@ function M.files_for_role(manifest, role_label, selected_features)
     end
   end
 
+  -- Nur noch, was ein laufender Knoten tatsaechlich von der Platte liest:
+  -- start.lua (Einstieg), release.lua (Buildkennung) und auto_update.lua
+  -- (von start.lua geladen). Alles andere aus installer/ steht in SKIP --
+  -- siehe dort, warum.
   local installer_files = {
-    "installer/http.lua", "installer/manifest.lua", "installer/stage.lua",
-    "installer/ui.lua", "installer/auto_update.lua", "installer/init.lua",
-    "manifest.lua", "release.lua", "start.lua",
+    "installer/auto_update.lua", "release.lua", "start.lua",
   }
   for _, p in ipairs(installer_files) do
-    if not expected[p] then expected[p] = { path = p, always = true } end
+    -- SKIP auch hier beachten: diese Schleife schrieb frueher direkt in
+    -- expected und umging add() -- ein Pfad in SKIP waere trotzdem
+    -- installiert worden.
+    if not SKIP[p] and not expected[p] then expected[p] = { path = p, always = true } end
   end
 
   local extras = ROLE_EXTRAS[role_label:upper()] or {}

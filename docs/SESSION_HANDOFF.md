@@ -1,11 +1,51 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-09-24 | beta | manifest-v732**
+**Stand: 2026-09-24 | beta | manifest-v735**
 
 ## Aktueller Zustand: stabil, alles auf `beta`
 
 Kein offener PR, keine offene Issue. `beta` ist der aktive Entwicklungszweig;
 `main` bleibt unangetastet (stabile Releases, nie direkt bearbeiten).
+
+### Platzbedarf auf dem Knoten
+
+Ein CC-Rechner hat voreingestellt 1 MB. Die Rollen brauchen (mit allen
+Zusatzfunktionen):
+
+| Rolle | Dateien | Installation |
+|---|---|---|
+| RT | 76 | 831 kB |
+| MASTER | 71 | 708 kB |
+| FUEL | 63 | 604 kB |
+| ENERGY | 52 | 461 kB |
+| REPROCESSING | 49 | 435 kB |
+| VALVE | 32 | 295 kB |
+| WATER | 44 | 373 kB |
+| LOG | 16 | 147 kB |
+
+RT liegt damit bei rund 83 % eines voreingestellten Rechners — plus
+`/xreactor_config`, `/xreactor_logs` und `/startup.lua`. **Fuer RT gehoert
+`computer_space_limit` hochgesetzt** (`serverconfig/computercraft-server.toml`).
+
+Zwei Dinge dazu sind seit v734/v735 anders:
+
+- Der Installer prueft den Platz, **bevor** er die alte Installation
+  loescht (`stage.check_capacity`). Reicht er nicht, bricht er ab und der
+  Knoten laeuft unveraendert weiter. Vorher lief er bis zur letzten Datei
+  und liess den Rechner halb installiert liegen.
+- Die Installermodule und `manifest.lua` werden nicht mehr mitinstalliert
+  (95 kB je Knoten). Ein Knoten liest keines davon je von der Platte: der
+  Bootstrap `/installer` laedt seine Module bei jedem Lauf frisch von
+  GitHub, und die Buildkennung kommt aus `release.lua`. Einzige Ausnahme
+  ist `installer/auto_update.lua`, das `start.lua` laedt. Festgehalten in
+  `installer_node_footprint_test.lua`.
+
+Weiteres Sparpotenzial gibt es auf Dateiebene **nicht** — jede noch
+installierte RT-Datei ist vom Einstieg aus erreichbar. Der naechste grosse
+Posten waere der v1-Regelstapel (rund 191 kB: `turbine_control`,
+`reactor_control`, `module_lifecycle`, `state_handlers`, `command_handler`,
+`core/turbine_regulator`, `core/control_rails` …), der erst entfallen kann,
+wenn v2 v1 endgueltig ersetzt.
 
 ### RT-Regel-Engine v2 — laufender Umbau
 
