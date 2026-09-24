@@ -189,7 +189,11 @@ function M.update(previous, turbines, opts)
 
   if output > (state.best_output or 0) then
     state.best_output = output
-    state.max_output = output * (1 - M.SAFETY_MARGIN)
+    -- Ganzzahlig: RF/t mit acht Nachkommastellen ist nicht nur unsinnig
+    -- zu lesen, der Wert ueberlebt auch die Serialisierung in den Cache
+    -- nicht unveraendert -- nach einem Neustart stand eine minimal andere
+    -- Kapazitaet da als vor dem Herunterfahren.
+    state.max_output = math.floor(output * (1 - M.SAFETY_MARGIN))
     -- Wieviele Turbinen liefen, als dieser Hoechstwert floss. Mehr als das
     -- hat diese Anlage nie gleichzeitig getragen -- deshalb deckelt die
     -- Zahl spaeter auch die MASTER-Aufteilung. Traegt die Anlage ihre

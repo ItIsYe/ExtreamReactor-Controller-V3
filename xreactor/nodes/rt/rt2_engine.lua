@@ -230,7 +230,11 @@ function M.tick(ctx)
     elseif cap.reason == "TOPOLOGY_CHANGED" then
       msg = string.format("v2 Turbinenzahl geaendert (%d) -- Anlage wird neu vermessen", cap.total_turbines or 0)
     elseif cap.reason == "NO_TURBINES" then
-      msg = "v2 keine Turbine lesbar -- gelernter Wert bleibt erhalten"
+      -- Beim Kaltstart ist noch gar nichts gelernt -- dann waere "der
+      -- gelernte Wert bleibt erhalten" eine sinnlose Beruhigung.
+      msg = (cap.max_output or 0) > 0
+        and "v2 keine Turbine lesbar -- gelernter Wert bleibt erhalten"
+        or "v2 noch keine Turbine gefunden -- warte auf Discovery"
     end
     -- Den Schluessel NUR fortschreiben, wenn auch gemeldet wurde. Sonst
     -- merkt sich der Knoten einen unterdrueckten Zwischenstand, und die
