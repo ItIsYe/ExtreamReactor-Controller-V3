@@ -87,8 +87,11 @@ function M.turbine_progress(turbine_result)
   return math.floor(pct + 0.5)
 end
 
-function M.reactor_state(reactor_reading, node_state)
-  if node_state == rt2_state.states.SAFE then return M.MODULE.ERROR end
+-- tripped: dieser EINE Reaktor hat ausgeloest. Bei mehreren Reaktoren am
+-- Knoten faehrt nur er ein, waehrend die uebrigen weiterlaufen -- dann
+-- darf auch nur SEIN Modul als gestoert gemeldet werden.
+function M.reactor_state(reactor_reading, node_state, tripped)
+  if node_state == rt2_state.states.SAFE or tripped then return M.MODULE.ERROR end
   if not (reactor_reading and reactor_reading.active == true) then return M.MODULE.OFF end
   if node_state == rt2_state.states.INIT or node_state == rt2_state.states.LEARNING then
     return M.MODULE.STARTING
@@ -106,11 +109,22 @@ end
 -- -- a plain table; applying it to the live registry is the caller's job
 -- (see rt2_engine.apply_projection), which keeps this function testable
 -- without any live registry.
-function M.project(result, modules, reactor_reading)
+-- reactor_readings: entweder EIN Messwert (Ein-Reaktor-Fall, unveraendert)
+-- oder { [name] = { reading = ..., tripped = bool } } fuer mehrere.
+function M.project(result, modules, reactor_readings)
   local node_state = result and result.state or rt2_state.states.INIT
   local by_name = {}
   for _, t in ipairs((result and result.turbines) or {}) do
     if t.name then by_name[t.name] = t end
+  end
+
+  -- Mehrere Reaktoren kommen namentlich herein, ein einzelner unveraendert
+  -- als schlichter Messwert.
+  local by_reactor, single_reading = {}, nil
+  if type(reactor_readings) == "table" and reactor_readings.by_name then
+    by_reactor = reactor_readings.by_name
+  else
+    single_reading = reactor_readings
   end
 
   local projected = {}
@@ -126,7 +140,17 @@ function M.project(result, modules, reactor_reading)
         projected[id] = { state = M.MODULE.OFF, progress = 0 }
       end
     elseif module.type == "reactor" then
-      projected[id] = { state = M.reactor_state(reactor_reading, node_state), progress = 0 }
+      -- Jeder Reaktor wird nach SEINEM eigenen Messwert beurteilt. Vorher
+      -- bekamen bei zwei Reaktoren beide Module den Zustand des ersten --
+      -- ein ausgeloester zweiter waere weiter als STABLE gemeldet worden.
+      local entry = by_reactor[module.name]
+      if entry then
+        projected[id] = {
+          state = M.reactor_state(entry.reading, node_state, entry.tripped), progress = 0,
+        }
+      else
+        projected[id] = { state = M.reactor_state(single_reading, node_state), progress = 0 }
+      end
     end
   end
 

@@ -278,8 +278,17 @@ function M.tick(ctx)
     rt2_tuning.save_units(profiles, { path = tuning_path, write_config = write_config })
   end
 
-  last_projection = rt2_projection.project(result, ctx.modules,
-    reactor_inputs[1] and reactor_inputs[1].reactor or {})
+  -- Jeder Reaktor wird nach seinem eigenen Messwert und seiner eigenen
+  -- Sicherheitslage beurteilt.
+  local by_name = {}
+  for index, ri in ipairs(reactor_inputs) do
+    local decision = result.reactors[index]
+    if ri.name then
+      by_name[ri.name] = { reading = ri.reactor, tripped = ri.safety_tripped == true }
+    end
+    local _ = decision
+  end
+  last_projection = rt2_projection.project(result, ctx.modules, { by_name = by_name })
   for id, projected in pairs(last_projection.modules) do
     local module = ctx.modules and ctx.modules[id]
     if module then
@@ -339,6 +348,21 @@ function M.status_fields()
     capacity_reason = last_result.capacity.reason,
     turbines = turbines,
     control_rod_level = last_result.reactor_decision and last_result.reactor_decision.rods or nil,
+    -- Je Reaktor, weil ein Knoten mehrere haben kann und sie unabhaengig
+    -- regeln -- control_rod_level allein zeigte nur den ersten.
+    reactors = (function()
+      local out = {}
+      for _, decision in ipairs(last_result.reactors or {}) do
+        out[#out + 1] = {
+          id = decision.name,
+          control_rod_level = decision.rods,
+          reason = decision.reason,
+          safety_tripped = decision.safety_tripped == true,
+        }
+      end
+      return out
+    end)(),
+    tripped_reactors = last_result.tripped_reactors or 0,
   }
 end
 

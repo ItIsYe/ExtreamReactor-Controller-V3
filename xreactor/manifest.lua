@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 731,
-  manifest_id = "manifest-v731",
+  manifest_version = 732,
+  manifest_id = "manifest-v732",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "4569e658", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "bd770090", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -145,10 +145,10 @@ return {
     { path = "nodes/rt/rt2_adapter.lua", size_bytes = 4481, hash = "415f1979", required_for={"RT"} },
     { path = "nodes/rt/rt2_capacity.lua", size_bytes = 13066, hash = "b98f7dbc", required_for={"RT"} },
     { path = "nodes/rt/rt2_command_handler.lua", size_bytes = 5199, hash = "d8141714", required_for={"RT"} },
-    { path = "nodes/rt/rt2_engine.lua", size_bytes = 14552, hash = "4cd3e791", required_for={"RT"} },
+    { path = "nodes/rt/rt2_engine.lua", size_bytes = 15428, hash = "0a25652f", required_for={"RT"} },
     { path = "nodes/rt/rt2_master_link.lua", size_bytes = 1555, hash = "aa8589ad", required_for={"RT"} },
     { path = "nodes/rt/rt2_orchestrator.lua", size_bytes = 9638, hash = "d46495ce", required_for={"RT"} },
-    { path = "nodes/rt/rt2_projection.lua", size_bytes = 5893, hash = "e4ef8e47", required_for={"RT"} },
+    { path = "nodes/rt/rt2_projection.lua", size_bytes = 7019, hash = "502b3dad", required_for={"RT"} },
     { path = "nodes/rt/rt2_reactor.lua", size_bytes = 8910, hash = "abfd495b", required_for={"RT"} },
     { path = "nodes/rt/rt2_safety.lua", size_bytes = 3496, hash = "786dee0c", required_for={"RT"} },
     { path = "nodes/rt/rt2_state.lua", size_bytes = 5990, hash = "b17e8aa4", required_for={"RT"} },
