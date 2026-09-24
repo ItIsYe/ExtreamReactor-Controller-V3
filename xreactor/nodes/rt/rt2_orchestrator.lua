@@ -208,6 +208,11 @@ function M.new(opts)
     local first = reactor_decisions[1]
     return {
       state = state,
+      -- Die tatsaechlich wirksame Leistungsvorgabe. Ohne sie kann keine
+      -- Anzeige sagen, WARUM eine Turbine gerade steht -- die RT-eigene
+      -- Oberflaeche zeigte stattdessen v1's nie gefuellten Sollwert (also
+      -- dauerhaft 0 %), waehrend der Knoten in Wahrheit auf 100 % regelte.
+      master_percent = input.master_percent or self.master_percent,
       reactors = reactor_decisions,
       -- Ein-Reaktor-Sicht, unveraendert fuer alle bestehenden Leser.
       reactor_decision = first,

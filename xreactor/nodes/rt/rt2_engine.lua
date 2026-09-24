@@ -346,6 +346,13 @@ function M.status_fields()
     -- der Integrationstest lesen sie.
     capacity_at_target = last_result.capacity.at_target,
     capacity_reason = last_result.capacity.reason,
+    -- Die Leistungsvorgabe, gegen die dieser Takt geregelt hat, und was
+    -- sie in RF/t bedeutet. Beides braucht die RT-eigene Oberflaeche:
+    -- sie las bisher v1's ctx.targets, das unter v2 niemand mehr fuellt,
+    -- und zeigte deshalb dauerhaft "SOLL 0.0 / MASTER % 0.0".
+    master_percent = last_result.master_percent,
+    power_target = (last_result.capacity.ready and last_result.capacity.max_output or 0)
+      * ((tonumber(last_result.master_percent) or 0) / 100),
     turbines = turbines,
     control_rod_level = last_result.reactor_decision and last_result.reactor_decision.rods or nil,
     -- Je Reaktor, weil ein Knoten mehrere haben kann und sie unabhaengig

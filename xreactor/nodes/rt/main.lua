@@ -678,7 +678,7 @@ end
 local function update_monitor()
   local mon = devices.monitor
   if not mon then return end
-  last_status_snapshot = monitor_ui.update(mon, {
+  local monitor_ctx = {
     config = config, devices = devices, registry = registry,
     comms = comms, constants = constants,
     master_alerts = master_alerts,
@@ -710,7 +710,45 @@ local function update_monitor()
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
     manifest_id          = RT_BUILD_INFO.manifest_id,
     release_id           = RT_BUILD_INFO.release_id,
-  })
+  }
+  if engine_v2 then
+    -- Dieselbe Uebersetzung wie in build_status_payload() -- sie fehlte
+    -- hier, und deshalb zeigte der RT-eigene Schirm durchgehend v1's
+    -- Daten: "KAPAZITAET WIRD GELERNT", CAPACITY 0.0, SOLL 0.0,
+    -- MASTER % 0.0 -- auch dann noch, als im Terminal daneben schon
+    -- "v2 Einlernen FERTIG: ... RF/t aus 25 Turbinen" stand (Live-Test
+    -- node-101). Gemeldet wurde das zu Recht als Widerspruch: es war
+    -- einer, nur zwischen zwei Anzeigen derselben Node, nicht in der
+    -- Regelung.
+    local v2 = rt2_engine.status_fields()
+    monitor_ctx.capacity_override = {
+      ready         = v2.capacity_ready == true,
+      max_output    = v2.capacity_max or 0,
+      at_target     = v2.capacity_at_target or 0,
+      total_turbines = v2.capacity_total_turbines or 0,
+      reason        = v2.capacity_reason or v2.capacity_source or "UNKNOWN",
+    }
+    monitor_ctx.node_state    = v2.node_state
+    monitor_ctx.current_state = v2.mode
+    -- ctx.targets fuellt unter v2 niemand mehr (handle_command_v2 ersetzt
+    -- v1's command_handler); die Vorgabe lebt im Orchestrator.
+    local v2_targets = {}
+    for k, val in pairs(ctx and ctx.targets or {}) do v2_targets[k] = val end
+    v2_targets.power_percent = v2.master_percent or v2_targets.power_percent
+    v2_targets.power         = v2.power_target or v2_targets.power
+    -- Zieldrehzahl fuer die Anzeige: die hoechste, die dieser Takt
+    -- irgendeiner Turbine gesetzt hat (Puffer-/Aus-Slots liegen darunter).
+    local max_target_rpm = 0
+    for _, t in ipairs(v2.turbines or {}) do
+      local r = tonumber(t.target_rpm) or 0
+      if r > max_target_rpm then max_target_rpm = r end
+    end
+    if max_target_rpm > 0 then v2_targets.rpm = max_target_rpm end
+    monitor_ctx.targets       = v2_targets
+    monitor_ctx.target_power   = v2_targets.power
+    monitor_ctx.target_percent = v2_targets.power_percent
+  end
+  last_status_snapshot = monitor_ui.update(mon, monitor_ctx)
 end
 
 -- ── Control-Tick ──────────────────────────────────────────────────────────────

@@ -271,6 +271,20 @@ local fields = rt2_engine.status_fields()
 assert_true(fields.node_state == 'RUNNING' or fields.node_state == 'AUTONOM',
   'an operational v2 node must project to RUNNING/AUTONOM, got ' .. tostring(fields.node_state))
 
+-- Live-Test node-101: der RT-eigene Schirm zeigte "SOLL 0.0 / MASTER % 0.0",
+-- weil er v1's ctx.targets las -- das unter v2 niemand mehr fuellt. Die
+-- Vorgabe lebt im Orchestrator, also muss status_fields() sie auch nennen.
+assert_true(type(fields.master_percent) == 'number',
+  'status_fields() muss die wirksame Leistungsvorgabe nennen, sonst kann keine Anzeige'
+    .. ' sagen warum eine Turbine steht -- got ' .. tostring(fields.master_percent))
+assert_true(fields.master_percent > 0,
+  'ohne MASTER regelt der Knoten auf volle Vorgabe, nicht auf 0 %')
+assert_true(type(fields.power_target) == 'number' and fields.power_target > 0,
+  'und was diese Vorgabe in RF/t bedeutet -- got ' .. tostring(fields.power_target))
+assert_eq(math.floor(fields.power_target + 0.5),
+  math.floor(fields.capacity_max * fields.master_percent / 100 + 0.5),
+  'der angezeigte Sollwert muss genau der Anteil der gemessenen Kapazitaet sein')
+
 -- ── Safety trip ──────────────────────────────────────────────────────────
 --
 -- Regression: rt2_engine.tick() never passed safety_tripped into the

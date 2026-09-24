@@ -160,7 +160,13 @@ function M.update_status_snapshot(ctx)
   local reactors, min_temp, max_temp, avg_temp = M.build_reactor_status(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
   local turbines, actual_output, min_rpm, max_rpm, avg_rpm = M.build_turbine_status(
     ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
-  local capacity = ctx.capacity_learning or {}
+  -- ctx.capacity_override: der Engine, die tatsaechlich regelt, ihr
+  -- eigener Lernzustand. Unter engine=v2 fuellt niemand mehr
+  -- ctx.capacity_learning (das ist v1's Zustand), also stand auf dem
+  -- RT-Schirm "KAPAZITAET WIRD GELERNT / CAPACITY 0.0", waehrend im
+  -- Terminal daneben "Einlernen FERTIG: ... RF/t" lief. Die Oberflaeche
+  -- bleibt engine-agnostisch: sie nimmt, was der Aufrufer ihr gibt.
+  local capacity = ctx.capacity_override or ctx.capacity_learning or {}
   ctx.last_status_snapshot = {
     ts = os.epoch("utc"),
     node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id,
@@ -248,7 +254,10 @@ function M.update(monitor, ctx)
     local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = node_id,
     current_state = ctx.current_state,
-    node_state = ctx.node_state_machine and ctx.node_state_machine:state() or ctx.current_state,
+    -- ctx.node_state: derselbe Grund wie bei capacity_override -- unter v2
+    -- wird node_state_machine bewusst nie weitergeschaltet (siehe
+    -- rt2_projection.lua), es bliebe ewig auf seinem Bootwert stehen.
+    node_state = ctx.node_state or (ctx.node_state_machine and ctx.node_state_machine:state()) or ctx.current_state,
     configured_reactors = ctx.configured_reactors,
     configured_turbines = ctx.configured_turbines,
     target_power = targets.power,

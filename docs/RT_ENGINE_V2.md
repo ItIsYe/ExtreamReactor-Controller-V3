@@ -132,6 +132,38 @@ Ergebnis wird persistiert.
 | `rt2_capacity_cache.lua` | gemessene Knotenleistung (flach — eine Flotte) |
 | `rt2_reactor_tuning.lua` | Anlagenprofil je Reaktor |
 
+## Anzeige
+
+v2 fuehrt seinen Zustand nur in sich selbst. Alles, was ihn anzeigt,
+liest v1-Feldnamen — also muss `main.lua` an **jeder** Stelle
+uebersetzen, an der eine Anzeige gefuellt wird:
+
+| Weg | Quelle | Uebersetzung in |
+|---|---|---|
+| Statuspayload an MASTER | `rt2_engine.status_fields()` | `build_status_payload()` |
+| RT-eigener Monitor | `rt2_engine.status_fields()` | `update_monitor()` |
+
+Die zweite Zeile fehlte und ist im ersten Livetest aufgefallen: im
+Terminal lief `v2 Einlernen FERTIG: … RF/t aus 25 Turbinen`, waehrend
+derselbe Knoten auf seinem Monitor gleichzeitig `! LEARNING`,
+`> KAPAZITAET WIRD GELERNT`, `CAPACITY 0.0`, `SOLL 0.0` und
+`MASTER % 0.0` zeigte. Beides stimmte fuer sich — die Regelung lief auf
+v2, die Anzeige las v1:
+
+- `ctx.capacity_learning` ist v1s Lernzustand; unter `engine = "v2"`
+  fuellt ihn niemand mehr.
+- `ctx.node_state_machine` wird unter v2 bewusst nie weitergeschaltet
+  (siehe unten) und bleibt auf seinem Bootwert.
+- `ctx.targets` fuellte v1s `command_handler`, den `handle_command_v2`
+  ersetzt — die Leistungsvorgabe lebt jetzt im Orchestrator
+  (`master_percent`).
+
+`monitor_ui.lua` bleibt engine-agnostisch: es nimmt mit
+`ctx.capacity_override` / `ctx.node_state` / `ctx.targets` entgegen, was
+der Aufrufer ihm gibt, und faellt ohne diese Vorgaben auf v1 zurueck.
+Abgesichert in `rt2_monitor_v2_display_test.lua` — inklusive der Pruefung,
+dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
+
 ## Was v2 bewusst NICHT tut
 
 - **Kein gestaffelter Start.** Alle Turbinen fahren gleichzeitig auf Ziel.
@@ -154,11 +186,21 @@ Ergebnis wird persistiert.
 | `rt2_capacity_to_master_test.lua` | Kette gemessener Wert → Statusfelder → MASTER-Aufteilung |
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
 | `rt2_tuning_test.lua` | Selbstvermessung gegen eine bekannte Anlage |
+| `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt v2s Zustand, nicht v1s leeren |
 | plus Modultests je `rt2_*`-Datei | |
 
 ## Offen
 
-- **Livetest steht aus.** Alle Aussagen oben stammen aus Tests gegen ein
-  vereinfachtes Anlagenmodell. Das Regelverhalten echter Turbinen
-  (Traegheit, Streuung, Pendeln um die 900) bildet es nur grob ab.
+- **Livetest laeuft.** Erster Durchlauf auf node-101 (25 Turbinen,
+  1 Reaktor): Einlernen ging durch und meldete einen gemessenen Wert.
+  Befund daraus war die fehlende Uebersetzung fuer den RT-eigenen
+  Monitor (siehe „Anzeige"), nicht die Regelung selbst.
+- **Groessenordnung des gemessenen Werts pruefen.** Der Livetest mass
+  834 054 315 RF/t aus 25 Turbinen, also rund 33 M RF/t je Turbine.
+  Die Zahl ist in sich stimmig (dieselbe Quelle
+  `getEnergyProducedLastTick` speist auch die IST-Anzeige, und die lag
+  mit 631 M darunter — ein reiner Zaehlerstand koennte das nicht), aber
+  ungeprueft gegen das, was die ENERGY-Node am Induktionsmatrix-Eingang
+  sieht. Stimmt die Skala nicht, stimmt auch MASTERs ganze Aufteilung
+  nicht, denn sie rechnet gegen genau diesen Wert.
 - Der Umstieg von v1 auf v2 als Standard ist **nicht** beschlossen.
