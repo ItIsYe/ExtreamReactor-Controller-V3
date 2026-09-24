@@ -1,12 +1,13 @@
 # XReactor-Dokumentationsindex
 
-**Stand: 2026-09-08**
+**Stand: 2026-09-24**
 
 ## Zuerst lesen
 
 1. [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) — aktueller Status, offene Bugs, Rollback-Punkt
 2. [`../README.md`](../README.md) — Architektur, Rollen, Bedienung
-3. [`CI_MAINTENANCE.md`](CI_MAINTENANCE.md) — CI-Bugs und Fixes
+3. [`RT_ENGINE_V2.md`](RT_ENGINE_V2.md) — die neue RT-Regel-Engine (opt-in je Knoten)
+4. [`CI_MAINTENANCE.md`](CI_MAINTENANCE.md) — CI-Bugs und Fixes
 
 ## Historische Referenz (Implementierungs-Vorgaben)
 

@@ -1,11 +1,39 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-09-08 | beta-v633 | manifest-v633**
+**Stand: 2026-09-24 | beta | manifest-v732**
 
-## Aktueller Zustand: stabil, alles gemergt
+## Aktueller Zustand: stabil, alles auf `beta`
 
 Kein offener PR, keine offene Issue. `beta` ist der aktive Entwicklungszweig;
 `main` bleibt unangetastet (stabile Releases, nie direkt bearbeiten).
+
+### RT-Regel-Engine v2 — laufender Umbau
+
+Der RT-Knoten hat seit 2026-09 eine zweite Regel-Engine (`rt2_*.lua`),
+aktivierbar **pro Knoten** mit `engine = "v2"` in `/xreactor_config/rt.lua`.
+Ohne den Eintrag laeuft alles unveraendert auf v1. Vollstaendige
+Beschreibung: [`RT_ENGINE_V2.md`](RT_ENGINE_V2.md).
+
+Stand:
+
+- Ein einziger Zustandsautomat statt zweier paralleler Systeme; der
+  Betriebsmodus wird nicht mehr befohlen, sondern ergibt sich aus der
+  MASTER-Verbindung.
+- Der Reaktor regelt in JEDEM Zustand nur aus seinem eigenen Dampftank.
+- Mehrere Reaktoren an einem Knoten werden unterstuetzt: eine
+  Turbinenflotte an einem gemeinsamen Dampfnetz, jeder Reaktor regelt
+  unabhaengig aus SEINEM Tank. Keine Zuordnung Turbine -> Reaktor noetig.
+  Turbinenzahl nicht begrenzt (nachgemessen bis 100).
+- Ein Sicherheitsausloeser faehrt nur seinen eigenen Reaktor ein; erst
+  wenn keiner mehr regelbar ist, geht der Knoten auf SAFE.
+- Einlernen misst den hoechsten tatsaechlich geflossenen Gesamtausstoss
+  (80 % der Flotte muessen dabei gleichzeitig im Zielbereich sein) --
+  nicht mehr hochgerechnet.
+- Jeder Reaktor vermisst seine eigene Anlage einmalig selbst und leitet
+  daraus Stellintervall und Schrittweite ab.
+
+**Offen: der Livetest.** Alle Aussagen stammen aus Tests gegen ein
+vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
 
 ## Architektur-Grundlagen (weiterhin gültig)
 
