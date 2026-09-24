@@ -64,7 +64,11 @@ end
 -- setActive(true) once the turbine is confirmed on.
 function M.apply_turbine(turbine_adapter, name, log_prefix, turbine_result)
   local result = {}
-  if turbine_result.flow_decision then
+  -- unchanged: die Vorgabe steht bereits genau so an der Turbine (vom
+  -- Orchestrator gegen den zurueckgelesenen Wert geprueft). Seit der
+  -- Regler eine Ruhezone hat, ist das der Normalfall, und ein Schreiben
+  -- je Turbine und Takt waere reine Last ohne Wirkung.
+  if turbine_result.flow_decision and turbine_result.flow_decision.unchanged ~= true then
     result.flow_ok, result.flow_err = turbine_adapter.set_flow(name, turbine_result.flow_decision.flow, log_prefix)
   end
   if turbine_result.coil_decision then
