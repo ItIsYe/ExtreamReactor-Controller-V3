@@ -1,12 +1,15 @@
--- RT rewrite, step 6: der Orchestrator -- jetzt Koordinator ueber
--- EINHEITEN (je ein Reaktor mit seinen Turbinen, siehe rt2_unit.lua).
+-- RT rewrite, step 6: der Orchestrator -- ein Takt fuer den ganzen Knoten.
 --
--- Was hier bleibt, ist genau das, wovon es pro KNOTEN nur eines gibt:
--- der Betriebszustand, die MASTER-Verbindung, der Hand-Riegel und die
--- Leistungsvorgabe. Alles, was zu einem Reaktor und seinen Turbinen
--- gehoert -- Tankregelung, Einlernen, Selbstvermessung, Sicherheitslage,
--- Slot-Rotation -- liegt in der Einheit, weil zwei Reaktoren mit eigenen
--- Turbinen sonst gegeneinander regeln wuerden.
+-- Der Knoten fasst seine Anlage als EIN System auf: eine Turbinenflotte
+-- an einem gemeinsamen Dampfnetz, eine gelernte Kapazitaet, eine
+-- Leistungsvorgabe. Mehrere Reaktoren speisen dasselbe Netz und regeln
+-- sich unabhaengig voneinander aus ihrem JEWEILIGEN Dampftank (siehe
+-- rt2_unit.lua) -- sie stimmen sich nicht ab und brauchen es auch nicht:
+-- zieht die Flotte mehr, fallen alle Taenke, alle fahren die Staebe aus.
+--
+-- Hier liegt deshalb alles, wovon es pro Knoten eines gibt: der
+-- Betriebszustand, die MASTER-Verbindung, der Hand-Riegel, die
+-- Leistungsvorgabe, das Einlernen und die Slot-Rotation der Flotte.
 --
 -- Hardware-frei wie bisher: M.tick() nimmt schlichte Messwert-Tabellen
 -- und gibt schlichte Entscheidungs-Tabellen zurueck.
@@ -14,12 +17,13 @@
 local rt2_state = require('nodes.rt.rt2_state')
 local rt2_capacity = require('nodes.rt.rt2_capacity')
 local rt2_master_link = require('nodes.rt.rt2_master_link')
+local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_command_handler = require('nodes.rt.rt2_command_handler')
 local rt2_unit = require('nodes.rt.rt2_unit')
 
 local M = {}
 
-M.ROTATE_INTERVAL_MS = rt2_unit.ROTATE_INTERVAL_MS
+M.ROTATE_INTERVAL_MS = 300000 -- 5 min: wie oft der AUS/PUFFER-Platz wandert
 
 function M.new(opts)
   opts = opts or {}
@@ -28,26 +32,21 @@ function M.new(opts)
     master_link = rt2_master_link.new({ timeout_ms = opts.master_timeout_ms }),
     manual_safety_trip = false,
     master_percent = 100,
-    units = {},
-    units_by_name = {},
+    -- EINE Kapazitaet fuer den ganzen Knoten: die Turbinen haengen alle am
+    -- selben Dampfnetz, also ist ihre Summe die Leistung dieses Knotens --
+    -- egal, wie viele Reaktoren sie speisen.
+    capacity = opts.initial_capacity or rt2_capacity.new_state(),
+    rotation_offset = 0,
+    last_rotate_ms = 0,
+    reactors = {},
   }
 
-  -- opts.units: { { name = <Reaktorname>, initial_capacity = ..., tuning_profile = ... }, ... }
-  -- Fehlt die Liste, wird die erste Einheit beim ersten Takt angelegt --
-  -- so bleibt der Ein-Reaktor-Fall ohne Konfiguration lauffaehig.
-  for _, spec in ipairs(opts.units or {}) do
-    local unit = rt2_unit.new(spec)
-    self.units[#self.units + 1] = unit
-    if spec.name then self.units_by_name[spec.name] = unit end
+  -- opts.reactors: { { name = <Peripheriename>, tuning_profile = ... }, ... }
+  for _, spec in ipairs(opts.reactors or {}) do
+    self.reactors[#self.reactors + 1] = rt2_unit.new(spec)
   end
-  if #self.units == 0 then
-    local unit = rt2_unit.new({
-      name = opts.unit_name,
-      initial_capacity = opts.initial_capacity,
-      tuning_profile = opts.tuning_profile,
-    })
-    self.units[1] = unit
-    if opts.unit_name then self.units_by_name[opts.unit_name] = unit end
+  if #self.reactors == 0 then
+    self.reactors[1] = rt2_unit.new({ name = opts.reactor_name, tuning_profile = opts.tuning_profile })
   end
 
   function self.current_state()
@@ -107,118 +106,117 @@ function M.new(opts)
     return ((turbine_index - 1 + self.rotation_offset) % turbine_count) + 1
   end
 
+  local function rotated_slot(index, count, now_ms, state)
+    if count <= 1 then return index end
+    -- Die Rotation existiert nur dafuer, dass unter MASTER nicht immer
+    -- dieselben Turbinen im AUS-Platz sitzen. In jedem anderen Zustand
+    -- verdreht sie nur die Zuordnung.
+    if state ~= rt2_state.states.MASTER then return index end
+    if (now_ms or 0) - self.last_rotate_ms >= M.ROTATE_INTERVAL_MS then
+      self.rotation_offset = (self.rotation_offset + 1) % count
+      self.last_rotate_ms = now_ms or self.last_rotate_ms
+    end
+    return ((index - 1 + self.rotation_offset) % count) + 1
+  end
+
   -- input:
   --   now_ms          -- aktuelle Epochenzeit in ms
-  --   hardware_ready  -- Discovery hat je Einheit Reaktor UND Turbine(n)
+  --   hardware_ready  -- Discovery hat Reaktor(en) UND Turbine(n)
   --   master_percent  -- Leistungsvorgabe (nur im Zustand MASTER genutzt)
-  --   units           -- je Einheit { name, safety_tripped, reactor, turbines }
+  --   turbines        -- die GANZE Flotte: { { name, rpm, energy, coil_engaged, current_flow, active }, ... }
+  --   reactors        -- je Reaktor { name, safety_tripped, reactor = { fill_ratio, current_rods, active } }
   --
-  -- Der Ein-Reaktor-Aufruf von frueher (input.reactor/input.turbines/
-  -- input.safety_tripped ohne units) wird weiter angenommen und auf eine
-  -- einzelne Einheit abgebildet.
+  -- Der Ein-Reaktor-Aufruf von frueher (input.reactor/input.safety_tripped
+  -- ohne reactors) wird weiter angenommen.
   function self.tick(input)
     input = input or {}
     local now_ms = input.now_ms
 
-    local unit_inputs = input.units
-    if not unit_inputs then
-      unit_inputs = { {
-        reactor = input.reactor,
-        turbines = input.turbines,
-        safety_tripped = input.safety_tripped,
-      } }
+    local reactor_inputs = input.reactors
+    if not reactor_inputs then
+      reactor_inputs = { { reactor = input.reactor, safety_tripped = input.safety_tripped } }
     end
-
-    -- Eine Ausloesung an EINER Einheit faehrt nur deren Reaktor ein. Der
-    -- Knoten als Ganzes geht erst auf SAFE, wenn keine Einheit mehr
-    -- regelbar ist -- oder wenn von Hand abgeschaltet wurde (bestaetigte
-    -- Vorgabe: die beiden Reaktoren sind unabhaengig gesteuert).
-    local tripped_units = 0
-    for index in ipairs(unit_inputs) do
-      if unit_inputs[index].safety_tripped then tripped_units = tripped_units + 1 end
-    end
-    local all_tripped = #unit_inputs > 0 and tripped_units == #unit_inputs
 
     -- Erst messen, DANN den Zustand entscheiden -- mit den Messwerten
     -- desselben Takts. Andersherum verliesse eine fertig eingelernte
-    -- Anlage die Lernphase einen Takt zu spaet.
-    local capacity_ready_units = 0
-    for index, unit in ipairs(self.units) do
-      local ui = unit_inputs[index] or {}
-      unit.observe({
-        now_ms = now_ms, safety_tripped = ui.safety_tripped,
-        reactor = ui.reactor, turbines = ui.turbines,
-      })
-      if unit.capacity.ready then capacity_ready_units = capacity_ready_units + 1 end
+    -- Flotte die Lernphase einen Takt zu spaet.
+    local tripped = 0
+    for index, unit in ipairs(self.reactors) do
+      local ri = reactor_inputs[index] or {}
+      unit.observe({ now_ms = now_ms, safety_tripped = ri.safety_tripped, reactor = ri.reactor })
+      if unit.safety_tripped then tripped = tripped + 1 end
+    end
+
+    -- Ein einzelner ausgeloester Reaktor faehrt nur SEINE Staebe ein; die
+    -- Flotte laeuft auf dem Dampf der uebrigen weiter (bestaetigte
+    -- Vorgabe). Erst wenn kein Reaktor mehr regelbar ist, geht der Knoten
+    -- als Ganzes auf SAFE und stellt auch die Turbinen ab.
+    local all_tripped = #self.reactors > 0 and tripped == #self.reactors
+
+    local current_state = self.machine.current()
+    if current_state ~= rt2_state.states.SAFE then
+      self.capacity = rt2_capacity.update(self.capacity, input.turbines, { now_ms = now_ms })
     end
 
     local state = self.machine.tick({
       hardware_ready   = input.hardware_ready,
-      capacity_ready   = capacity_ready_units >= #self.units and #self.units > 0,
+      capacity_ready   = self.capacity.ready,
       master_connected = self.master_link.is_connected(now_ms),
       safety_tripped   = all_tripped or self.manual_safety_trip,
     })
 
-    local unit_results, turbines = {}, {}
-    local total_max_output, total_at_target, total_turbines, total_saturated = 0, 0, 0, 0
-    local all_ready, any_ready = #self.units > 0, false
-    local sustainable_total = 0
-
-    for index, unit in ipairs(self.units) do
-      local ui = unit_inputs[index] or {}
-      local result = unit.decide({
-        now_ms = now_ms,
-        node_state = state,
-        reactor = ui.reactor,
-        turbines = ui.turbines,
-        -- Die Vorgabe gilt fuer JEDE Einheit gleich: MASTER fordert einen
-        -- Anteil der Knotenleistung, und jede Einheit steuert ihren Anteil
-        -- ihrer eigenen Kapazitaet bei. Damit bleibt die Summe richtig,
-        -- ohne dass eine Einheit die andere mitziehen muss.
-        master_percent = input.master_percent or self.master_percent,
+    local reactor_decisions = {}
+    for index, unit in ipairs(self.reactors) do
+      local ri = reactor_inputs[index] or {}
+      reactor_decisions[#reactor_decisions + 1] = unit.decide({
+        now_ms = now_ms, node_state = state, reactor = ri.reactor,
       })
-      unit_results[#unit_results + 1] = result
-      for _, t in ipairs(result.turbines) do turbines[#turbines + 1] = t end
-
-      local cap = result.capacity
-      total_max_output = total_max_output + (cap.max_output or 0)
-      total_at_target = total_at_target + (cap.at_target or 0)
-      total_turbines = total_turbines + (cap.total_turbines or 0)
-      total_saturated = total_saturated + (cap.saturated or 0)
-      sustainable_total = sustainable_total + (cap.sustainable_turbines or 0)
-      if cap.ready then any_ready = true else all_ready = false end
     end
 
-    -- Was MASTER liest, ist die SUMME ueber die Einheiten: er teilt seinen
-    -- Bedarf gegen die Leistung des ganzen Knotens auf, nicht gegen die
-    -- eines einzelnen Reaktors.
-    local capacity = {
-      ready = all_ready,
-      max_output = total_max_output,
-      at_target = total_at_target,
-      total_turbines = total_turbines,
-      saturated = total_saturated,
-      sustainable_turbines = sustainable_total,
-      required_at_target = nil,
-      reason = all_ready and "MEASURED" or (any_ready and "PARTIAL" or "MEASURING"),
-    }
-    if #self.units == 1 then
-      -- Ein-Reaktor-Knoten: unveraendert die Kapazitaet der Einheit selbst
-      -- durchreichen, damit Diagnose und Gruende erhalten bleiben.
-      capacity = unit_results[1].capacity
+    -- Die Flotte: EINE Entscheidung je Turbine, aus dem Zustand des
+    -- Knotens. Ein ausgeloester Einzelreaktor aendert daran nichts.
+    local count = #(input.turbines or {})
+    local max_active
+    if state ~= rt2_state.states.LEARNING
+        and self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
+      max_active = self.capacity.sustainable_turbines
     end
 
-    local first = unit_results[1] or {}
+    local turbine_results = {}
+    for index, t in ipairs(input.turbines or {}) do
+      local target_rpm = rt2_turbine.compute_target_rpm(state, {
+        turbine_count = count,
+        slot_index = rotated_slot(index, count, now_ms, state),
+        power_percent = input.master_percent or self.master_percent,
+        max_active = max_active,
+      })
+      turbine_results[#turbine_results + 1] = {
+        name = t.name,
+        target_rpm = target_rpm,
+        flow_decision = rt2_turbine.compute_flow_decision({
+          rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
+        }),
+        coil_decision = rt2_turbine.compute_coil_decision({
+          rpm = t.rpm, target_rpm = target_rpm, currently_engaged = t.coil_engaged,
+        }),
+        activate = rt2_turbine.compute_active_decision(t.active),
+        rpm = t.rpm,
+        coil_engaged = t.coil_engaged == true,
+      }
+    end
+
+    local first = reactor_decisions[1]
     return {
       state = state,
-      units = unit_results,
+      reactors = reactor_decisions,
       -- Ein-Reaktor-Sicht, unveraendert fuer alle bestehenden Leser.
-      reactor_decision = first.reactor_decision,
-      turbines = turbines,
-      capacity = capacity,
-      max_active = first.max_active,
-      tuning = first.tuning,
-      tuning_samples = first.tuning_samples,
+      reactor_decision = first,
+      turbines = turbine_results,
+      capacity = self.capacity,
+      max_active = max_active,
+      tripped_reactors = tripped,
+      tuning = self.reactors[1] and self.reactors[1].tuning_profile or nil,
+      tuning_samples = self.reactors[1] and self.reactors[1].tuning_state.n or 0,
     }
   end
 

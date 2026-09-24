@@ -1107,22 +1107,13 @@ local function init()
     #devices.reactors, #devices.turbines))
 
   -- v2-Engine-Auswahl (siehe config.lua's "engine"-Feld): nur mit genau
-  -- Mehrere Reaktoren sind erlaubt, brauchen aber eine ZUORDNUNG: welche
-  -- Turbine haengt an welchem Reaktor. Aus den Peripherienamen laesst sich
-  -- die Dampfverrohrung nicht ableiten, und ohne sie regelte ein Reaktor
-  -- seine Staebe gegen einen Tank, dessen Turbinen einem anderen gehoeren.
-  -- Deshalb: config.units verlangen, statt zu raten -- sonst v1.
+  -- Mehrere Reaktoren an einem Knoten sind unterstuetzt: sie speisen
+  -- dasselbe Dampfnetz, und jeder regelt seine Staebe unabhaengig aus
+  -- SEINEM eigenen Dampftank (rt2_unit.lua). Sie stimmen sich nicht ab
+  -- und brauchen es auch nicht -- zieht die Flotte mehr, fallen alle
+  -- Taenke, alle fahren die Staebe aus.
   if config.engine == "v2" then
-    local unit_count = type(config.units) == "table" and #config.units or 0
-    if #devices.reactors > 1 and unit_count < #devices.reactors then
-      log("WARN", string.format(
-        "engine=v2 with %d reactors needs config.units (reactor -> turbines); found %d -- falling back to v1",
-        #devices.reactors, unit_count))
-      pcall(print, string.format(
-        "[RT] engine=v2 abgelehnt: %d Reaktoren, aber keine Zuordnung in config.units"
-        .. " -- ohne sie regelte ein Reaktor gegen fremde Turbinen. Laeuft auf v1.",
-        #devices.reactors))
-    else
+    do
       engine_v2 = true
       rt2_engine.init({ turbine_count = #devices.turbines, config = config, log = log })
       log("INFO", string.format("engine=v2 active (%d Reaktor(en), %d Turbinen)",

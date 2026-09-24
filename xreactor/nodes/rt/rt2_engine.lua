@@ -43,33 +43,15 @@ local last_logged_capacity_diag
 local last_logged_safety_reason
 local last_projection
 local tuning_path
--- Je Einheit (Schluessel: Reaktorname): Sicherheitszustand, zuletzt
--- gesicherte Kapazitaet, ob das Anlagenprofil schon geschrieben wurde.
-local unit_state = {}
--- Die Einheiten dieses Knotens: { { name = <Reaktor>, turbines = {...} }, ... }
-local units = {}
+-- Je Reaktor (Schluessel: Name): Sicherheitszustand, letzte gemeldete
+-- Sicherheitslage, ob sein Anlagenprofil schon geschrieben wurde.
+local reactor_state = {}
+local last_saved_max_output
 
--- Baut die Einheitenliste. Ohne konfigurierte Zuordnung ist es genau eine
--- Einheit aus dem ersten Reaktor und allen Turbinen -- das ist der
--- Ein-Reaktor-Fall und bleibt unveraendert. Mit config.units gehoert jede
--- Turbine genau einem Reaktor, weil sie physisch an dessen Dampfleitung
--- haengt und sonst gegen den falschen Tank geregelt wuerde.
-local function build_units(config)
-  local out = {}
-  local configured = config and config.units
-  if type(configured) == "table" and #configured > 0 then
-    for _, spec in ipairs(configured) do
-      if type(spec) == "table" and type(spec.reactor) == "string" then
-        out[#out + 1] = { name = spec.reactor, turbines = spec.turbines or {} }
-      end
-    end
-    if #out > 0 then return out end
-  end
-  local reactor_name = (config and config.reactors or {})[1]
-  if not reactor_name then return {} end
-  return { { name = reactor_name, turbines = (config and config.turbines) or {} } }
-end
-M._build_units = build_units
+-- Die Reaktoren dieses Knotens (Peripherienamen). Die Turbinen bleiben
+-- EINE Flotte: sie haengen alle am selben Dampfnetz, und jeder Reaktor
+-- regelt sich unabhaengig aus seinem eigenen Tank.
+local reactor_names = {}
 
 local function read_config(path)
   return (utils.load_config(path, {}))
@@ -87,41 +69,38 @@ function M.init(opts)
   cache_path = opts.cache_path or M.CACHE_PATH
   tuning_path = opts.tuning_path or M.TUNING_PATH
 
-  units = build_units(opts.config)
-  if #units == 0 and opts.turbine_count then
-    -- init() vor der Discovery (Tests, fruehes main.lua): eine namenlose
-    -- Einheit, die beim ersten Takt ihre Geraete bekommt.
-    units = { { name = nil, turbines = {} } }
+  reactor_names = {}
+  for _, name in ipairs((opts.config and opts.config.reactors) or {}) do
+    reactor_names[#reactor_names + 1] = name
   end
 
-  local cached = rt2_capacity.load_units({ path = cache_path, read_config = read_config })
+  -- Kapazitaet: EINE fuer den Knoten, wie bisher.
+  local loaded, load_err = rt2_capacity.load({
+    path = cache_path, read_config = read_config, turbine_count = opts.turbine_count,
+  })
+  last_saved_max_output = loaded and loaded.max_output or nil
+  if type(opts.log) == "function" then
+    if loaded then
+      opts.log("INFO", string.format("v2 Kapazitaet aus Cache: max_output=%.0f", loaded.max_output))
+    elseif load_err then
+      opts.log("INFO", "v2 Kapazitaets-Cache nicht genutzt: " .. tostring(load_err))
+    end
+  end
+
+  -- Anlagenprofil: je Reaktor, denn jeder hat seinen eigenen Dampftank.
   local profiles = rt2_tuning.load_units({ path = tuning_path, read_config = read_config })
 
-  unit_state = {}
+  reactor_state = {}
   local specs = {}
-  for index, unit in ipairs(units) do
-    local key = unit.name or ("unit" .. index)
-    local count = opts.turbine_count
-    if #units > 1 or (unit.turbines and #unit.turbines > 0) then count = #(unit.turbines or {}) end
-    local loaded, load_err = rt2_capacity.from_cached(cached[key], count)
+  for index, name in ipairs(reactor_names) do
+    local key = name or ("reactor" .. index)
     local tuned = profiles[key]
-    unit_state[key] = {
-      safety = rt2_safety.new_state(),
-      last_saved_max_output = loaded and loaded.max_output or nil,
-      tuning_saved = tuned ~= nil,
-    }
-    specs[#specs + 1] = { name = unit.name, initial_capacity = loaded, tuning_profile = tuned }
-    if type(opts.log) == "function" then
-      if loaded then
-        opts.log("INFO", string.format("v2 Kapazitaet aus Cache fuer %s: max_output=%.0f", key, loaded.max_output))
-      elseif load_err then
-        opts.log("INFO", string.format("v2 Kapazitaets-Cache fuer %s nicht genutzt: %s", key, tostring(load_err)))
-      end
-      if tuned then
-        opts.log("INFO", string.format(
-          "v2 Reaktorprofil fuer %s aus Messung geladen: max_step=%d Stellintervall=%dms",
-          key, tuned.max_step, tuned.min_adjust_interval_ms))
-      end
+    reactor_state[key] = { safety = rt2_safety.new_state(), tuning_saved = tuned ~= nil }
+    specs[#specs + 1] = { name = name, tuning_profile = tuned }
+    if tuned and type(opts.log) == "function" then
+      opts.log("INFO", string.format(
+        "v2 Reaktorprofil fuer %s aus Messung geladen: max_step=%d Stellintervall=%dms",
+        key, tuned.max_step, tuned.min_adjust_interval_ms))
     end
   end
 
@@ -131,7 +110,8 @@ function M.init(opts)
   engine = orchestrator.new({
     initial_state = opts.initial_state,
     master_timeout_ms = opts.master_timeout_ms,
-    units = specs,
+    initial_capacity = loaded,
+    reactors = specs,
   })
   last_result = nil
   return engine
@@ -161,162 +141,145 @@ function M.tick(ctx)
   if not engine then return nil end
   local now_ms = os.epoch and os.epoch("utc") or 0
 
-  -- Die Einheiten koennen sich nach der Discovery aendern (sie laeuft
-  -- nach init()), deshalb hier frisch bauen.
-  local live = build_units(ctx.config)
-  if #live > 0 then units = live end
-
-  local unit_inputs, hardware_ready = {}, #units > 0
-  for index, unit in ipairs(units) do
-    local key = unit.name or ("unit" .. index)
-    unit_state[key] = unit_state[key] or { safety = rt2_safety.new_state() }
-
-    local turbine_readings = {}
-    for _, name in ipairs(unit.turbines or {}) do
-      local info = ctx.adapters.turbine.inspect(name, ctx.CONFIG.LOG_PREFIX)
-      local reading = adapter.read_turbine(name, info)
-      if reading then turbine_readings[#turbine_readings + 1] = reading end
+  -- Discovery laeuft nach init(), deshalb die Reaktorliste hier frisch
+  -- nehmen. Die Turbinen bleiben EINE Flotte.
+  local live = (ctx.config and ctx.config.reactors) or {}
+  if #live > 0 then
+    if #live ~= #reactor_names then
+      reactor_names = {}
+      for _, name in ipairs(live) do reactor_names[#reactor_names + 1] = name end
     end
+  end
 
-    local reactor_reading = {}
-    if unit.name then
-      local info = ctx.adapters.reactor.inspect(unit.name, ctx.CONFIG.LOG_PREFIX)
-      reactor_reading = adapter.read_reactor(info) or {}
-    end
+  local turbine_readings = {}
+  for _, name in ipairs((ctx.config and ctx.config.turbines) or {}) do
+    local info = ctx.adapters.turbine.inspect(name, ctx.CONFIG.LOG_PREFIX)
+    local reading = adapter.read_turbine(name, info)
+    if reading then turbine_readings[#turbine_readings + 1] = reading end
+  end
 
-    -- Sicherheit VOR der Regelentscheidung, je Einheit: eine Ausloesung
-    -- muss diesen Takt gewinnen, nicht den naechsten.
-    local safety_result = { tripped = false }
-    if unit.name then
-      safety_result = rt2_safety.evaluate(unit_state[key].safety, reactor_reading,
-        (ctx.config and ctx.config.safety) or nil)
-      local previous = unit_state[key].last_safety_reason
-      if safety_result.reason ~= previous then
-        unit_state[key].last_safety_reason = safety_result.reason
-        if safety_result.tripped then
-          local msg = string.format(
-            "v2 SAFETY-TRIP an %s: %s (Temperatur=%s, Kuehlmittel=%s)"
-            .. " -- Staebe voll eingefahren, dessen Turbinen Flow 0",
-            key, tostring(safety_result.reason), tostring(safety_result.temperature),
-            tostring(safety_result.coolant_ratio))
-          ctx.log("WARN", msg)
-          pcall(print, "[RT] " .. msg)
-        elseif previous ~= nil then
-          ctx.log("INFO", string.format("v2 Sicherheitslage an %s wieder normal", key))
-        end
+  -- Sicherheit VOR der Regelentscheidung, je Reaktor: eine Ausloesung
+  -- muss diesen Takt gewinnen, nicht den naechsten.
+  local reactor_inputs = {}
+  for index, name in ipairs(reactor_names) do
+    local key = name or ("reactor" .. index)
+    reactor_state[key] = reactor_state[key] or { safety = rt2_safety.new_state() }
+
+    local info = ctx.adapters.reactor.inspect(name, ctx.CONFIG.LOG_PREFIX)
+    local reading = adapter.read_reactor(info) or {}
+    local safety_result = rt2_safety.evaluate(reactor_state[key].safety, reading,
+      (ctx.config and ctx.config.safety) or nil)
+
+    local previous = reactor_state[key].last_safety_reason
+    if safety_result.reason ~= previous then
+      reactor_state[key].last_safety_reason = safety_result.reason
+      local label = (#reactor_names > 1) and (" an " .. key) or ""
+      if safety_result.tripped then
+        local msg = string.format(
+          "v2 SAFETY-TRIP%s: %s (Temperatur=%s, Kuehlmittel=%s) -- dessen Staebe voll eingefahren",
+          label, tostring(safety_result.reason), tostring(safety_result.temperature),
+          tostring(safety_result.coolant_ratio))
+        ctx.log("WARN", msg)
+        pcall(print, "[RT] " .. msg)
+      elseif previous ~= nil then
+        ctx.log("INFO", "v2 Sicherheitslage" .. label .. " wieder normal")
       end
     end
 
-    if not unit.name or #turbine_readings == 0 then hardware_ready = false end
-
-    unit_inputs[index] = {
-      name = unit.name,
-      safety_tripped = safety_result.tripped,
-      reactor = reactor_reading,
-      turbines = turbine_readings,
-    }
+    reactor_inputs[index] = { name = name, safety_tripped = safety_result.tripped, reactor = reading }
   end
 
   local result = engine.tick({
     now_ms = now_ms,
-    hardware_ready = hardware_ready,
-    units = unit_inputs,
+    hardware_ready = (#reactor_names > 0) and (#turbine_readings > 0),
+    turbines = turbine_readings,
+    reactors = reactor_inputs,
   })
 
-  -- Auf die Hardware schreiben -- je Einheit, mit IHREN Geraeten.
-  for index, unit_result in ipairs(result.units) do
-    for _, t in ipairs(unit_result.turbines) do
-      adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
-    end
-    local unit = units[index]
-    if unit and unit.name then
-      adapter.apply_reactor(ctx.adapters.reactor, unit.name, ctx.CONFIG.LOG_PREFIX,
-        unit_result.reactor_decision)
+  for _, t in ipairs(result.turbines) do
+    adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
+  end
+  for index, decision in ipairs(result.reactors) do
+    local name = reactor_names[index]
+    if name then
+      adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
     end
   end
 
-  -- Einlernen sichtbar machen. Bei mehreren Einheiten je Einheit, sonst
-  -- saehe man nur eine Summe und wuesste nicht, welcher Reaktor haengt.
+  -- Einlernen sichtbar machen.
   local cap = result.capacity
-  local diag_parts = {}
-  for _, ur in ipairs(result.units) do
-    diag_parts[#diag_parts + 1] = string.format("%s=%s/%d", tostring(ur.name),
-      tostring(ur.capacity.reason), math.floor((ur.capacity.max_output or 0) / 1000))
-  end
-  local diag = table.concat(diag_parts, " ") .. "|" .. tostring(cap.ready)
-  if diag ~= last_logged_capacity_diag then
-    last_logged_capacity_diag = diag
-    for _, ur in ipairs(result.units) do
-      local uc = ur.capacity
-      local label = (#result.units > 1) and (" [" .. tostring(ur.name) .. "]") or ""
-      local msg
-      if uc.reason == "MEASURING" then
-        msg = string.format("v2 Einlernen laeuft%s: bisher %.0f RF/t gemessen (%d von %d Turbinen am Ziel)",
-          label, uc.max_output or 0, uc.at_target or 0, uc.total_turbines or 0)
-      elseif uc.reason == "MEASURED" then
-        msg = string.format("v2 Einlernen FERTIG%s: %.0f RF/t aus %d Turbinen gemessen",
-          label, uc.max_output or 0, uc.sustainable_turbines or 0)
-      elseif uc.reason == "FLOW_SATURATED" then
-        msg = string.format(
-          "v2 Einlernen%s: %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM"
-          .. " -- im Zielbereich %d von %d, noetig %d.",
-          label, uc.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
-          uc.at_target or 0, uc.total_turbines or 0, uc.required_at_target or 0)
-      elseif uc.reason == "BELOW_FRACTION" and (uc.max_output or 0) <= 0 then
-        msg = string.format(
-          "v2 Einlernen wartet%s: %d von %d Turbinen im Zielbereich (%d RPM +/- %d), noetig sind %d",
-          label, uc.at_target or 0, uc.total_turbines or 0, rt2_capacity.TARGET_RPM,
-          rt2_capacity.TOLERANCE_RPM, uc.required_at_target or 0)
-      elseif uc.reason == "TOPOLOGY_CHANGED" then
-        msg = string.format("v2 Turbinenzahl geaendert%s (%d) -- wird neu vermessen", label, uc.total_turbines or 0)
-      elseif uc.reason == "NO_TURBINES" then
-        msg = (uc.max_output or 0) > 0
-          and ("v2 keine Turbine lesbar" .. label .. " -- gelernter Wert bleibt erhalten")
-          or ("v2 noch keine Turbine gefunden" .. label .. " -- warte auf Discovery")
+  local waiting = (cap.max_output or 0) <= 0
+  local diag = string.format("%s|%d|%s|%s", tostring(cap.reason),
+    math.floor((cap.max_output or 0) / 1000), tostring(cap.ready), tostring(waiting))
+  do
+    local msg
+    if cap.reason == "MEASURING" then
+      msg = string.format("v2 Einlernen laeuft: bisher %.0f RF/t gemessen (%d von %d Turbinen am Ziel)",
+        cap.max_output or 0, cap.at_target or 0, cap.total_turbines or 0)
+    elseif cap.reason == "MEASURED" then
+      msg = string.format("v2 Einlernen FERTIG: %.0f RF/t aus %d Turbinen gemessen",
+        cap.max_output or 0, cap.sustainable_turbines or 0)
+      if (cap.sustainable_turbines or 0) < (cap.total_turbines or 0) then
+        msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig am Ziel",
+          (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
       end
-      if msg then
-        ctx.log("INFO", msg)
-        pcall(print, "[RT] " .. msg)
-      end
+    elseif cap.reason == "FLOW_SATURATED" then
+      msg = string.format(
+        "v2 Einlernen: %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM"
+        .. " -- im Zielbereich %d von %d, noetig %d.",
+        cap.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
+        cap.at_target or 0, cap.total_turbines or 0, cap.required_at_target or 0)
+    elseif cap.reason == "BELOW_FRACTION" and waiting then
+      msg = string.format(
+        "v2 Einlernen wartet: %d von %d Turbinen im Zielbereich (%d RPM +/- %d), noetig sind %d",
+        cap.at_target or 0, cap.total_turbines or 0, rt2_capacity.TARGET_RPM,
+        rt2_capacity.TOLERANCE_RPM, cap.required_at_target or 0)
+    elseif cap.reason == "TOPOLOGY_CHANGED" then
+      msg = string.format("v2 Turbinenzahl geaendert (%d) -- Anlage wird neu vermessen", cap.total_turbines or 0)
+    elseif cap.reason == "NO_TURBINES" then
+      msg = waiting and "v2 noch keine Turbine gefunden -- warte auf Discovery"
+        or "v2 keine Turbine lesbar -- gelernter Wert bleibt erhalten"
+    end
+    -- Den Schluessel nur fortschreiben, wenn auch gemeldet wurde.
+    if msg and diag ~= last_logged_capacity_diag then
+      last_logged_capacity_diag = diag
+      ctx.log("INFO", msg)
+      pcall(print, "[RT] " .. msg)
     end
   end
 
-  -- Sichern, je Einheit und nur bei echter Wertaenderung.
-  local dirty_capacity, dirty_tuning = {}, {}
-  local capacity_changed, tuning_changed = false, false
-  for index, ur in ipairs(result.units) do
-    local key = ur.name or ("unit" .. index)
-    local st = unit_state[key]
-    if ur.capacity.ready then
-      dirty_capacity[key] = ur.capacity
-      if ur.capacity.max_output ~= st.last_saved_max_output then
-        st.last_saved_max_output = ur.capacity.max_output
-        capacity_changed = true
-      end
+  if cap.ready and cap.max_output ~= last_saved_max_output then
+    if rt2_capacity.save(cap, { path = cache_path, write_config = write_config }) then
+      last_saved_max_output = cap.max_output
+      ctx.log("INFO", string.format("v2 Kapazitaet gesichert: max_output=%.0f", cap.max_output))
     end
-    if ur.tuning then
-      dirty_tuning[key] = ur.tuning
-      if not st.tuning_saved then
+  end
+
+  -- Anlagenprofile: je Reaktor, einmalig geschrieben.
+  local profiles, tuning_changed = {}, false
+  for index, unit in ipairs(engine.reactors) do
+    local key = unit.name or ("reactor" .. index)
+    if unit.tuning_profile then
+      profiles[key] = unit.tuning_profile
+      local st = reactor_state[key]
+      if st and not st.tuning_saved then
         st.tuning_saved = true
         tuning_changed = true
         local msg = string.format(
           "v2 Reaktor %s selbst vermessen: %d Messwerte -> max_step=%d, Stellintervall=%dms",
-          key, ur.tuning.samples or 0, ur.tuning.max_step, ur.tuning.min_adjust_interval_ms)
+          key, unit.tuning_profile.samples or 0, unit.tuning_profile.max_step,
+          unit.tuning_profile.min_adjust_interval_ms)
         ctx.log("INFO", msg)
         pcall(print, "[RT] " .. msg)
       end
     end
   end
-  if capacity_changed then
-    rt2_capacity.save_units(dirty_capacity, { path = cache_path, write_config = write_config })
-  end
   if tuning_changed then
-    rt2_tuning.save_units(dirty_tuning, { path = tuning_path, write_config = write_config })
+    rt2_tuning.save_units(profiles, { path = tuning_path, write_config = write_config })
   end
 
-  -- Auf die Modul-/Knotenzustaende abbilden, die UI und MASTER lesen.
-  local first_reactor = unit_inputs[1] and unit_inputs[1].reactor or {}
-  last_projection = rt2_projection.project(result, ctx.modules, first_reactor)
+  last_projection = rt2_projection.project(result, ctx.modules,
+    reactor_inputs[1] and reactor_inputs[1].reactor or {})
   for id, projected in pairs(last_projection.modules) do
     local module = ctx.modules and ctx.modules[id]
     if module then
