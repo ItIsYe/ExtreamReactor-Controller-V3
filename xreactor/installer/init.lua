@@ -65,7 +65,7 @@ end
 p(("ref: " .. ref))
 
 local manifest_url = GITHUB_RAW .. ref .. "/xreactor/manifest.lua"
-local manifest, merr = manifest_mod.load_remote(manifest_url, http_mod)
+local manifest, merr, manifest_bytes = manifest_mod.load_remote(manifest_url, http_mod)
 if not manifest then error("Manifest: " .. tostring(merr), 0) end
 p("Manifest: " .. tostring(manifest.manifest_id or manifest.manifest_version))
 
@@ -261,6 +261,24 @@ local ok_plan, err_plan = plan_validator_mod.validate({ role = role, manifest = 
 if not ok_plan then
   error("Installationsplan ungueltig: " .. tostring(err_plan), 0)
 end
+
+-- Passt das ueberhaupt auf diesen Rechner?
+--
+-- Diese Pruefung steht BEWUSST hier: vor dem Journal, vor allem aber vor
+-- dem Loeschen der alten Installation weiter unten. Geht sie nicht aus,
+-- laeuft der Knoten unveraendert weiter. Ohne sie lief der Installer bis
+-- zur letzten Datei durch, brach dort am Speicher ab -- und der Rechner
+-- blieb mit einem halben Baum liegen, weil die alte Installation laengst
+-- geloescht war (gemeldet: "not enough space for /xreactor/manifest.lua"
+-- bei 82 von 82 Dateien).
+local planned_bytes = 0
+for _, entry in pairs(expected) do
+  planned_bytes = planned_bytes + (tonumber(entry.size_bytes) or 0)
+end
+-- manifest.lua steht in keiner Dateiliste, wird aber installiert.
+planned_bytes = planned_bytes + (tonumber(manifest_bytes) or 0)
+local ok_space, space_err = stage_mod.check_capacity(planned_bytes, INSTALL_ROOT)
+if not ok_space then error(space_err, 0) end
 
 local ok_journal, err_journal = journal_mod.write({
   state = journal_mod.STATE.PREPARED,

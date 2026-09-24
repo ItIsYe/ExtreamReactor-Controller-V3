@@ -55,6 +55,47 @@ local function reclaim_logs(needed_after)
   return cleared
 end
 
+M.dir_size = dir_size
+
+-- Kopfraum ueber die reine Summe der Dateien hinaus: Journal, Rolle und
+-- Konfiguration unter /xreactor_config, /startup.lua, und der Verschnitt,
+-- den CC:Tweaked je Datei berechnet. Grosszuegig, weil ein knapp
+-- bestandener Vorab-Check nichts wert ist -- er soll verhindern, dass die
+-- Installation MITTENDRIN abbricht.
+M.SPACE_HEADROOM_BYTES = 24 * 1024
+
+M.SPACE_HINT = "In der ComputerCraft-Konfiguration 'computer_space_limit' erhoehen"
+  .. " (serverconfig/computercraft-server.toml) oder einen Rechner mit mehr Speicher verwenden."
+
+-- Passt die geplante Installation ueberhaupt auf diesen Rechner?
+--
+-- Gehoert BEWUSST vor den ersten zerstoerenden Schritt (siehe
+-- installer/init.lua): geht sie nicht aus, soll der Knoten unveraendert
+-- weiterlaufen. Im Feld ist genau das schiefgegangen -- die Installation
+-- brach bei Datei 82 von 82 ab, nachdem die alte laengst geloescht war,
+-- und der Rechner blieb mit einem halben Baum liegen.
+--
+-- planned_bytes: Summe aller Dateien, die geschrieben werden sollen.
+-- install_root: der alte Baum -- er wird vorher geloescht, sein Platz
+--               steht also zur Verfuegung und wird mitgerechnet.
+function M.check_capacity(planned_bytes, install_root)
+  planned_bytes = tonumber(planned_bytes) or 0
+  local free = free_space()
+  -- Kein Limit bekannt oder unbegrenzt: nichts zu pruefen.
+  if free == nil or free == math.huge then return true end
+
+  local reclaimable = install_root and dir_size(install_root) or 0
+  local available = free + reclaimable
+  local needed = planned_bytes + M.SPACE_HEADROOM_BYTES
+  if available >= needed then return true end
+
+  return false, string.format(
+    "Der Speicher dieses Rechners reicht fuer diese Rolle nicht: benoetigt werden etwa %d Bytes,"
+      .. " verfuegbar sind %d (%d frei + %d aus der alten Installation, die ersetzt wuerde)."
+      .. " Es fehlen %d Bytes. Die alte Installation bleibt unangetastet. %s",
+    needed, available, free, reclaimable, needed - available, M.SPACE_HINT)
+end
+
 -- Shared with installer/init.lua: any early fs write (e.g. makeDir() for the
 -- recovery directory, BEFORE /xreactor is deleted) can hit the exact same
 -- space shortage as M.write() below, with no "needed" byte count of its own
@@ -67,7 +108,9 @@ function M.space_diagnostic(free, needed)
   if logs_bytes > 0 then
     diag = diag .. string.format(" -- /xreactor_logs still uses %d bytes", logs_bytes)
   end
-  return diag
+  -- Ohne diesen Hinweis liest sich der Abbruch wie ein Problem mit DIESER
+  -- einen Datei, obwohl in Wahrheit der Rechner zu klein ist.
+  return diag .. " -- " .. M.SPACE_HINT
 end
 
 local function reclaim(needed)

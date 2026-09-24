@@ -85,6 +85,11 @@ local function crc32(content)
 end
 M.crc32 = crc32
 
+-- Dritter Rueckgabewert: die Groesse des Manifests in Bytes. Es traegt
+-- sich selbst nicht in seiner Dateiliste ein (sein eigener Hash waere
+-- selbstbezueglich), wird aber mitinstalliert -- ohne diese Zahl fehlten
+-- bei der Platzberechnung in installer/init.lua ausgerechnet die
+-- zwanzigtausend Bytes, an denen die Installation im Feld gescheitert ist.
 function M.load_remote(url, http_mod)
   local body, err = http_mod.download(url)
   if not body then return nil, err end
@@ -95,7 +100,7 @@ function M.load_remote(url, http_mod)
   if not ok or type(result) ~= "table" then
     return nil, "invalid manifest: " .. tostring(result)
   end
-  return result
+  return result, nil, #body
 end
 
 -- Muss optional=true-Eintraege gegen selected_features filtern, sonst hat
