@@ -181,8 +181,15 @@ do
   local cached = load('return ' .. tostring(files[cache_path]), '=cache', 't', {})
   cached = cached and cached() or nil
   assert_true(type(cached) == 'table', 'der Cache muss lesbar sein')
-  assert_eq(cached.sustainable_turbines, 1,
-    'der Cache muss die tragbare Anzahl mitfuehren, sonst war der Suchlauf beim Neustart umsonst')
+  -- Der Cache haelt jetzt einen Eintrag JE EINHEIT (Schluessel =
+  -- Reaktorname), damit ein Knoten mit zwei Reaktoren beide Messungen
+  -- getrennt behaelt.
+  assert_true(type(cached.units) == 'table', 'der Cache ist nach Einheiten gegliedert')
+  local entry
+  for _, e in pairs(cached.units) do entry = e end
+  assert_true(entry ~= nil, 'mit einem Eintrag fuer die einzige Einheit')
+  assert_eq(entry.sustainable_turbines, 1,
+    'der Cache muss die tragbare Anzahl mitfuehren, sonst war die Messung beim Neustart umsonst')
 end
 
 -- INIT always spends its first tick becoming LEARNING (rt2_state.lua's

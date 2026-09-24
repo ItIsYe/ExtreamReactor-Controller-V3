@@ -41,6 +41,22 @@ return {
   reactors = {},
   turbines = {},
 
+  -- Zuordnung Turbine -> Reaktor, nur noetig bei MEHREREN Reaktoren an
+  -- einem Knoten. Jede Einheit ist ein Reaktor mit den Turbinen, die an
+  -- SEINER Dampfleitung haengen; der Reaktor regelt seine Staebe aus
+  -- seinem eigenen Tank, und genau dessen Last sind diese Turbinen.
+  -- Ohne Zuordnung regelte ein Reaktor gegen fremde Turbinen, deshalb
+  -- laeuft ein Mehr-Reaktor-Knoten ohne units auf v1 weiter.
+  --
+  --   units = {
+  --     { reactor = "BigReactors-Reactor_0", turbines = { "BigReactors-Turbine_0", ... } },
+  --     { reactor = "BigReactors-Reactor_1", turbines = { "BigReactors-Turbine_8", ... } },
+  --   }
+  --
+  -- Bei genau einem Reaktor bleibt die Liste leer: dann gehoeren ihm
+  -- automatisch alle gefundenen Turbinen.
+  units = {},
+
   heartbeat_interval = 2,
   status_interval = 5,
   scan_interval = 10,

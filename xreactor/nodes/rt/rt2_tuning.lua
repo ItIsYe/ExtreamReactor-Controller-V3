@@ -223,4 +223,55 @@ function M.load(opts)
   }
 end
 
+-- ── Persistenz fuer mehrere Einheiten ────────────────────────────────────
+
+function M.load_units(opts)
+  opts = opts or {}
+  if type(opts.path) ~= "string" or opts.path == "" then return {} end
+  if type(opts.read_config) ~= "function" then return {} end
+  local data = opts.read_config(opts.path)
+  if type(data) ~= "table" then return {} end
+  local raw = type(data.units) == "table" and data.units
+    or (data.tuned == true and { unit1 = data } or {})
+  local out = {}
+  for key, entry in pairs(raw) do
+    if type(entry) == "table" and entry.tuned == true then
+      local max_step = tonumber(entry.max_step)
+      local interval = tonumber(entry.min_adjust_interval_ms)
+      if max_step and interval then
+        -- Beim Laden neu klemmen: eine von Hand editierte Datei darf den
+        -- Regler nicht ueber das aufweiten, was die Ableitung selbst darf.
+        out[key] = {
+          gain = tonumber(entry.gain) or 0,
+          max_step = clamp(max_step, M.MAX_STEP_MIN, M.MAX_STEP_MAX),
+          min_adjust_interval_ms = clamp(interval, M.INTERVAL_MIN_MS, M.INTERVAL_MAX_MS),
+          samples = tonumber(entry.samples) or 0,
+        }
+      end
+    end
+  end
+  return out
+end
+
+function M.save_units(profiles, opts)
+  opts = opts or {}
+  if type(profiles) ~= "table" then return false, "no profiles" end
+  if type(opts.path) ~= "string" or opts.path == "" then return false, "no path" end
+  if type(opts.write_config) ~= "function" then return false, "no writer" end
+  local out = {}
+  for key, profile in pairs(profiles) do
+    if type(profile) == "table" then
+      out[key] = {
+        tuned = true,
+        gain = tonumber(profile.gain) or 0,
+        max_step = tonumber(profile.max_step) or 0,
+        min_adjust_interval_ms = tonumber(profile.min_adjust_interval_ms) or 0,
+        samples = tonumber(profile.samples) or 0,
+      }
+    end
+  end
+  if next(out) == nil then return false, "nothing to save" end
+  return opts.write_config(opts.path, { units = out })
+end
+
 return M

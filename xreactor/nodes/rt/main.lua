@@ -1107,28 +1107,32 @@ local function init()
     #devices.reactors, #devices.turbines))
 
   -- v2-Engine-Auswahl (siehe config.lua's "engine"-Feld): nur mit genau
-  -- einem Reaktor unterstuetzt (rt2_reactor.lua regelt einen einzelnen
-  -- Dampf-Tank-Fuellstand, kein Multi-Reaktor-Aggregat wie reactor_
-  -- control.lua's controlReactorsIndividually()). Faellt bei mehr als
-  -- einem Reaktor mit einer WARN-Zeile auf v1 zurueck, statt eine
-  -- Reaktor-Node unregelmt zu lassen.
+  -- Mehrere Reaktoren sind erlaubt, brauchen aber eine ZUORDNUNG: welche
+  -- Turbine haengt an welchem Reaktor. Aus den Peripherienamen laesst sich
+  -- die Dampfverrohrung nicht ableiten, und ohne sie regelte ein Reaktor
+  -- seine Staebe gegen einen Tank, dessen Turbinen einem anderen gehoeren.
+  -- Deshalb: config.units verlangen, statt zu raten -- sonst v1.
   if config.engine == "v2" then
-    if #devices.reactors > 1 then
+    local unit_count = type(config.units) == "table" and #config.units or 0
+    if #devices.reactors > 1 and unit_count < #devices.reactors then
       log("WARN", string.format(
-        "engine=v2 requires exactly one reactor (found %d) -- falling back to v1 for this node",
-        #devices.reactors))
+        "engine=v2 with %d reactors needs config.units (reactor -> turbines); found %d -- falling back to v1",
+        #devices.reactors, unit_count))
       pcall(print, string.format(
-        "[RT] engine=v2 abgelehnt: %d Reaktoren gefunden (nur 1 unterstuetzt) -- laeuft auf v1",
+        "[RT] engine=v2 abgelehnt: %d Reaktoren, aber keine Zuordnung in config.units"
+        .. " -- ohne sie regelte ein Reaktor gegen fremde Turbinen. Laeuft auf v1.",
         #devices.reactors))
     else
       engine_v2 = true
-      rt2_engine.init({ turbine_count = #devices.turbines, log = log })
-      log("INFO", "engine=v2 active (rewritten control engine)")
+      rt2_engine.init({ turbine_count = #devices.turbines, config = config, log = log })
+      log("INFO", string.format("engine=v2 active (%d Reaktor(en), %d Turbinen)",
+        #devices.reactors, #devices.turbines))
       -- utils.log() routet standardmaessig zum Log-Collector, nicht auf
       -- den lokalen Bildschirm -- diese Zeile ist bewusst ein direktes
       -- print(), damit am Computer selbst sofort sichtbar ist, dass v2
       -- aktiv ist, ohne Router-UI oder Log-Collector zu brauchen.
-      pcall(print, "[RT] engine=v2 AKTIV (neue Regel-Engine)")
+      pcall(print, string.format("[RT] engine=v2 AKTIV -- %d Reaktor(en), %d Turbinen",
+        #devices.reactors, #devices.turbines))
     end
   end
 
