@@ -17,6 +17,20 @@ local orchestrator = require('nodes.rt.rt2_orchestrator')
 local rt2_state = require('nodes.rt.rt2_state')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_reactor = require('nodes.rt.rt2_reactor')
+local rt2_capacity = require('nodes.rt.rt2_capacity')
+
+-- Diese Datei prueft die EINZELREGELUNG, nicht das Einlernen. Seit das
+-- Einlernen ein gestaffelter Suchlauf ist, laeuft in LEARNING zunaechst
+-- nur eine Turbine -- dann gaebe es nichts zu vergleichen. Also startet
+-- hier jeder Block mit einer bereits vermessenen Anlage, so wie sie nach
+-- dem ersten Lauf aus dem Cache kaeme.
+local function learned(count)
+  local c = rt2_capacity.new_state()
+  c.ready, c.max_output = true, 1000
+  c.total_turbines, c.sustainable_turbines, c.released = count, count, count
+  c.reason = 'LOADED_FROM_CACHE'
+  return c
+end
 
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
@@ -37,12 +51,15 @@ end
 -- Five turbines, five different situations, one tick. Every one must get
 -- the decision its OWN readings call for.
 do
-  local o = orchestrator.new()
+  local o = orchestrator.new({ initial_capacity = learned(5) })
   -- Reach AUTONOM so every turbine shares the same 900 target -- that way
   -- any difference in the outcome can only come from the turbine's own
-  -- readings, not from a different target.
-  o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 },
-    turbines = { turbine('W', 900, 1000, true, 100, true) } })
+  -- readings, not from a different target. Aufgewaermt wird mit derselben
+  -- Flottengroesse: eine abweichende Anzahl gilt als Umbau und wuerfe die
+  -- eingelernte Kapazitaet weg (rt2_capacity, TOPOLOGY_CHANGED).
+  local warm = {}
+  for i = 1, 5 do warm[i] = turbine('W' .. i, 900, 1000, true, 100, true) end
+  o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = warm })
 
   local fleet = {
     turbine('SLOW',      100, 500,  false, 0,   true),   -- weit unter Ziel  -> RAMP_UP
@@ -88,7 +105,7 @@ end
 -- Individual regulation must also hold when the TARGETS differ (MASTER
 -- split): VOLLAST, PUFFER and AUS turbines in the same tick.
 do
-  local o = orchestrator.new()
+  local o = orchestrator.new({ initial_capacity = learned(4) })
   o.note_master_seen(0)
   local fleet = {}
   for i = 1, 4 do fleet[i] = turbine('T' .. i, 900, 1000, true, 100, true) end
@@ -132,7 +149,7 @@ end
 
 -- ═══ 2. Zustandsmaschine: vollständiger Lebenszyklus ═══
 do
-  local o = orchestrator.new()
+  local o = orchestrator.new({ initial_capacity = learned(1) })
   local fleet = { turbine('T1', 900, 1000, true, 100, true) }
   local reactor = { fill_ratio = 0.5, active = true }
 
@@ -170,33 +187,60 @@ end
 
 -- ═══ 3. Einlernen: misst nur, was wirklich am Ziel ist ═══
 do
-  -- A fleet of 5 where only 3 meet the measurement condition: 60 % is below
-  -- the 80 % threshold, so capacity must NOT be declared ready.
+  -- Der Suchlauf: er gibt eine Turbine nach der anderen frei und haelt an,
+  -- wenn eine Stufe sich nicht halten laesst. Frueher stand hier die
+  -- 80-%-Schwelle -- die war auf einer dampfbegrenzten Anlage unerreichbar
+  -- und ist deshalb durch diesen Suchlauf ersetzt.
   local o = orchestrator.new()
-  local partial = {
-    turbine('A', 900, 1000, true,  100, true),   -- zählt
-    turbine('B', 900, 1000, true,  100, true),   -- zählt
-    turbine('C', 900, 1000, true,  100, true),   -- zählt
-    turbine('D', 400, 1000, false, 0,   true),   -- zu langsam
-    turbine('E', 900, 1000, true,  0,   true),   -- am Ziel, aber kein Ausstoss
-  }
-  local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = partial })
-  assert_eq(r.capacity.at_target, 3, 'only turbines meeting rpm+coil+output count')
-  assert_eq(r.capacity.total_turbines, 5)
-  assert_true(not r.capacity.ready, '3 of 5 is below the 80 % threshold -- must not be ready')
-  assert_eq(r.state, rt2_state.states.LEARNING, 'and the node therefore stays in LEARNING')
+  local function fleet_at(n_running)
+    -- n_running Turbinen auf Ziel, der Rest steht (Ziel 0, also gar nicht
+    -- erst freigegeben) bzw. haengt bei vollem Flow darunter fest.
+    local f = {}
+    for i = 1, 5 do
+      if i <= n_running then f[i] = turbine('T' .. i, 900, 1000, true, 100, true)
+      else f[i] = turbine('T' .. i, 780, rt2_turbine.MAX_FLOW, false, 0, true) end
+    end
+    return f
+  end
 
-  -- Bring the stragglers in: now all 5 qualify.
-  local full = {}
-  for i, n in ipairs({ 'A', 'B', 'C', 'D', 'E' }) do full[i] = turbine(n, 900, 1000, true, 100, true) end
-  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = full })
-  assert_eq(r.capacity.at_target, 5)
-  assert_true(r.capacity.ready, 'once the threshold is met capacity becomes ready')
-  assert_true(r.capacity.max_output > 0, 'a ready capacity carries a positive max_output')
+  -- Stufe 1 traegt und haelt sich -> zaehlt, Suchlauf rueckt vor.
+  local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_eq(r.max_active, 1, 'der Suchlauf beginnt mit einer einzigen Turbine')
 
-  -- A turbine dropping out later must NOT destroy the learned value.
-  r = o.tick({ now_ms = 3000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = partial })
-  assert_true(r.capacity.ready, 'a learned capacity survives turbines leaving the measurement window')
+  -- Der Einschwing-Zaehler laeuft erst ab dem Takt, an dem die Stufe
+  -- ERSTMALS traegt -- ein einzelner Durchgang durch das Messfenster
+  -- beim Hochlaufen soll gerade nicht zaehlen.
+  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_eq(r.capacity.reason, 'SETTLING')
+  assert_eq(r.capacity.sustainable_turbines, 0, 'noch nichts nachgewiesen')
+
+  r = o.tick({ now_ms = 2000 + rt2_capacity.SETTLE_MS, hardware_ready = true,
+               reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_eq(r.capacity.sustainable_turbines, 1)
+  assert_eq(r.max_active, 2, 'nach bestandener Stufe wird eine weitere freigegeben')
+
+  -- Bis Stufe 3 geht es durch, danach traegt die Anlage nichts mehr.
+  local now = 2000 + rt2_capacity.SETTLE_MS
+  for _ = 1, 8 do
+    now = now + rt2_capacity.SETTLE_MS
+    r = o.tick({ now_ms = now, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  end
+  assert_eq(r.capacity.sustainable_turbines, 3, 'drei Turbinen sind nachweislich tragbar')
+  assert_true(not r.capacity.ready, 'Stufe 4 laeuft noch -- der Suchlauf ist nicht fertig')
+  assert_eq(r.state, rt2_state.states.LEARNING, 'und der Knoten bleibt solange im Einlernen')
+
+  -- Stufe 4 laesst sich nicht halten. Nach der Wartezeit ist das die
+  -- Antwort, kein Fehlschlag: die Anlage traegt drei.
+  now = now + rt2_capacity.STEP_TIMEOUT_MS
+  r = o.tick({ now_ms = now, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_true(r.capacity.ready, 'eine nicht haltbare Stufe beendet den Suchlauf mit einem Ergebnis')
+  assert_eq(r.capacity.reason, 'LIMIT_FOUND')
+  assert_eq(r.capacity.sustainable_turbines, 3)
+  -- Gemessen, NICHT hochgerechnet: 3 x 100 minus 5 % Reserve. Die alte
+  -- Formel haette hier (300/3) * 5 = 500 eingetragen, also das Ausstossmass
+  -- von fuenf Turbinen fuer eine Anlage, die drei traegt.
+  assert_eq(r.capacity.max_output, 285)
+  assert_eq(r.max_active, 3, 'und mehr als drei laesst der Knoten fortan nicht mehr laufen')
 end
 
 -- ═══ 4. Reaktorregelung: nur Dampftank, in JEDEM Modus gleich ═══
@@ -214,7 +258,7 @@ do
   -- Mode independence: the SAME tank reading must give the SAME rods in
   -- AUTONOM and in MASTER, and a MASTER power setpoint must not shift it.
   local function rods_in(state_setup)
-    local o = orchestrator.new()
+    local o = orchestrator.new({ initial_capacity = learned(1) })
     local fleet = { turbine('T1', 900, 1000, true, 100, true) }
     state_setup(o)
     o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5, current_rods = 90 }, turbines = fleet })
@@ -234,7 +278,7 @@ do
     'the same tank level must give the same rod level in MASTER and AUTONOM -- the reactor never sees the mode')
 
   -- A MASTER power setpoint moves turbine targets but must leave the rods alone.
-  local o = orchestrator.new()
+  local o = orchestrator.new({ initial_capacity = learned(4) })
   o.note_master_seen(0)
   local fleet = {}
   for i = 1, 4 do fleet[i] = turbine('T' .. i, 900, 1000, true, 100, true) end
@@ -260,7 +304,7 @@ end
 
 -- ═══ 5. An- und Abschaltung ═══
 do
-  local o = orchestrator.new()
+  local o = orchestrator.new({ initial_capacity = learned(3) })
   local mixed = {
     turbine('ON',  900, 1000, true, 100, true),    -- läuft schon
     turbine('OFF', 900, 1000, true, 100, false),   -- steht
@@ -290,7 +334,7 @@ do
 
   -- Documented behaviour: v2 only ever switches ON. Even a parked AUS-slot
   -- turbine stays active and is parked via flow=0 + coil off instead.
-  local o2 = orchestrator.new()
+  local o2 = orchestrator.new({ initial_capacity = learned(4) })
   o2.note_master_seen(0)
   local fleet = {}
   for i = 1, 4 do fleet[i] = turbine('T' .. i, 900, 1000, true, 100, true) end

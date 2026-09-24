@@ -79,8 +79,18 @@ function M.new(opts)
     self.manual_safety_trip = false
   end
 
-  local function rotated_slot(turbine_index, turbine_count, now_ms)
+  -- Die Rotation existiert einzig dafuer, dass unter MASTER nicht immer
+  -- dieselben Turbinen im AUS-Slot sitzen. In jedem anderen Zustand
+  -- verdreht sie nur die Zuordnung -- und waehrend des gestaffelten
+  -- Einlernens ist das direkt schaedlich: rt2_capacity misst die ersten
+  -- `released` Turbinen in LESEREIHENFOLGE, freigegeben wird aber nach
+  -- SLOT. Rotiert der Slot, laeuft Turbine 25 und gemessen wird Turbine 1
+  -- -- der Suchlauf sieht dann nie eine tragende Stufe und kommt nie vom
+  -- Fleck. Ausserdem soll waehrend der Suche ohnehin dieselbe Turbine
+  -- oben bleiben, waehrend die naechste dazukommt.
+  local function rotated_slot(turbine_index, turbine_count, now_ms, state)
     if turbine_count <= 1 then return turbine_index end
+    if state ~= rt2_state.states.MASTER then return turbine_index end
     if (now_ms or 0) - self.last_rotate_ms >= M.ROTATE_INTERVAL_MS then
       self.rotation_offset = (self.rotation_offset + 1) % turbine_count
       self.last_rotate_ms = now_ms or self.last_rotate_ms
@@ -113,7 +123,10 @@ function M.new(opts)
     -- full LEARNING replay; rt2_state only re-enters LEARNING from INIT).
     local current_state = self.machine.current()
     if current_state ~= rt2_state.states.SAFE then
-      self.capacity = rt2_capacity.update(self.capacity, input.turbines)
+      -- now_ms ist neu und noetig: der Suchlauf muss "faehrt noch hoch"
+      -- von "kann diese Stufe nicht halten" unterscheiden koennen, und
+      -- das geht nur ueber die Zeit.
+      self.capacity = rt2_capacity.update(self.capacity, input.turbines, { now_ms = now_ms })
     end
 
     local state = self.machine.tick({
@@ -180,13 +193,27 @@ function M.new(opts)
     reactor_decision.activate = rt2_reactor.compute_active_decision(input.reactor and input.reactor.active)
 
     local turbine_count = #(input.turbines or {})
+
+    -- Wieviele Turbinen jetzt laufen duerfen. Waehrend des Einlernens ist
+    -- das die Stufe, die der Suchlauf gerade prueft; danach die gemessene
+    -- tragbare Anzahl. Nur solange noch gar nichts bekannt ist (kein
+    -- Suchlauf gelaufen, kein Cache), bleibt es unbegrenzt -- dann
+    -- verhaelt sich der Knoten wie vorher.
+    local max_active
+    if state == rt2_state.states.LEARNING then
+      max_active = self.capacity.released
+    elseif self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
+      max_active = self.capacity.sustainable_turbines
+    end
+
     local turbine_results = {}
     for index, t in ipairs(input.turbines or {}) do
-      local slot_index = rotated_slot(index, turbine_count, now_ms)
+      local slot_index = rotated_slot(index, turbine_count, now_ms, state)
       local target_rpm = rt2_turbine.compute_target_rpm(state, {
         turbine_count = turbine_count,
         slot_index = slot_index,
         power_percent = input.master_percent or self.master_percent,
+        max_active = max_active,
       })
       local flow_decision = rt2_turbine.compute_flow_decision({
         rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
@@ -214,6 +241,7 @@ function M.new(opts)
       reactor_decision = reactor_decision,
       turbines = turbine_results,
       capacity = self.capacity,
+      max_active = max_active,
       tuning = self.tuning_profile,
       tuning_samples = self.tuning_state.n,
     }

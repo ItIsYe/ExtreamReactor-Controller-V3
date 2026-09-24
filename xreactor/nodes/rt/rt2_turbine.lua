@@ -68,26 +68,55 @@ end
 --     turbine sits cold forever (rotation is the caller's job -- this
 --     function takes the already-rotated slot_index).
 --   - SAFE: 0 for everyone.
+-- opts.max_active: wieviele Turbinen ueberhaupt laufen duerfen.
+--
+-- Das ist der eine Begriff, der in JEDEM Zustand gilt -- waehrend des
+-- Einlernens die aktuell freigegebene Stufe (rt2_capacity staffelt sie
+-- hoch), danach die gelernte tragbare Anzahl. Ohne ihn setzt jeder Zustand
+-- ausser MASTER alle Turbinen auf das volle Ziel, und eine dampfbegrenzte
+-- Anlage reisst sich dabei selbst den Dampf weg: keine Turbine erreicht
+-- die Zieldrehzahl, weil alle gleichzeitig daran ziehen.
+--
+-- nil bedeutet "keine Grenze bekannt" -- dann verhaelt sich alles wie
+-- frueher und jede Turbine bekommt ihr volles Ziel.
+local function active_limit(opts, turbine_count)
+  local limit = tonumber(opts.max_active)
+  if not limit then return turbine_count end
+  if limit < 0 then return 0 end
+  if limit > turbine_count then return turbine_count end
+  return math.floor(limit)
+end
+
 function M.compute_target_rpm(state, opts)
   opts = opts or {}
   if state == "SAFE" then
     return 0
   end
+
+  local n = tonumber(opts.turbine_count) or 0
+  local slot_index = tonumber(opts.slot_index) or 1
+
   if state == "LEARNING" or state == "AUTONOM" then
+    if n > 0 and slot_index > active_limit(opts, n) then return 0 end
     return M.FULL_TARGET_RPM
   end
-  if state == "MASTER" then
-    local n = tonumber(opts.turbine_count) or 0
-    if n <= 0 then return M.FULL_TARGET_RPM end
-    local slot_index = tonumber(opts.slot_index) or 1
-    local percent = clamp(tonumber(opts.power_percent) or 100, 0, 100)
 
-    local exact = percent / 100 * n
+  if state == "MASTER" then
+    if n <= 0 then return M.FULL_TARGET_RPM end
+    local max_active = active_limit(opts, n)
+    -- Jenseits der tragbaren Anzahl bleibt eine Turbine immer aus -- die
+    -- Leistungsvorgabe wird NUR auf den tragbaren Teil der Flotte verteilt.
+    -- Sonst bedeutet "100 %" wieder "alle 25 gleichzeitig", was diese
+    -- Anlage gerade nicht kann, und die Vorgabe liesse sich nie erfuellen.
+    if max_active <= 0 or slot_index > max_active then return 0 end
+
+    local percent = clamp(tonumber(opts.power_percent) or 100, 0, 100)
+    local exact = percent / 100 * max_active
     local full = math.floor(exact)
     local remainder = exact - full
-    local has_partial = remainder > 0.001 and full < n
+    local has_partial = remainder > 0.001 and full < max_active
     local partial_rpm = has_partial and math.max(1, math.floor(M.FULL_TARGET_RPM * remainder + 0.5)) or 0
-    local off_count = n - full - (has_partial and 1 or 0)
+    local off_count = max_active - full - (has_partial and 1 or 0)
 
     if slot_index <= off_count then
       return 0

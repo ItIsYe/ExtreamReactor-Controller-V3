@@ -178,27 +178,42 @@ function M.tick(ctx)
   -- locally, same as the engine=v2 activation hint) only when the
   -- diagnostic actually changes, not every tick -- this is the same
   -- dirty-check discipline as the capacity-cache save below.
-  if not result.capacity.ready then
-    local diag = string.format("%d/%d %s", result.capacity.at_target or 0,
-      result.capacity.total_turbines or 0, tostring(result.capacity.reason))
-    if diag ~= last_logged_capacity_diag then
-      last_logged_capacity_diag = diag
-      local msg = "v2 Einlernen (LEARNING): " .. diag
-        .. " -- Turbinen im Zielbereich (RPM+Spule engaged+Energieausstoss>0) vs. Gesamtzahl"
-      -- FLOW_SATURATED is not "still ramping" -- it means the turbines are
-      -- already drawing every drop the mod lets them and still fall short,
-      -- so waiting changes nothing. Say that outright instead of letting
-      -- the operator watch a counter that will never move.
-      if result.capacity.reason == "FLOW_SATURATED" then
-        msg = msg .. string.format(
-          "\n[RT] >> %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM."
-          .. " Warten hilft hier nicht: entweder liefert der Reaktor zu wenig Dampf"
-          .. " (Staebe stehen auf %s, Untergrenze %d%% = ~%d%% Leistung)"
-          .. " oder es haengen zu viele Turbinen an diesem Reaktor.",
-          result.capacity.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
-          tostring(result.reactor_decision and result.reactor_decision.rods),
-          rt2_reactor.ROD_MIN, 100 - rt2_reactor.ROD_MIN)
-      end
+  -- Den Suchlauf sichtbar machen. Das Einlernen ist jetzt ein Vorgang mit
+  -- Fortschritt ("Stufe 7 von 25 haelt"), nicht mehr ein Zaehler, der sich
+  -- entweder bewegt oder eben nicht -- und der Bediener soll sehen, dass
+  -- es vorangeht, statt auf einen stehenden Wert zu starren.
+  local diag = string.format("%s|%s|%s|%s", tostring(result.capacity.reason),
+    tostring(result.max_active), tostring(result.capacity.sustainable_turbines),
+    tostring(result.capacity.ready))
+  if diag ~= last_logged_capacity_diag then
+    last_logged_capacity_diag = diag
+    local cap = result.capacity
+    local msg
+    if cap.reason == "STEP_UP" then
+      msg = string.format("v2 Einlernen: %d Turbine(n) tragen stabil -- gebe die naechste frei (%d von %d)",
+        cap.sustainable_turbines, result.max_active or 0, cap.total_turbines or 0)
+    elseif cap.reason == "LIMIT_FOUND" then
+      msg = string.format(
+        "v2 Einlernen FERTIG: diese Anlage traegt %d von %d Turbinen, gemessener Ausstoss %.0f."
+        .. " Die uebrigen %d bleiben abgestellt -- der Reaktor liefert nicht genug Dampf fuer mehr.",
+        cap.sustainable_turbines, cap.total_turbines or 0, cap.max_output or 0,
+        (cap.total_turbines or 0) - cap.sustainable_turbines)
+    elseif cap.reason == "ALL_SUSTAINED" then
+      msg = string.format("v2 Einlernen FERTIG: alle %d Turbinen tragen, gemessener Ausstoss %.0f.",
+        cap.total_turbines or 0, cap.max_output or 0)
+    elseif cap.reason == "NO_STEAM" then
+      msg = string.format(
+        "v2 Einlernen HAENGT: nicht einmal EINE Turbine haelt %d RPM."
+        .. " Staebe stehen auf %s (Untergrenze %d%% = ~%d%% Leistung) -- der Reaktor liefert keinen Dampf.",
+        rt2_capacity.TARGET_RPM, tostring(result.reactor_decision and result.reactor_decision.rods),
+        rt2_reactor.ROD_MIN, 100 - rt2_reactor.ROD_MIN)
+    elseif cap.reason == "TOPOLOGY_CHANGED" then
+      msg = string.format("v2 Turbinenzahl geaendert (%d) -- Anlage wird neu vermessen", cap.total_turbines or 0)
+    elseif not cap.ready then
+      msg = string.format("v2 Einlernen: pruefe Stufe %d von %d (%s)",
+        result.max_active or cap.released or 0, cap.total_turbines or 0, tostring(cap.reason))
+    end
+    if msg then
       ctx.log("INFO", msg)
       pcall(print, "[RT] " .. msg)
     end

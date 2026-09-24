@@ -1,120 +1,178 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
 local rt2_capacity = require('nodes.rt.rt2_capacity')
+local rt2_turbine = require('nodes.rt.rt2_turbine')
 
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
 
-local function turbine(rpm, energy, coil_engaged)
-  return { rpm = rpm, energy = energy, coil_engaged = coil_engaged ~= false }
+local function turbine(rpm, energy, coil_engaged, flow)
+  return { rpm = rpm, energy = energy, coil_engaged = coil_engaged ~= false, current_flow = flow or 0 }
 end
 
--- Not enough turbines at target -> not ready.
+-- Eine Anlage, die `carries` von `total` Turbinen auf Zieldrehzahl haelt.
+-- Alles darueber haengt bei vollem Flow darunter fest -- der Zustand, den
+-- eine dampfbegrenzte Anlage tatsaechlich zeigt.
+local function plant(total, carries, each)
+  local f = {}
+  for i = 1, total do
+    if i <= carries then f[i] = turbine(900, each or 100, true, 1200)
+    else f[i] = turbine(780, 0, false, rt2_turbine.MAX_FLOW) end
+  end
+  return f
+end
+
+-- Treibt den Suchlauf so lange, bis er fertig ist (oder die Geduld endet).
+local function run_search(fleet, max_ticks)
+  local state, now = rt2_capacity.new_state(), 1000
+  for _ = 1, (max_ticks or 60) do
+    state = rt2_capacity.update(state, fleet, { now_ms = now })
+    if state.ready then return state, now end
+    now = now + rt2_capacity.SETTLE_MS
+  end
+  return state, now
+end
+
+-- ── Der Suchlauf findet, was die Anlage wirklich traegt ──────────────────
+
 do
-  local s = rt2_capacity.update(rt2_capacity.new_state(), {
-    turbine(900, 100), turbine(300, 0), turbine(300, 0)
-  })
-  assert_true(not s.ready, 'below MIN_FRACTION at target must not become ready')
+  -- Alle fuenf tragbar -> der Suchlauf laeuft bis ans Ende durch.
+  local s = run_search(plant(5, 5, 100))
+  assert_true(s.ready, 'eine Anlage, die ihre ganze Flotte traegt, lernt fertig ein')
+  assert_eq(s.reason, 'ALL_SUSTAINED')
+  assert_eq(s.sustainable_turbines, 5)
+  -- GEMESSEN, nicht hochgerechnet: 5 x 100 minus 5 % Reserve.
+  assert_eq(s.max_output, 500 * (1 - rt2_capacity.SAFETY_MARGIN))
 end
 
--- Enough turbines at target -> ready, with the safety margin applied.
 do
-  local s = rt2_capacity.update(rt2_capacity.new_state(), {
-    turbine(900, 100), turbine(905, 100)
-  })
-  assert_true(s.ready, 'all turbines at target must become ready')
-  assert_eq(s.max_output, 200 * (1 - rt2_capacity.SAFETY_MARGIN), 'max_output must be the measured peak minus the safety margin')
+  -- Nur drei von fuenf tragbar. Frueher war das der Totalausfall: die
+  -- 80-%-Schwelle (4 von 5) wurde nie erreicht, der Knoten lernte nie
+  -- fertig. Jetzt IST "drei" das Ergebnis.
+  local fleet = plant(5, 3, 100)
+  local state, now = rt2_capacity.new_state(), 1000
+  for _ = 1, 40 do
+    state = rt2_capacity.update(state, fleet, { now_ms = now })
+    if state.ready then break end
+    -- gross genug, dass die nicht tragbare Stufe auch wirklich auflaeuft
+    now = now + rt2_capacity.STEP_TIMEOUT_MS
+  end
+  assert_true(state.ready, 'eine dampfbegrenzte Anlage lernt trotzdem fertig ein')
+  assert_eq(state.reason, 'LIMIT_FOUND')
+  assert_eq(state.sustainable_turbines, 3, 'und kennt ihre tatsaechliche Grenze')
+  -- Entscheidend: 3 x 100, NICHT (300/3) * 5 = 500 wie die alte Formel.
+  assert_eq(state.max_output, 300 * (1 - rt2_capacity.SAFETY_MARGIN),
+    'die Kapazitaet ist die gemessene Summe, keine Hochrechnung auf die Flotte')
 end
 
--- A higher subsequent measurement updates max_output; a lower one never
--- decreases it (copy-on-write: the previous state object itself must be
--- untouched).
 do
-  local s1 = rt2_capacity.update(rt2_capacity.new_state(), { turbine(900, 100), turbine(900, 100) })
-  local s2 = rt2_capacity.update(s1, { turbine(900, 120), turbine(900, 120) })
-  assert_true(s2.max_output > s1.max_output, 'a higher measurement must raise max_output')
-  assert_eq(s1.max_output, 100 * 2 * (1 - rt2_capacity.SAFETY_MARGIN), 'the earlier state object must not be mutated by a later update')
-
-  local s3 = rt2_capacity.update(s2, { turbine(900, 50), turbine(900, 50) })
-  assert_eq(s3.max_output, s2.max_output, 'a lower measurement must never decrease the learned max_output')
+  -- Nicht einmal eine einzige Turbine laesst sich halten. Daraus laesst
+  -- sich nichts lernen, also wird auch nichts gelernt -- und das muss
+  -- benannt werden, statt still zu haengen.
+  local fleet = plant(5, 0)
+  local state, now = rt2_capacity.new_state(), 1000
+  for _ = 1, 10 do
+    state = rt2_capacity.update(state, fleet, { now_ms = now })
+    now = now + rt2_capacity.STEP_TIMEOUT_MS
+  end
+  assert_true(not state.ready, 'ohne eine einzige tragbare Turbine gibt es nichts zu lernen')
+  assert_eq(state.reason, 'NO_STEAM')
+  assert_eq(state.sustainable_turbines, 0)
 end
 
--- Turbine COUNT change invalidates the OLD learned value (the only thing
--- that should) -- it does not carry the stale max_output forward, even if
--- a fresh measurement on the new fleet happens to succeed immediately.
+-- ── Eine Stufe muss sich HALTEN, nicht nur kurz streifen ─────────────────
+
 do
-  local s1 = rt2_capacity.update(rt2_capacity.new_state(), { turbine(900, 100), turbine(900, 100) })
-  assert_true(s1.ready, 'sanity: learned with 2 turbines')
-  local old_max = s1.max_output
+  local fleet = plant(3, 3, 100)
+  local s = rt2_capacity.update(rt2_capacity.new_state(), fleet, { now_ms = 1000 })
+  assert_eq(s.reason, 'TOPOLOGY_CHANGED', 'der erste Takt nimmt die Flottengroesse auf')
+  s = rt2_capacity.update(s, fleet, { now_ms = 2000 })
+  assert_eq(s.reason, 'SETTLING', 'die Stufe traegt -- aber erst seit einem Augenblick')
+  assert_eq(s.sustainable_turbines, 0, 'ein Augenblick zaehlt nicht')
 
-  -- New fleet size, and it happens to already be at target -> re-measures
-  -- immediately with the NEW turbine count, not the stale 2-turbine value.
-  local s2 = rt2_capacity.update(s1, { turbine(900, 100), turbine(900, 100), turbine(900, 100) })
-  assert_true(s2.ready, 'a fresh measurement on the new fleet must be accepted on its own merits')
-  assert_true(s2.max_output ~= old_max, 'the new measurement must not just carry the old (wrong-fleet-size) max_output forward')
-  assert_eq(s2.max_output, 300 * (1 - rt2_capacity.SAFETY_MARGIN), 'the new max_output must reflect the new turbine count, not the old one')
-
-  -- New fleet size, NOT yet re-measured (e.g. still spinning up) -> must
-  -- drop to not-ready rather than keep reporting the old fleet's value.
-  local s3 = rt2_capacity.update(s1, { turbine(100, 0), turbine(100, 0), turbine(100, 0) })
-  assert_true(not s3.ready, 'a turbine count change with no valid fresh measurement yet must not stay ready on the old value')
-  assert_eq(s3.max_output, 0, 'an invalidated-but-not-yet-remeasured state must not report the stale max_output')
-  assert_eq(s3.reason, 'TOPOLOGY_CHANGED')
+  -- Kurz aus dem Fenster gefallen -> die Einschwingzeit beginnt von vorn.
+  s = rt2_capacity.update(s, plant(3, 0), { now_ms = 2000 + rt2_capacity.SETTLE_MS - 1 })
+  assert_eq(s.sustainable_turbines, 0, 'eine unterbrochene Stufe zaehlt nicht')
+  s = rt2_capacity.update(s, fleet, { now_ms = 2000 + rt2_capacity.SETTLE_MS })
+  assert_eq(s.reason, 'SETTLING', 'nach der Unterbrechung laeuft die Einschwingzeit neu')
 end
 
--- Regression (the actual production bug this module exists to make
--- impossible): a turbine fleet that keeps the SAME COUNT across a restart
--- but gets renamed peripherals must NOT invalidate learning. This module
--- never even sees names -- only count -- so there is nothing to get wrong
--- here, but assert the persistence contract explicitly.
+-- ── Was den gelernten Wert verwirft, und was nicht ───────────────────────
+
+do
+  local s = run_search(plant(2, 2, 100))
+  assert_true(s.ready)
+  local learned_max = s.max_output
+
+  -- Umbau: andere Turbinenzahl -> der Suchlauf beginnt von vorn.
+  local changed = rt2_capacity.update(s, plant(3, 3, 100), { now_ms = 99000 })
+  assert_true(not changed.ready, 'eine geaenderte Turbinenzahl verwirft den Wert')
+  assert_eq(changed.reason, 'TOPOLOGY_CHANGED')
+  assert_eq(changed.released, rt2_capacity.START_COUNT, 'und der Suchlauf beginnt wieder unten')
+  assert_eq(changed.max_output, 0, 'der alte Wert darf nicht stehenbleiben')
+
+  -- Ein Takt ganz ohne Turbinen-Lesung ist KEIN Umbau, sondern eine
+  -- fehlende Messung (Discovery-Aussetzer). Der wuerde sonst einen
+  -- minutenlangen Suchlauf umsonst ausloesen.
+  local blind = rt2_capacity.update(s, {}, { now_ms = 99000 })
+  assert_true(blind.ready, 'ein Takt ohne Lesung darf die gelernte Anlage nicht wegwerfen')
+  assert_eq(blind.max_output, learned_max)
+  assert_eq(blind.reason, 'NO_TURBINES')
+
+  -- Der Ausgangszustand selbst bleibt unangetastet (copy-on-write).
+  assert_eq(s.max_output, learned_max, 'update() darf den uebergebenen Zustand nicht veraendern')
+  assert_true(s.ready)
+end
+
+-- ── Saettigung sichtbar machen ───────────────────────────────────────────
+
+do
+  -- Volle Foerderung, trotzdem zu langsam: keine Reglerreserve mehr da.
+  local s = rt2_capacity.update(rt2_capacity.new_state(), plant(5, 0), { now_ms = 1000 })
+  s = rt2_capacity.update(s, plant(5, 0), { now_ms = 2000 })
+  assert_eq(s.reason, 'FLOW_SATURATED', 'Saettigung muss benannt werden')
+  assert_true(s.saturated > 0)
+
+  -- Dieselbe Drehzahl, aber der Flow hat noch Luft: echtes Hochrampen.
+  local ramping = { turbine(780, 0, false, 400) }
+  local r = rt2_capacity.update(rt2_capacity.new_state(), ramping, { now_ms = 1000 })
+  r = rt2_capacity.update(r, ramping, { now_ms = 2000 })
+  assert_eq(r.reason, 'SPINNING_UP', 'mit Flow-Reserve ist es noch Hochlaufen')
+  assert_eq(r.saturated, 0)
+end
+
+-- ── Persistenz ───────────────────────────────────────────────────────────
+
 do
   local files = {}
   local write_config = function(path, data) files[path] = data; return true end
   local read_config = function(path) return files[path] end
 
-  local learned = rt2_capacity.update(rt2_capacity.new_state(), { turbine(900, 100), turbine(900, 100) })
-  local ok = rt2_capacity.save(learned, { path = '/cache', write_config = write_config })
-  assert_true(ok, 'save must succeed once ready')
+  local learned = run_search(plant(2, 2, 100))
+  assert_true(rt2_capacity.save(learned, { path = '/cache', write_config = write_config }),
+    'save must succeed once ready')
 
-  -- "Reboot": same turbine COUNT, different (irrelevant here) names.
-  local reloaded = rt2_capacity.load({ path = '/cache', read_config = read_config, turbine_count = 2 })
-  assert_true(reloaded ~= nil, 'a same-count reload must accept the cached value -- renamed peripherals are invisible to this module')
-  assert_eq(reloaded.max_output, learned.max_output)
+  -- Neustart mit gleicher Anzahl: der Cache gilt. Umbenannte Peripherals
+  -- sieht dieses Modul gar nicht -- es kennt nur die Anzahl.
+  local back = rt2_capacity.load({ path = '/cache', read_config = read_config, turbine_count = 2 })
+  assert_true(back ~= nil, 'a same-count reload must accept the cached value')
+  assert_eq(back.max_output, learned.max_output)
+  assert_eq(back.sustainable_turbines, learned.sustainable_turbines,
+    'ohne die tragbare Anzahl waere der ganze Suchlauf beim Neustart umsonst')
+  assert_eq(back.released, back.sustainable_turbines)
 
-  -- A genuine hardware change (count differs) must reject the cache.
-  local rejected = rt2_capacity.load({ path = '/cache', read_config = read_config, turbine_count = 3 })
-  assert_true(rejected == nil, 'a turbine count mismatch must reject the cached value')
-end
+  -- Echter Umbau -> Cache verwerfen.
+  assert_true(rt2_capacity.load({ path = '/cache', read_config = read_config, turbine_count = 3 }) == nil,
+    'a turbine count mismatch must reject the cached value')
 
-
--- ── Saettigung vs. "rampt noch hoch" ─────────────────────────────────────
---
--- Ein Knoten, dessen Turbinen bei vollem Flow die Zieldrehzahl nicht
--- erreichen, lernt NIE fertig ein. Vorher sah das exakt aus wie "rampt
--- noch hoch" (NONE_AT_TARGET) und der Bediener wartete auf einen Zaehler,
--- der sich nie bewegt. Das muss unterscheidbar sein.
-do
-  local rt2_turbine = require('nodes.rt.rt2_turbine')
-  local saturated_reading = {}
-  for i = 1, 5 do
-    saturated_reading[i] = { rpm = 840, energy = 300, coil_engaged = true,
-                             current_flow = rt2_turbine.MAX_FLOW }
-  end
-  local state = rt2_capacity.update(rt2_capacity.new_state(), saturated_reading)
-  state = rt2_capacity.update(state, saturated_reading)
-  assert_eq(state.ready, false, 'saturated turbines must not count as learned')
-  assert_eq(state.reason, 'FLOW_SATURATED', 'and the reason must name the saturation')
-  assert_eq(state.saturated, 5, 'all five turbines are saturated')
-
-  -- Dieselbe Drehzahl, aber der Flow hat noch Luft: das ist echtes Hochrampen.
-  local ramping = {}
-  for i = 1, 5 do
-    ramping[i] = { rpm = 840, energy = 300, coil_engaged = true, current_flow = 400 }
-  end
-  local ramp_state = rt2_capacity.update(rt2_capacity.new_state(), ramping)
-  ramp_state = rt2_capacity.update(ramp_state, ramping)
-  assert_eq(ramp_state.reason, 'NONE_AT_TARGET', 'a turbine with flow headroom is still ramping')
-  assert_eq(ramp_state.saturated, 0)
+  -- Ein Cache aus der Zeit VOR dem Suchlauf enthaelt nur eine
+  -- hochgerechnete Kapazitaet und keine tragbare Anzahl. Der Wert ist auf
+  -- einer dampfbegrenzten Anlage um ein Vielfaches zu hoch, also wird er
+  -- verworfen statt uebernommen.
+  files['/alt'] = { ready = true, max_output = 25000, turbine_count = 25 }
+  local old, why = rt2_capacity.load({ path = '/alt', read_config = read_config, turbine_count = 25 })
+  assert_true(old == nil, 'ein alter Cache ohne gemessene Turbinenzahl darf nicht uebernommen werden')
+  assert_true(tostring(why):find('alter Cache'), 'und der Grund muss genannt werden: ' .. tostring(why))
 end
 
 print('rt2_capacity_test.lua: ok')

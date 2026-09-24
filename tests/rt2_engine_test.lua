@@ -42,8 +42,16 @@ _G.textutils = {
   end,
 }
 
+-- Ohne Uhr steht now_ms auf 0 und der gestaffelte Suchlauf koennte nie
+-- einschwingen -- er unterscheidet "faehrt noch hoch" von "kann diese
+-- Stufe nicht halten" ueber die Zeit.
+local clock_ms = 1000000
+os.epoch = function() return clock_ms end
+local function advance(ms) clock_ms = clock_ms + (ms or 1000) end
+
 local rt2_engine = require('nodes.rt.rt2_engine')
 local rt2_state = require('nodes.rt.rt2_state')
+local rt2_capacity = require('nodes.rt.rt2_capacity')
 
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
@@ -160,9 +168,22 @@ files[cache_path] = nil
 
 rt2_engine.init({ cache_path = cache_path, turbine_count = 1 })
 applied_flow, applied_coil, applied_rods = {}, {}, nil
-result = rt2_engine.tick(fake_ctx)
-assert_true(result.capacity.ready, 'a single turbine already at target rpm must be ready after one tick')
+-- Der Suchlauf gibt die einzige Turbine frei, wartet die Einschwingzeit
+-- ab und ist damit am Ende der Flotte angekommen -> fertig eingelernt.
+for _ = 1, 4 do
+  result = rt2_engine.tick(fake_ctx)
+  advance(rt2_capacity.SETTLE_MS)
+end
+assert_true(result.capacity.ready, 'eine tragende Ein-Turbinen-Anlage ist nach dem Einschwingen eingelernt')
+assert_eq(result.capacity.sustainable_turbines, 1)
 assert_true(files[cache_path] ~= nil, 'a ready capacity measurement must be persisted to the cache file')
+do
+  local cached = load('return ' .. tostring(files[cache_path]), '=cache', 't', {})
+  cached = cached and cached() or nil
+  assert_true(type(cached) == 'table', 'der Cache muss lesbar sein')
+  assert_eq(cached.sustainable_turbines, 1,
+    'der Cache muss die tragbare Anzahl mitfuehren, sonst war der Suchlauf beim Neustart umsonst')
+end
 
 -- INIT always spends its first tick becoming LEARNING (rt2_state.lua's
 -- INIT branch does not look at capacity_ready), but with a cache already
