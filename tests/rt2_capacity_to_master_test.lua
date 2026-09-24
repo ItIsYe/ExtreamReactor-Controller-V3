@@ -32,11 +32,12 @@ do
   for _ = 1, 60 do
     state = rt2_capacity.update(state, fleet, { now_ms = now })
     if state.ready then break end
-    now = now + rt2_capacity.STEP_TIMEOUT_MS
+    now = now + rt2_capacity.STABLE_MS
   end
 
   assert_true(state.ready, 'der Knoten muss trotz begrenztem Dampf zu einem Ergebnis kommen')
-  assert_eq(state.sustainable_turbines, CARRIES)
+  assert_eq(state.sustainable_turbines, CARRIES,
+    'gemerkt wird, wieviele Turbinen liefen, als der Hoechstwert floss')
 
   local really_deliverable = CARRIES * EACH                  -- 6000 RF/t
   local extrapolated_old   = (CARRIES * EACH / CARRIES) * TOTAL -- 25000 RF/t (alte Formel)

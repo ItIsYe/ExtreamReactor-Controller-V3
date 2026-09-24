@@ -245,29 +245,24 @@ assert_true((last.capacity.max_output or 0) > 0, 'a learned capacity must carry 
 -- stayed frozen at its boot state "OFF" -- MASTER counts state=="RUNNING"/
 -- "STABLE" and its startup sequencer WAITS for "STABLE", so a perfectly
 -- regulating v2 node looked dead and stalled MASTER forever.
---
--- Seit dem gestaffelten Einlernen ist "OFF" fuer eine Turbine allerdings
--- ein LEGITIMER Zustand: diese Anlage traegt nicht ihre ganze Flotte, der
--- Ueberhang steht absichtlich still. Die Zusage lautet deshalb nicht mehr
--- "keine ist OFF", sondern: genau die tragbaren laufen und werden auch so
--- gemeldet, und keine steht ohne Grund still.
-local stable_turbines, off_turbines = 0, 0
+local stable_turbines, off_modules = 0, 0
 for id, module in pairs(modules_registry) do
-  if module.type == 'turbine' then
-    if module.state == 'OFF' then off_turbines = off_turbines + 1 end
-    if module.state == 'STABLE' then stable_turbines = stable_turbines + 1 end
-  else
-    assert_true(module.state ~= 'OFF', 'module ' .. id .. ' must not sit at its boot state once running')
-  end
+  if module.state == 'OFF' then off_modules = off_modules + 1 end
+  if module.type == 'turbine' and module.state == 'STABLE' then stable_turbines = stable_turbines + 1 end
   assert_true(module.state ~= nil, 'module ' .. id .. ' must carry a projected state')
 end
+assert_eq(off_modules, 0, 'no module may still sit at its boot state "OFF" once the node is running')
+assert_true(stable_turbines > 0, 'turbines at target must be reported STABLE so MASTER can advance its sequencer')
+
+-- Diese Anlage hat genug Dampf fuer ihre ganze Flotte -- dann muss das
+-- Einlernen das auch so messen und darf nichts deckeln.
 local sustainable = last.capacity.sustainable_turbines
-assert_true(sustainable > 0 and sustainable < TURBINE_COUNT,
-  'diese Anlage traegt absichtlich nur einen Teil ihrer Flotte -- gelernt: ' .. tostring(sustainable))
-assert_eq(stable_turbines, sustainable,
-  'genau die tragbaren Turbinen muessen als STABLE gemeldet werden')
-assert_eq(off_turbines, TURBINE_COUNT - sustainable,
-  'und genau der Ueberhang als OFF -- absichtlich geparkt, nicht vergessen')
+assert_eq(sustainable, TURBINE_COUNT,
+  'eine Anlage mit genug Dampf muss alle Turbinen gleichzeitig gemessen haben')
+assert_eq(stable_turbines, TURBINE_COUNT, 'und alle laufen')
+assert_true(last.max_active == nil or last.max_active >= TURBINE_COUNT,
+  'und nichts wird gedeckelt')
+assert_true(last.capacity.max_output > 0, 'mit einem positiven, gemessenen Gesamtausstoss')
 assert_eq(modules_registry['reactor:' .. REACTOR_NAME].state, 'STABLE', 'a running reactor must be reported STABLE')
 
 -- status_fields() must carry the node state payload.state should report,

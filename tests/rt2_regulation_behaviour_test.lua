@@ -187,14 +187,12 @@ end
 
 -- ═══ 3. Einlernen: misst nur, was wirklich am Ziel ist ═══
 do
-  -- Der Suchlauf: er gibt eine Turbine nach der anderen frei und haelt an,
-  -- wenn eine Stufe sich nicht halten laesst. Frueher stand hier die
-  -- 80-%-Schwelle -- die war auf einer dampfbegrenzten Anlage unerreichbar
-  -- und ist deshalb durch diesen Suchlauf ersetzt.
+  -- Gemessen wird der hoechste Gesamtausstoss, der tatsaechlich floss --
+  -- ohne Schwelle, ohne Staffelung, ohne guenstigen Augenblick. Frueher
+  -- stand hier eine 80-%-Regel: waren nie genug Turbinen GLEICHZEITIG im
+  -- Messfenster, lieferte das Einlernen ueberhaupt keine Zahl.
   local o = orchestrator.new()
   local function fleet_at(n_running)
-    -- n_running Turbinen auf Ziel, der Rest steht (Ziel 0, also gar nicht
-    -- erst freigegeben) bzw. haengt bei vollem Flow darunter fest.
     local f = {}
     for i = 1, 5 do
       if i <= n_running then f[i] = turbine('T' .. i, 900, 1000, true, 100, true)
@@ -203,44 +201,31 @@ do
     return f
   end
 
-  -- Stufe 1 traegt und haelt sich -> zaehlt, Suchlauf rueckt vor.
+  -- Beim Einlernen wird nichts gedeckelt -- alle fahren auf Ziel.
   local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
-  assert_eq(r.max_active, 1, 'der Suchlauf beginnt mit einer einzigen Turbine')
-
-  -- Der Einschwing-Zaehler laeuft erst ab dem Takt, an dem die Stufe
-  -- ERSTMALS traegt -- ein einzelner Durchgang durch das Messfenster
-  -- beim Hochlaufen soll gerade nicht zaehlen.
-  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
-  assert_eq(r.capacity.reason, 'SETTLING')
-  assert_eq(r.capacity.sustainable_turbines, 0, 'noch nichts nachgewiesen')
-
-  r = o.tick({ now_ms = 2000 + rt2_capacity.SETTLE_MS, hardware_ready = true,
-               reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
-  assert_eq(r.capacity.sustainable_turbines, 1)
-  assert_eq(r.max_active, 2, 'nach bestandener Stufe wird eine weitere freigegeben')
-
-  -- Bis Stufe 3 geht es durch, danach traegt die Anlage nichts mehr.
-  local now = 2000 + rt2_capacity.SETTLE_MS
-  for _ = 1, 8 do
-    now = now + rt2_capacity.SETTLE_MS
-    r = o.tick({ now_ms = now, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_true(r.max_active == nil, 'beim Einlernen deckelt der Knoten nichts')
+  for _, t in ipairs(r.turbines) do
+    assert_eq(t.target_rpm, 900, 'jede Turbine bekommt das volle Ziel')
   end
-  assert_eq(r.capacity.sustainable_turbines, 3, 'drei Turbinen sind nachweislich tragbar')
-  assert_true(not r.capacity.ready, 'Stufe 4 laeuft noch -- der Suchlauf ist nicht fertig')
-  assert_eq(r.state, rt2_state.states.LEARNING, 'und der Knoten bleibt solange im Einlernen')
 
-  -- Stufe 4 laesst sich nicht halten. Nach der Wartezeit ist das die
-  -- Antwort, kein Fehlschlag: die Anlage traegt drei.
-  now = now + rt2_capacity.STEP_TIMEOUT_MS
-  r = o.tick({ now_ms = now, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
-  assert_true(r.capacity.ready, 'eine nicht haltbare Stufe beendet den Suchlauf mit einem Ergebnis')
-  assert_eq(r.capacity.reason, 'LIMIT_FOUND')
-  assert_eq(r.capacity.sustainable_turbines, 3)
+  -- Drei liefern -> das ist der Messwert. Drei von fuenf haette die alte
+  -- 80-%-Regel (vier noetig) verworfen und gar nichts gelernt.
+  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_eq(r.capacity.reason, 'MEASURING')
+  assert_true(not r.capacity.ready, 'ein einzelner Messwert legt noch nichts fest')
+
+  r = o.tick({ now_ms = 2000 + rt2_capacity.STABLE_MS + 1, hardware_ready = true,
+               reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_true(r.capacity.ready, 'bleibt der Hoechstwert stehen, ist die Anlage ausgemessen')
+  assert_eq(r.capacity.sustainable_turbines, 3, 'drei Turbinen lieferten den Hoechstwert')
   -- Gemessen, NICHT hochgerechnet: 3 x 100 minus 5 % Reserve. Die alte
-  -- Formel haette hier (300/3) * 5 = 500 eingetragen, also das Ausstossmass
-  -- von fuenf Turbinen fuer eine Anlage, die drei traegt.
+  -- Formel haette (300/3) * 5 = 500 eingetragen -- das Ausstossmass von
+  -- fuenf Turbinen fuer eine Anlage, bei der drei lieferten.
   assert_eq(r.capacity.max_output, 285)
-  assert_eq(r.max_active, 3, 'und mehr als drei laesst der Knoten fortan nicht mehr laufen')
+
+  -- Und erst JETZT, nach dem Einlernen, wirkt die beobachtete Grenze.
+  r = o.tick({ now_ms = 400000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_eq(r.max_active, 3, 'im Betrieb faehrt der Knoten nicht mehr an, als je getragen haben')
 end
 
 -- ═══ 4. Reaktorregelung: nur Dampftank, in JEDEM Modus gleich ═══

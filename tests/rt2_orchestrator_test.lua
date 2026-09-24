@@ -40,33 +40,26 @@ do
   })
   assert_eq(result.state, rt2_state.states.LEARNING, 'must enter LEARNING on first tick with hardware, regardless of MASTER')
 
-  -- Gestaffelt: nur die erste Turbine ist freigegeben, die zweite steht
-  -- absichtlich still. Wuerden beide gleichzeitig ziehen, koennte auf
-  -- einer dampfbegrenzten Anlage keine von beiden ihr Ziel erreichen --
-  -- genau der Grund fuer den Suchlauf.
-  assert_eq(result.turbines[1].target_rpm, 900, 'die freigegebene Turbine faehrt auf Ziel')
-  assert_eq(result.turbines[2].target_rpm, 0, 'die noch nicht freigegebene bleibt stehen')
-  assert_true(not result.capacity.ready, 'capacity must not be ready before the search finished')
+  -- Beim Einlernen faehrt jede Turbine auf Ziel: gemessen wird, was die
+  -- Anlage wirklich gleichzeitig liefert, und dafuer muss sie zeigen
+  -- duerfen, was sie kann.
+  for _, t in ipairs(result.turbines) do
+    assert_eq(t.target_rpm, 900, 'LEARNING faehrt jede Turbine auf das feste Ziel')
+  end
+  assert_true(result.max_active == nil, 'und deckelt dabei nichts')
+  assert_true(not result.capacity.ready, 'capacity must not be ready before anything was measured')
 
-  -- Stufe 1 traegt -- aber erst, wenn sie das DURCHGEHEND tut, zaehlt sie.
-  -- Ein einzelner Takt im Messfenster ist beim Hochlaufen nichts wert.
+  -- Der Wert steht erst, wenn er sich eine Weile nicht mehr verbessert --
+  -- sonst friert ein Zwischenstand des Hochlaufs als Kapazitaet ein.
   local fleet = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }
   result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  assert_true(not result.capacity.ready, 'eine einzelne Messung reicht nicht -- die Stufe muss sich halten')
-  assert_eq(result.capacity.reason, 'SETTLING')
+  assert_true(not result.capacity.ready, 'ein einzelner Messwert legt noch nichts fest')
+  assert_eq(result.capacity.reason, 'MEASURING')
 
-  -- Nach der Beruhigungszeit rueckt der Suchlauf auf Stufe 2 vor ...
-  result = o.tick({ now_ms = 2000 + rt2_capacity.SETTLE_MS, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  assert_eq(result.capacity.reason, 'STEP_UP')
-  assert_eq(result.capacity.sustainable_turbines, 1, 'Stufe 1 ist nachgewiesen tragbar')
-  assert_eq(result.max_active, 2, 'und Stufe 2 ist jetzt freigegeben')
-
-  -- ... und weil das die letzte Stufe ist, ist der Suchlauf damit fertig.
-  o.tick({ now_ms = 3000 + rt2_capacity.SETTLE_MS, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  result = o.tick({ now_ms = 3000 + 2 * rt2_capacity.SETTLE_MS, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  assert_true(result.capacity.ready, 'die ganze Flotte traegt -> eingelernt')
+  result = o.tick({ now_ms = 2000 + rt2_capacity.STABLE_MS + 1, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
+  assert_true(result.capacity.ready, 'bleibt der Hoechstwert stehen, ist die Anlage ausgemessen')
+  assert_eq(result.capacity.reason, 'MEASURED')
   assert_eq(result.capacity.sustainable_turbines, 2)
-  assert_eq(result.capacity.reason, 'ALL_SUSTAINED')
   -- Gemessen, nicht hochgerechnet: 2 x 100, abzueglich 5 % Reserve.
   assert_eq(result.capacity.max_output, 190)
   assert_eq(result.state, rt2_state.states.MASTER, 'learning complete with MASTER connected must move straight to MASTER')
@@ -82,13 +75,13 @@ do
   local result = o.tick({ now_ms = 1000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
   assert_eq(result.state, rt2_state.states.LEARNING, 'learning must still happen with no MASTER present at all')
 
-  -- Denselben Suchlauf durchfahren, nur ohne MASTER.
+  -- Dieselbe Messung, nur ohne MASTER.
   local now = 1000
-  for _ = 1, 6 do
-    now = now + rt2_capacity.SETTLE_MS
+  for _ = 1, 4 do
+    now = now + rt2_capacity.STABLE_MS
     result = o.tick({ now_ms = now, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
   end
-  assert_true(result.capacity.ready, 'der Suchlauf laeuft auch voellig ohne MASTER durch')
+  assert_true(result.capacity.ready, 'die Messung laeuft auch voellig ohne MASTER durch')
   assert_eq(result.capacity.sustainable_turbines, 2)
 
   result = o.tick({ now_ms = now + 1000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })

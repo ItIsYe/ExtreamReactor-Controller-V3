@@ -33,28 +33,30 @@ M.TARGET_RPM = 900
 M.TOLERANCE_RPM = 15
 M.SAFETY_MARGIN = 0.05 -- store max_output as 95% of the measured peak
 
--- Gestaffeltes Einlernen.
+-- Was hier gemessen wird: der hoechste Gesamtausstoss, den dieser Knoten
+-- jemals nachweislich GLEICHZEITIG geliefert hat. Genau diese Zahl braucht
+-- MASTER, um seinen Leistungsbedarf gegen die Knoten aufzuteilen.
 --
--- WARUM: Die alte Messung verlangte, dass 80 % der Flotte GLEICHZEITIG auf
--- Zieldrehzahl stehen, und rechnete daraus mit
---     (Summe Ausstoss / am Ziel) * GESAMTZAHL
--- auf die ganze Flotte hoch. Beides setzt voraus, dass grundsaetzlich alle
--- Turbinen zugleich auf Ziel laufen KOENNTEN. Auf einer dampfbegrenzten
--- Anlage ist das falsch, und zwar doppelt:
---   1. Traegt der Reaktor nur 19 von 25, wird die 80-%-Schwelle nie
---      erreicht -- der Knoten lernt nie fertig, egal wie lange er laeuft.
---   2. Wuerde sie erreicht, stuende trotzdem eine erfundene Zahl drin:
---      bei 6 tragbaren von 25 das Vierfache dessen, was die Anlage je
---      liefern kann.
+-- Zwei frueher hier verbaute Verfahren waren beide falsch:
 --
--- Deshalb wird jetzt nicht mehr hochgerechnet, sondern GESUCHT: Der Knoten
--- gibt eine Turbine nach der anderen frei und schaut, ob die bereits
--- laufenden ihre Drehzahl halten. Die groesste Stufe, die sich stabil
--- halten laesst, IST die tragbare Anzahl -- und der dabei gemessene
--- Gesamtausstoss IST die Kapazitaet. Beides gemessen, nichts geschaetzt.
-M.SETTLE_MS = 4000     -- so lange muss eine Stufe durchgehend tragen, bevor sie zaehlt
-M.STEP_TIMEOUT_MS = 30000 -- schafft eine Stufe das nicht, ist die Grenze erreicht
-M.START_COUNT = 1
+--   1. Hochrechnen. Es wurden ein paar Turbinen gemessen und mit der
+--      GESAMTZAHL multipliziert. Das setzt voraus, dass alle zugleich auf
+--      Ziel laufen koennten -- wo das nicht gilt, stand eine Zahl im
+--      Cache, die die Anlage nie liefern konnte.
+--   2. Eine Mindestzahl gleichzeitig stabiler Turbinen (80 % der Flotte)
+--      als Bedingung ueberhaupt zu messen. Das macht die Messung von
+--      einem Zufall abhaengig -- alle muessen im selben Augenblick im
+--      Messfenster stehen -- und liefert bei Nichterfuellen gar nichts,
+--      ohne zu sagen warum.
+--
+-- Beides faellt weg, wenn man einfach das Maximum dessen behaelt, was
+-- tatsaechlich geflossen ist: Jeden Takt die Energie aller Turbinen
+-- summieren, die gerade am Ziel UND gekuppelt sind, und davon den
+-- Hoechstwert merken. Der kann die Anlage nicht ueberschaetzen (er zaehlt
+-- nur, was wirklich zugleich floss) und braucht keine Schwelle, keine
+-- Staffelung und keinen guenstigen Augenblick. Steigt er eine Weile nicht
+-- mehr, ist die Anlage ausgemessen.
+M.STABLE_MS = 6000  -- so lange darf sich der Hoechstwert nicht mehr verbessern
 
 local function copy(t)
   local out = {}
@@ -71,14 +73,15 @@ function M.new_state()
     -- (rt2_turbine.compute_target_rpm's max_active) -- sonst bedeutete
     -- "100 %" wieder "alle Turbinen", was die Anlage nicht kann.
     sustainable_turbines = 0,
-    -- Die Stufe, die der Suchlauf gerade prueft.
-    released = M.START_COUNT,
     at_target = 0,
     saturated = 0,
     total_turbines = 0,
     reason = "INIT",
-    step_started_ms = nil,
-    stable_since_ms = nil,
+    -- Der rohe Hoechstwert; max_output ist derselbe Wert abzueglich der
+    -- Sicherheitsreserve. Getrennt gehalten, damit die Reserve nicht bei
+    -- jeder Verbesserung erneut abgezogen wird.
+    best_output = 0,
+    last_improved_ms = nil,
   }
 end
 
@@ -90,18 +93,15 @@ end
 -- hang into a diagnosable condition -- see M.update()'s FLOW_SATURATED.
 M.SATURATION_FRACTION = 0.95
 
--- Misst NUR die freigegebenen Turbinen (die ersten `released` der Liste --
--- dieselbe Reihenfolge, nach der rt2_turbine sie ueber slot_index
--- freigibt). Eine noch gar nicht freigegebene Turbine steht absichtlich
--- still und darf die Messung weder verwaessern noch als "gesaettigt"
--- zaehlen.
-local function measure(turbines, released)
+-- Summiert den Ausstoss aller Turbinen, die GERADE am Ziel und gekuppelt
+-- sind, und zaehlt nebenbei, wieviele bei voller Foerderung trotzdem zu
+-- langsam sind (Saettigung -- reine Diagnose, keine Regelgroesse).
+local function measure(turbines)
   local total = #(turbines or {})
   if total == 0 then return 0, 0, 0, 0 end
   local max_flow = rt2_turbine.MAX_FLOW
-  local checked = math.min(released or total, total)
   local at_target, output, saturated = 0, 0, 0
-  for index = 1, checked do
+  for index = 1, total do
     local t = turbines[index]
     local rpm = tonumber(t.rpm)
     local energy = tonumber(t.energy) or 0
@@ -121,11 +121,8 @@ local function measure(turbines, released)
 end
 
 -- previous: a state table from M.new_state()/a prior M.update() call.
--- turbines: array of { rpm, energy, coil_engaged, current_flow }, in the
---           SAME order rt2_turbine assigns slot_index -- the first
---           `state.released` entries are the ones allowed to run.
--- opts.now_ms: the clock. The search needs it to tell "this step is still
---           spinning up" from "this step cannot be held".
+-- turbines: array of { rpm, energy, coil_engaged, current_flow }
+-- opts.now_ms: the clock -- needed to tell "still climbing" from "done".
 --
 -- Returns a NEW state table (copy-on-write, same discipline as before).
 function M.update(previous, turbines, opts)
@@ -135,10 +132,7 @@ function M.update(previous, turbines, opts)
   local total = #(turbines or {})
 
   -- Gar keine Turbinen gelesen ist KEIN Umbau, sondern eine fehlende
-  -- Messung -- ein Discovery-Aussetzer, ein Peripheral-Hickser. Frueher
-  -- lief das in denselben Zweig wie eine geaenderte Anzahl und haette
-  -- damit die gelernte Anlage weggeworfen; seit das Einlernen ein
-  -- minutenlanger Suchlauf ist, waere das richtig teuer. Also: melden,
+  -- Messung -- ein Discovery-Aussetzer, ein Peripheral-Hickser. Melden,
   -- nichts anfassen.
   if total == 0 then
     state.at_target, state.saturated = 0, 0
@@ -150,82 +144,58 @@ function M.update(previous, turbines, opts)
     -- Turbine COUNT changed: the only signal this module trusts as a real
     -- hardware change. A rename-only reshuffle (same count) never reaches
     -- this branch, so it can never invalidate a learned value the way the
-    -- old identity-signature cache did. The search restarts from the
-    -- bottom, because a changed fleet may well carry a different number.
+    -- old identity-signature cache did.
     state.ready = false
     state.max_output = 0
+    state.best_output = 0
     state.sustainable_turbines = 0
-    state.released = M.START_COUNT
-    state.step_started_ms = nil
-    state.stable_since_ms = nil
+    state.last_improved_ms = now_ms
     state.total_turbines = total
     state.reason = "TOPOLOGY_CHANGED"
     return state
   end
 
-  -- Fertig gesucht: nur noch beobachten, nichts mehr verstellen.
-  if state.ready then
-    -- Hier ueber die GANZE Flotte messen, nicht nur ueber die tragbare
-    -- Anzahl: im Betrieb ist at_target eine Diagnose ("wieviele laufen
-    -- gerade rund"), und unter MASTER bestimmt die Rotation ohnehin,
-    -- welche das sind.
-    local output, at_target, _, saturated = measure(turbines, nil)
-    state.at_target, state.saturated = at_target, saturated
-    state.reason = "STABLE"
-    local _ = output
-    return state
-  end
-
-  state.released = math.max(1, math.min(state.released or M.START_COUNT, total))
-  if not state.step_started_ms then state.step_started_ms = now_ms end
-
-  local output, at_target, _, saturated = measure(turbines, state.released)
+  local output, at_target, _, saturated = measure(turbines)
   state.at_target, state.saturated = at_target, saturated
 
-  if at_target >= state.released then
-    -- Diese Stufe traegt gerade. Sie muss es aber DURCHGEHEND tun --
-    -- ein kurzer Durchgang durch das Messfenster beim Hochlaufen ist
-    -- keine tragfaehige Stufe.
-    if not state.stable_since_ms then state.stable_since_ms = now_ms end
-    if now_ms - state.stable_since_ms >= M.SETTLE_MS then
-      state.sustainable_turbines = state.released
-      state.max_output = output * (1 - M.SAFETY_MARGIN)
-      if state.released >= total then
-        state.ready = true
-        state.reason = "ALL_SUSTAINED"
-      else
-        state.released = state.released + 1
-        state.step_started_ms = now_ms
-        state.stable_since_ms = nil
-        state.reason = "STEP_UP"
-      end
-    else
-      state.reason = "SETTLING"
-    end
+  if output > (state.best_output or 0) then
+    state.best_output = output
+    state.max_output = output * (1 - M.SAFETY_MARGIN)
+    -- Wieviele Turbinen liefen, als dieser Hoechstwert floss. Mehr als das
+    -- hat diese Anlage nie gleichzeitig getragen -- deshalb deckelt die
+    -- Zahl spaeter auch die MASTER-Aufteilung. Traegt die Anlage ihre
+    -- ganze Flotte, ist sie schlicht gleich der Flottengroesse und die
+    -- Deckelung wirkt nirgends.
+    state.sustainable_turbines = at_target
+    state.last_improved_ms = now_ms
+    state.reason = state.ready and "STABLE" or "MEASURING"
     return state
   end
 
-  -- Diese Stufe traegt (noch) nicht.
-  state.stable_since_ms = nil
-  if now_ms - state.step_started_ms >= M.STEP_TIMEOUT_MS then
-    if state.sustainable_turbines > 0 then
-      -- Die vorherige Stufe war die groesste tragbare -- das IST das
-      -- Ergebnis, kein Fehlschlag. Der Knoten kennt jetzt seine Anlage.
-      state.ready = true
-      state.released = state.sustainable_turbines
-      state.reason = "LIMIT_FOUND"
-    else
-      -- Nicht einmal eine einzige Turbine laesst sich halten. Das ist
-      -- nichts, was sich durch Warten oder Regeln loesen laesst, also
-      -- wird hier auch nichts "gelernt" -- der Knoten bleibt im
-      -- Einlernen und meldet es.
-      state.reason = "NO_STEAM"
-      state.step_started_ms = now_ms
-    end
+  if state.ready then
+    state.reason = "STABLE"
     return state
   end
 
-  state.reason = saturated > 0 and "FLOW_SATURATED" or "SPINNING_UP"
+  if not state.last_improved_ms then state.last_improved_ms = now_ms end
+
+  if (state.best_output or 0) > 0 and now_ms - state.last_improved_ms >= M.STABLE_MS then
+    state.ready = true
+    state.reason = "MEASURED"
+    return state
+  end
+
+  -- Noch nichts gemessen: sagen, woran es liegt. Volle Foerderung und
+  -- trotzdem unter der Zieldrehzahl heisst, dass keine Reglerreserve mehr
+  -- da ist -- daran aendert Warten nichts, und das soll der Bediener
+  -- sehen, statt auf einen stehenden Zaehler zu starren.
+  if (state.best_output or 0) > 0 then
+    state.reason = "MEASURING"
+  elseif saturated > 0 then
+    state.reason = "FLOW_SATURATED"
+  else
+    state.reason = "SPINNING_UP"
+  end
   return state
 end
 
@@ -274,7 +244,7 @@ function M.load(opts)
   state.max_output = data.max_output
   state.total_turbines = data.turbine_count
   state.sustainable_turbines = math.min(sustainable, data.turbine_count or sustainable)
-  state.released = state.sustainable_turbines
+  state.best_output = data.max_output / (1 - M.SAFETY_MARGIN)
   state.reason = "LOADED_FROM_CACHE"
   return state
 end

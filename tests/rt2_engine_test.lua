@@ -168,13 +168,13 @@ files[cache_path] = nil
 
 rt2_engine.init({ cache_path = cache_path, turbine_count = 1 })
 applied_flow, applied_coil, applied_rods = {}, {}, nil
--- Der Suchlauf gibt die einzige Turbine frei, wartet die Einschwingzeit
--- ab und ist damit am Ende der Flotte angekommen -> fertig eingelernt.
+-- Misst den Gesamtausstoss; sobald er sich eine Weile nicht mehr
+-- verbessert, steht der Wert.
 for _ = 1, 4 do
   result = rt2_engine.tick(fake_ctx)
-  advance(rt2_capacity.SETTLE_MS)
+  advance(rt2_capacity.STABLE_MS)
 end
-assert_true(result.capacity.ready, 'eine tragende Ein-Turbinen-Anlage ist nach dem Einschwingen eingelernt')
+assert_true(result.capacity.ready, 'die Anlage ist ausgemessen, sobald der Hoechstwert stehenbleibt')
 assert_eq(result.capacity.sustainable_turbines, 1)
 assert_true(files[cache_path] ~= nil, 'a ready capacity measurement must be persisted to the cache file')
 do

@@ -194,15 +194,15 @@ function M.new(opts)
 
     local turbine_count = #(input.turbines or {})
 
-    -- Wieviele Turbinen jetzt laufen duerfen. Waehrend des Einlernens ist
-    -- das die Stufe, die der Suchlauf gerade prueft; danach die gemessene
-    -- tragbare Anzahl. Nur solange noch gar nichts bekannt ist (kein
-    -- Suchlauf gelaufen, kein Cache), bleibt es unbegrenzt -- dann
-    -- verhaelt sich der Knoten wie vorher.
+    -- Wieviele Turbinen laufen duerfen. Beim Einlernen ABSICHTLICH
+    -- unbegrenzt: gemessen wird der hoechste Gesamtausstoss, der
+    -- tatsaechlich floss, und dafuer muss die Anlage zeigen duerfen, was
+    -- sie kann. Erst danach gilt die dabei beobachtete Grenze -- traegt
+    -- die Anlage ihre ganze Flotte, ist die gleich der Flottengroesse und
+    -- wirkt nirgends.
     local max_active
-    if state == rt2_state.states.LEARNING then
-      max_active = self.capacity.released
-    elseif self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
+    if state ~= rt2_state.states.LEARNING
+        and self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
       max_active = self.capacity.sustainable_turbines
     end
 
