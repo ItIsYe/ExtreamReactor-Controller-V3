@@ -19,7 +19,6 @@ local rt2_capacity = require("nodes.rt.rt2_capacity")
 local rt2_safety = require("nodes.rt.rt2_safety")
 local rt2_projection = require("nodes.rt.rt2_projection")
 local rt2_tuning = require("nodes.rt.rt2_tuning")
-local rt2_turbine_model = require("nodes.rt.rt2_turbine_model")
 local rt2_turbine = require("nodes.rt.rt2_turbine")
 local rt2_reactor = require("nodes.rt.rt2_reactor")
 local utils = require("core.utils")
@@ -36,10 +35,6 @@ M.CACHE_PATH = "/xreactor_config/rt2_capacity_cache.lua"
 -- and stays valid when the turbine count changes, which invalidates the
 -- capacity but says nothing about how the steam tank responds.
 M.TUNING_PATH = "/xreactor_config/rt2_reactor_tuning.lua"
--- Die Kennlinien der einzelnen Turbinen (siehe rt2_turbine_model.lua).
--- Wieder eine eigene Datei: sie beschreiben die Turbinen, nicht den
--- Reaktor, und sie ueberleben einen Umbau am Reaktor unveraendert.
-M.TURBINE_MODEL_PATH = "/xreactor_config/rt2_turbine_model.lua"
 
 local engine
 local last_result
@@ -48,14 +43,10 @@ local last_logged_capacity_diag
 local last_logged_safety_reason
 local last_projection
 local tuning_path
-local turbine_model_path
 -- Je Reaktor (Schluessel: Name): Sicherheitszustand, letzte gemeldete
 -- Sicherheitslage, ob sein Anlagenprofil schon geschrieben wurde.
 local reactor_state = {}
 local last_saved_max_output
--- Wachhund: was zuletzt gemeldet wurde, damit die Meldung nicht jeden
--- Takt erscheint.
-local last_idle_reason
 
 -- Die Reaktoren dieses Knotens (Peripherienamen). Die Turbinen bleiben
 -- EINE Flotte: sie haengen alle am selben Dampfnetz, und jeder Reaktor
@@ -77,7 +68,6 @@ function M.init(opts)
   opts = opts or {}
   cache_path = opts.cache_path or M.CACHE_PATH
   tuning_path = opts.tuning_path or M.TUNING_PATH
-  turbine_model_path = opts.turbine_model_path or M.TURBINE_MODEL_PATH
 
   reactor_names = {}
   for _, name in ipairs((opts.config and opts.config.reactors) or {}) do
@@ -114,17 +104,6 @@ function M.init(opts)
     end
   end
 
-  -- Turbinenkennlinien: je Turbine, ueberdauert Neustarts. Ohne sie faengt
-  -- jede Turbine wieder mit dem tastenden Regler an.
-  local turbine_models = rt2_turbine_model.load_units({
-    path = turbine_model_path, read_config = read_config,
-  })
-  local modelled = 0
-  for _ in pairs(turbine_models) do modelled = modelled + 1 end
-  if modelled > 0 and type(opts.log) == "function" then
-    opts.log("INFO", string.format("v2 Turbinenkennlinien geladen: %d Turbine(n)", modelled))
-  end
-
   last_logged_safety_reason = nil
   last_logged_capacity_diag = nil
   last_projection = nil
@@ -133,7 +112,6 @@ function M.init(opts)
     master_timeout_ms = opts.master_timeout_ms,
     initial_capacity = loaded,
     reactors = specs,
-    turbine_models = turbine_models,
   })
   last_result = nil
   return engine
@@ -160,19 +138,7 @@ end
 --   ctx.adapters.turbine / ctx.adapters.reactor -- adapters/turbine.lua, adapters/reactor.lua
 --   ctx.CONFIG.LOG_PREFIX
 function M.tick(ctx)
-  -- Ohne Engine wurde M.init() nie (erfolgreich) durchlaufen. Das still
-  -- zu schlucken hiesse: main.lua's v2-Zweig ruft hier jeden Takt hinein,
-  -- bekommt nil zurueck und gibt sich zufrieden -- die Anlage laeuft
-  -- ungeregelt weiter und niemand erfaehrt es. Einmal melden, dann ruhig
-  -- sein.
-  if not engine then
-    if not last_idle_reason then
-      last_idle_reason = "v2 REGELT NICHT: Engine nicht initialisiert"
-      if ctx and type(ctx.log) == "function" then ctx.log("ERROR", last_idle_reason) end
-      pcall(print, "[RT] " .. last_idle_reason)
-    end
-    return nil
-  end
+  if not engine then return nil end
   local now_ms = os.epoch and os.epoch("utc") or 0
 
   -- Discovery laeuft nach init(), deshalb die Reaktorliste hier frisch
@@ -230,58 +196,13 @@ function M.tick(ctx)
     reactors = reactor_inputs,
   })
 
-  local wrote_turbines, wrote_reactors = 0, 0
   for _, t in ipairs(result.turbines) do
     adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
-    wrote_turbines = wrote_turbines + 1
   end
   for index, decision in ipairs(result.reactors) do
     local name = reactor_names[index]
     if name then
       adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
-      wrote_reactors = wrote_reactors + 1
-    end
-  end
-
-  -- ── Wachhund: regelt hier ueberhaupt noch jemand? ─────────────────────
-  --
-  -- Aus dem Livetest (node-101): 25 Turbinen standen bei 967-1256 RPM mit
-  -- vollem Durchfluss und GELOESTER Spule. Unter v2 ist dieser Zustand
-  -- unmoeglich, solange geschrieben wird -- compute_coil_decision kuppelt
-  -- oberhalb von Ziel+Band immer ein. Es wurde also gar nichts
-  -- geschrieben, und niemand hat es gemerkt: die Oberflaeche laeuft als
-  -- eigener Service weiter und sah voellig normal aus.
-  --
-  -- Der Knoten kennt seine Geraete aus der Discovery (ctx.modules). Kennt
-  -- er welche, hat aber in diesem Takt keine einzige Entscheidung an die
-  -- Hardware gegeben, dann laeuft die Anlage gerade ungeregelt -- und das
-  -- muss am Rechner selbst stehen, nicht nur beim Log-Collector.
-  local known_turbines, known_reactors = 0, 0
-  for _, module in pairs(ctx.modules or {}) do
-    if module.type == "turbine" then known_turbines = known_turbines + 1
-    elseif module.type == "reactor" then known_reactors = known_reactors + 1 end
-  end
-
-  local idle_reason
-  if known_turbines > 0 and wrote_turbines == 0 then
-    idle_reason = string.format(
-      "v2 REGELT NICHT: %d Turbine(n) entdeckt, aber keine einzige angesteuert"
-        .. " (gelesen: %d) -- Turbinenliste in der Konfiguration leer oder"
-        .. " Peripherie nicht lesbar. Die Anlage laeuft gerade ungeregelt.",
-      known_turbines, #turbine_readings)
-  elseif known_reactors > 0 and wrote_reactors == 0 then
-    idle_reason = string.format(
-      "v2 REGELT NICHT: %d Reaktor(en) entdeckt, aber keiner angesteuert"
-        .. " (bekannt: %d) -- Reaktorliste in der Konfiguration leer.",
-      known_reactors, #reactor_names)
-  end
-  if idle_reason ~= last_idle_reason then
-    last_idle_reason = idle_reason
-    if idle_reason then
-      ctx.log("ERROR", idle_reason)
-      pcall(print, "[RT] " .. idle_reason)
-    elseif last_idle_reason ~= nil then
-      ctx.log("INFO", "v2 regelt wieder")
     end
   end
 
@@ -357,24 +278,6 @@ function M.tick(ctx)
     rt2_tuning.save_units(profiles, { path = tuning_path, write_config = write_config })
   end
 
-  -- Turbinenkennlinien: je Turbine einmalig, sobald sie entstanden ist.
-  -- result.new_turbine_models enthaelt nur die in DIESEM Takt neuen, also
-  -- wird nur dann geschrieben und nur dann gemeldet.
-  if #(result.new_turbine_models or {}) > 0 then
-    for _, entry in ipairs(result.new_turbine_models) do
-      local msg = string.format(
-        "v2 Turbine %s selbst vermessen: %d Betriebspunkte -> %.2f RPM je mB/t"
-          .. " (%.0f mB/t fuer 900 RPM), Stellintervall=%dms",
-        tostring(entry.name), entry.profile.samples or 0, entry.profile.slope,
-        rt2_turbine_model.flow_for(entry.profile, 900) or -1,
-        entry.profile.min_adjust_interval_ms)
-      ctx.log("INFO", msg)
-      pcall(print, "[RT] " .. msg)
-    end
-    rt2_turbine_model.save_units(result.turbine_models,
-      { path = turbine_model_path, write_config = write_config })
-  end
-
   -- Jeder Reaktor wird nach seinem eigenen Messwert und seiner eigenen
   -- Sicherheitslage beurteilt.
   local by_name = {}
@@ -407,21 +310,12 @@ function M.status_fields()
     return { mode = M.current_state(), node_state = rt2_projection.node_state(M.current_state()) }
   end
   local turbines = {}
-  local models = last_result.turbine_models or {}
-  local modelled = 0
   for _, t in ipairs(last_result.turbines) do
-    local model = t.name and models[t.name] or nil
-    if model then modelled = modelled + 1 end
     turbines[#turbines + 1] = {
       id = t.name,
       target_rpm = t.target_rpm,
       flow = t.flow_decision and t.flow_decision.flow or nil,
       coil_engaged = t.coil_decision and t.coil_decision.engaged or nil,
-      -- Warum dieser Durchfluss -- ohne den Grund laesst sich am Schirm
-      -- nicht unterscheiden, ob eine Turbine ruhig steht (SETTLED)
-      -- oder nur gerade wartet (SETTLING).
-      flow_reason = t.flow_decision and t.flow_decision.reason or nil,
-      model_slope = model and model.slope or nil,
     }
   end
   return {
@@ -460,9 +354,6 @@ function M.status_fields()
     power_target = (last_result.capacity.ready and last_result.capacity.max_output or 0)
       * ((tonumber(last_result.master_percent) or 0) / 100),
     turbines = turbines,
-    -- Wieviele Turbinen sich schon selbst vermessen haben. Solange das
-    -- unter der Flottengroesse liegt, tasten sich die uebrigen noch heran.
-    turbines_modelled = modelled,
     control_rod_level = last_result.reactor_decision and last_result.reactor_decision.rods or nil,
     -- Je Reaktor, weil ein Knoten mehrere haben kann und sie unabhaengig
     -- regeln -- control_rod_level allein zeigte nur den ersten.

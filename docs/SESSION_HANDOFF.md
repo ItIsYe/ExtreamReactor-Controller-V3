@@ -1,11 +1,30 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-09-24 | beta | manifest-v735**
+**Stand: 2026-09-25 | beta | manifest-v737**
 
 ## Aktueller Zustand: stabil, alles auf `beta`
 
 Kein offener PR, keine offene Issue. `beta` ist der aktive Entwicklungszweig;
 `main` bleibt unangetastet (stabile Releases, nie direkt bearbeiten).
+
+### Zurueckgenommen: Turbinen-Selbstvermessung (v734)
+
+Der Regler-Umbau aus v734 (Stellintervall, Vorausschau, Ruhezone,
+gelernte Kennlinie je Turbine — `rt2_turbine_model.lua`) ist **komplett
+zurueckgenommen**. Im Livetest auf node-101 standen danach alle 25
+Turbinen bei 967–1256 RPM mit vollem Durchfluss und geloester Spule, und
+Regler wie Spulenansteuerung arbeiteten nicht mehr.
+
+Die Ursache ist **nicht gefunden**. Nachweisbar ist nur, was sie NICHT
+ist: unter v2 kuppelt `compute_coil_decision()` oberhalb von Ziel+Band
+ausnahmslos ein, und der Patch fasste ausschliesslich den Durchfluss an,
+nie die Spule — der beobachtete Zustand laesst sich also nur erklaeren,
+wenn der Regeltakt gar nicht mehr bis zum Schreiben kam. Gegen die echte
+Engine nachgestellt liess sich der Zustand nicht reproduzieren.
+
+Die Regelkette (`nodes/rt/`, `adapters/`) ist byteweise wieder auf dem
+Stand von v733. Wer den Umbau erneut angeht: er steckt vollstaendig in
+Commit `c00fda41`, samt Tests und Begruendung.
 
 ### Platzbedarf auf dem Knoten
 
@@ -27,7 +46,7 @@ RT liegt damit bei rund 83 % eines voreingestellten Rechners — plus
 `/xreactor_config`, `/xreactor_logs` und `/startup.lua`. **Fuer RT gehoert
 `computer_space_limit` hochgesetzt** (`serverconfig/computercraft-server.toml`).
 
-Zwei Dinge dazu sind seit v734/v735 anders:
+Zwei Dinge dazu sind seit v735/v736 anders:
 
 - Der Installer prueft den Platz, **bevor** er die alte Installation
   loescht (`stage.check_capacity`). Reicht er nicht, bricht er ab und der

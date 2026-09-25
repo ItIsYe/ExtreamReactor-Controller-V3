@@ -620,7 +620,6 @@ local function build_status_payload(status_level)
     -- capacity), leaving v1's real turbine/reactor hardware snapshots
     -- (fuel amount, health, etc. -- still genuinely read this tick) as-is.
     local v2 = rt2_engine.status_fields()
-    payload.engine = "v2"
     payload.mode = v2.mode
     payload.control_mode = v2.mode
     -- node_state_machine is intentionally never driven under v2 (its
@@ -634,7 +633,6 @@ local function build_status_payload(status_level)
     if v2.capacity_reason then payload.capacity_source = v2.capacity_reason end
     return payload
   end
-  payload.engine = "v1"
   -- Learning-State zurückschreiben
   if ctx then ctx.capacity_learning = ctx_snap.capacity_learning end
   writeback_ctx()
@@ -712,10 +710,6 @@ local function update_monitor()
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
     manifest_id          = RT_BUILD_INFO.manifest_id,
     release_id           = RT_BUILD_INFO.release_id,
-    -- Welche Engine regelt -- steht in der Fusszeile jeder Seite. Am
-    -- Bildschirm war das bisher nicht zu sehen, und ein Knoten, der still
-    -- auf v1 zurueckgefallen ist, sah aus wie jeder andere.
-    engine               = engine_v2 and "v2" or "v1",
   }
   if engine_v2 then
     -- Dieselbe Uebersetzung wie in build_status_payload() -- sie fehlte
@@ -760,37 +754,13 @@ end
 -- ── Control-Tick ──────────────────────────────────────────────────────────────
 
 local rt_update_quiescing = false
--- Zuletzt gemeldeter Fehler des Regeltakts (siehe control_tick).
-local last_control_error = nil
 
 local function control_tick()
   -- A dedicated safe-state writer owns the hardware from the first update
   -- quiesce attempt onward. Normal regulation/startup must not race it.
   if rt_update_quiescing then return end
   if engine_v2 then
-    -- Wirft der Regeltakt, faengt service_manager das per pcall ab und
-    -- meldet es ueber utils.log() -- das routet zum Log-Collector, NICHT
-    -- auf den Bildschirm des Rechners. Der Knoten stellt dann still das
-    -- Regeln ein, waehrend die Oberflaeche (eigener Service) munter
-    -- weiterlaeuft und voellig normal aussieht. Genau so sah der
-    -- Livetest-Befund aus: volle Foerderung, geloeste Spule, keine
-    -- Reaktion. Der Fehler gehoert deshalb zusaetzlich direkt auf den
-    -- Rechner -- einmal je neuer Fehlertext, nicht in jedem Takt.
-    local ok, err = pcall(rt2_engine.tick, ctx)
-    if not ok then
-      local text = tostring(err)
-      if text ~= last_control_error then
-        last_control_error = text
-        pcall(print, "[RT] REGELTAKT ABGEBROCHEN: " .. text)
-        pcall(print, "[RT] Die Anlage wird gerade NICHT geregelt.")
-      end
-      -- Weiterreichen, damit service_manager seine Wiederholung behaelt.
-      error(err, 0)
-    end
-    if last_control_error then
-      last_control_error = nil
-      pcall(print, "[RT] Regeltakt laeuft wieder")
-    end
+    rt2_engine.tick(ctx)
     return
   end
   -- Safety-first order: update_module_states() (detects/reacts to danger
@@ -1181,30 +1151,18 @@ local function init()
   -- und brauchen es auch nicht -- zieht die Flotte mehr, fallen alle
   -- Taenke, alle fahren die Staebe aus.
   if config.engine == "v2" then
-    engine_v2 = true
-    rt2_engine.init({ turbine_count = #devices.turbines, config = config, log = log })
-  end
-
-  -- IMMER melden, welche Engine regelt -- auch v1.
-  --
-  -- Vorher meldete sich nur v2. Laeuft ein Knoten auf v1, steht dazu
-  -- nirgends etwas, und der Unterschied ist erheblich: v1 hat den
-  -- bekannten Fehler, eine abgewaehlte Turbine bei vollem Durchfluss und
-  -- geloester Spule hochdrehen zu lassen. Dazu kommt, dass
-  -- config_normalizer.validate_config() ein fehlendes oder unlesbares
-  -- engine-Feld STILL auf "v1" zurueckstellt (und ein spaeteres
-  -- write_config das dann dauerhaft festschreibt) -- ein Knoten kann also
-  -- ohne Zutun von v2 auf v1 zurueckfallen. Wenn das passiert, muss es am
-  -- Rechner selbst zu lesen sein, nicht nur im Log-Collector.
-  --
-  -- utils.log() routet standardmaessig zum Log-Collector, nicht auf den
-  -- lokalen Bildschirm -- deshalb zusaetzlich ein direktes print().
-  local engine_msg = string.format("engine=%s AKTIV -- %d Reaktor(en), %d Turbinen",
-    engine_v2 and "v2" or "v1", #devices.reactors, #devices.turbines)
-  log("INFO", engine_msg)
-  pcall(print, "[RT] " .. engine_msg)
-  if not engine_v2 then
-    pcall(print, "[RT] Hinweis: v2 wird ueber engine = \"v2\" in /xreactor_config/rt.lua aktiviert")
+    do
+      engine_v2 = true
+      rt2_engine.init({ turbine_count = #devices.turbines, config = config, log = log })
+      log("INFO", string.format("engine=v2 active (%d Reaktor(en), %d Turbinen)",
+        #devices.reactors, #devices.turbines))
+      -- utils.log() routet standardmaessig zum Log-Collector, nicht auf
+      -- den lokalen Bildschirm -- diese Zeile ist bewusst ein direktes
+      -- print(), damit am Computer selbst sofort sichtbar ist, dass v2
+      -- aktiv ist, ohne Router-UI oder Log-Collector zu brauchen.
+      pcall(print, string.format("[RT] engine=v2 AKTIV -- %d Reaktor(en), %d Turbinen",
+        #devices.reactors, #devices.turbines))
+    end
   end
 
   -- Reaktor/Turbinen-State initialisieren

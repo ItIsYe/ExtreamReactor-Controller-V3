@@ -93,30 +93,13 @@ rt2_engine.init({})
 local result = rt2_engine.tick(fake_ctx)
 assert_eq(result.state, rt2_state.states.LEARNING, 'first tick with fresh hardware must enter LEARNING')
 assert_eq(result.turbines[1].target_rpm, 900, 'LEARNING targets the fixed RPM')
--- T1 reads exactly 900 with the coil engaged: it is AT its target, so the
--- controller deliberately writes nothing (rt2_turbine's Ruhezone -- see
--- SETTLE_BAND_RPM). That is the whole point of the change: a settled
--- turbine is left alone instead of being nudged every tick.
-assert_true(applied_flow.T1 == nil,
-  'a turbine sitting exactly on its target must not be written to at all')
-assert_eq(result.turbines[1].flow_decision.reason, 'SETTLED',
-  'and the decision must say so')
-
+-- T1 is already at 900/coil engaged -- inside the band, so flow holds
+-- near its current reading rather than the readout getting clobbered.
+assert_true(applied_flow.T1 ~= nil, 'the flow decision must have been written to the fake turbine adapter')
 assert_true(applied_coil.T1 == true, 'the coil decision must have been written to the fake turbine adapter')
 assert_true(applied_rods ~= nil, 'the rod decision must have been written to the fake reactor adapter')
 assert_true(applied_active == nil, 'a reactor already reading active=true must not trigger a set_active write')
 assert_true(applied_turbine_active.T1 == nil, 'a turbine already reading active=true must not trigger a set_active write')
-
--- ...but a turbine OFF its target must still be written through the full
--- chain (rt2_engine -> rt2_adapter -> the fake adapter). Sonst waere die
--- Ruhezone oben nicht von "die Kette schreibt gar nichts" zu
--- unterscheiden.
-turbine_hardware.T1.rpm = 700
-rt2_engine.tick(fake_ctx)
-assert_true(applied_flow.T1 ~= nil, 'the flow decision must have been written to the fake turbine adapter')
-turbine_hardware.T1.rpm = 900
--- Der Zwischen-Takt oben hat bei 700 RPM die Spule geloest; der naechste
--- Takt bei 900 kuppelt sie wieder ein, also hier nichts von Hand setzen.
 
 -- A reactor/turbine reading active=false must be turned back on through
 -- the same full adapter chain (rt2_engine -> rt2_adapter -> the fake

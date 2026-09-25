@@ -277,16 +277,9 @@ assert_true(plant.reactor.rods >= rt2_reactor.ROD_MIN and plant.reactor.rods <= 
 
 -- Der Reaktor regelt NUR aus seinem Dampftank -- in AUTONOM wie ueberall.
 local before_rods = plant.reactor.rods
--- Den Tank randvoll HALTEN, nicht nur einmal fuellen: im vereinfachten
--- Anlagenmodell zieht die Flotte ihn binnen weniger Takte wieder leer,
--- und die Pruefung liefe dann gegen einen inzwischen LEEREN Tank -- bei
--- dem der Regler die Staebe voellig richtig wieder ausfaehrt. Genau
--- dieser Ablauf hat die Zusicherung frueher zufaellig bestehen lassen.
-for _ = 1, 10 do
-  plant.reactor.steam = plant.reactor.steam_max
-  tick(1)
-end
-assert_true(plant.reactor.rods > before_rods,
+plant.reactor.steam = plant.reactor.steam_max   -- Tank randvoll
+tick(20)
+assert_true(plant.reactor.rods >= before_rods,
   'ein voller Dampftank muss die Staebe einfahren (weniger Leistung), war ' ..
   tostring(before_rods) .. ' jetzt ' .. tostring(plant.reactor.rods))
 

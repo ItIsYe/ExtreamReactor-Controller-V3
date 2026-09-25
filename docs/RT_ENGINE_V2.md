@@ -43,7 +43,6 @@ einer "AUTONOM-Reaktorlogik", die man synchron halten muesste.
 | `rt2_state.lua` | Zustandsautomat INIT/LEARNING/MASTER/AUTONOM/SAFE | ja |
 | `rt2_reactor.lua` | Stabstellung aus dem Dampftank | ja |
 | `rt2_turbine.lua` | Ziel-RPM, Durchfluss, Spule | ja |
-| `rt2_turbine_model.lua` | Kennlinie je Turbine (Durchfluss → Drehzahl) | ja |
 | `rt2_capacity.lua` | Einlernen der Knotenleistung | ja |
 | `rt2_tuning.lua` | Selbstvermessung der Anlage | ja |
 | `rt2_safety.lua` | Temperatur/Kuehlmittel (nutzt `core/safety.lua`) | ja |
@@ -117,67 +116,7 @@ Moment nichts lieferten.
 Diese Zahl ist der Zweck des Ganzen: MASTER teilt seinen Leistungsbedarf
 gegen sie auf (`capacity_max` im Statuspayload).
 
-## Selbstvermessung der Turbinen
-
-Der Durchflussregler hat sich frueher in festen Schritten (`TRIM_STEP`)
-an die Zieldrehzahl herangetastet, ohne den Zusammenhang zwischen
-Durchfluss und Drehzahl zu kennen. Das ist ein Integrator ohne
-Streckenwissen — er **muss** pendeln: er macht auf, bis die Drehzahl
-ueber dem Ziel steht, dann zu, bis sie darunter steht. Gemeldet wurde das
-als „immer hoch runter hoch runter".
-
-Vier Dinge beenden das, drei davon ohne jedes Lernen:
-
-1. **Stellintervall** (`MIN_ADJUST_INTERVAL_MS`, 600 ms). Vorher wurde in
-   jedem Takt gestellt, gegen einen Rotor, der Sekunden braucht. Der
-   Regler hat also auf eine Drehzahl reagiert, in der seine vorige
-   Verstellung noch gar nicht steckte. Ausserhalb des Bandes gilt ein
-   kuerzeres Intervall (`RAMP_INTERVAL_MS`) — dort wird hochgefahren,
-   nicht gehalten.
-2. **Vorausschau beim Hochfahren** (`RAMP_LOOKAHEAD_S`). Traegt die
-   Drehzahl, die der Rotor gerade aufnimmt, ihn innerhalb dieser Zeit ans
-   Ziel, wird nicht weiter aufgemacht. Das ist der eigentliche Grund fuer
-   den alten Ueberschwinger: es wurde so lange mehr Dampf gegeben, wie
-   die Drehzahl unter dem Ziel lag, und am Band-Rand stand dann viel zu
-   viel an.
-3. **Ruhezone** (`SETTLE_BAND_RPM`, 4 RPM). Nah genug am Ziel wird gar
-   nicht mehr gestellt. Ohne sie bleibt ein endloses +1/−1 uebrig, weil
-   die kleinstmoegliche Verstellung (1 mB/t) groesser ist als die
-   verbleibende Abweichung.
-4. **Die gelernte Kennlinie** (`rt2_turbine_model.lua`).
-
-Die Kennlinie entsteht rein **beobachtend**, wie beim Reaktor: steht der
-Durchfluss still (dafuer sorgt 1. und 3.) und dreht der Rotor dabei
-gleichmaessig, ist das ein Betriebspunkt. Eine Ausgleichsgerade durch
-diese Paare ergibt
-
-    Drehzahl = slope · Durchfluss + intercept
-
-Gemessen wird **nur mit gekuppelter Spule** — das ist der Zustand, in dem
-die Anlage arbeitet; ohne Last gilt eine ganz andere Gerade. Aus demselben
-Grund regelt auch nur die gekuppelte Turbine nach der Kennlinie; beim
-Hochfahren bleibt es bei der Rampe.
-
-Damit kann der Regler zwei Dinge, die vorher nicht gingen:
-
-- **Vorsteuerung**: verschiebt MASTER die Vorgabe, wird der Durchfluss
-  fuer die neue Drehzahl in EINEM Zug gestellt, statt sich in Schritten
-  von `TRIM_STEP` heranzutasten. Ueberschwingen kann er dabei nicht — es
-  ist der Beharrungswert, den die Turbine selbst gemessen hat.
-- **Richtige Schrittweite**: eine Abweichung von x RPM verlangt
-  x/slope mB/t, nicht pauschal `TRIM_STEP`.
-
-Eine Anlage, die ruhig auf einem Punkt steht, lernt nichts dazu — eine
-Gerade braucht Punkte an verschiedenen Stellen. Die liefert der normale
-Betrieb (Lastwechsel von MASTER, Puffer-Slots, Neustarts). Bis dahin
-regelt die Turbine mit 1.–3., und das allein genuegt schon fuer einen
-stehenden Durchfluss.
-
-Ein Nebeneffekt: eine eingeschwungene Turbine wird gar nicht mehr
-beschrieben (`flow_decision.unchanged`), was je Takt einen
-Peripherieaufruf pro Turbine spart.
-
-## Selbstvermessung des Reaktors
+## Selbstvermessung
 
 `rt2_tuning.lua` misst **je Reaktor**, wie schnell sein Dampftank auf
 eine Stabbewegung reagiert — rein beobachtend, ohne Stoersignal. Aus der
@@ -192,7 +131,6 @@ Ergebnis wird persistiert.
 | `rt.lua` | `engine = "v2"`, Sicherheitsgrenzen |
 | `rt2_capacity_cache.lua` | gemessene Knotenleistung (flach — eine Flotte) |
 | `rt2_reactor_tuning.lua` | Anlagenprofil je Reaktor |
-| `rt2_turbine_model.lua` | Kennlinie je Turbine |
 
 ## Anzeige
 
@@ -247,8 +185,7 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_regulation_behaviour_test.lua` | Einzelregelung je Turbine |
 | `rt2_capacity_to_master_test.lua` | Kette gemessener Wert → Statusfelder → MASTER-Aufteilung |
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
-| `rt2_tuning_test.lua` | Selbstvermessung des Reaktors gegen eine bekannte Anlage |
-| `rt2_turbine_model_test.lua` | Kennlinie je Turbine, und dass der Regler damit zur Ruhe kommt (Vergleich alt/neu an einer traegen Strecke) |
+| `rt2_tuning_test.lua` | Selbstvermessung gegen eine bekannte Anlage |
 | `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt v2s Zustand, nicht v1s leeren |
 | plus Modultests je `rt2_*`-Datei | |
 
@@ -258,12 +195,6 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
   1 Reaktor): Einlernen ging durch und meldete einen gemessenen Wert.
   Befund daraus war die fehlende Uebersetzung fuer den RT-eigenen
   Monitor (siehe „Anzeige"), nicht die Regelung selbst.
-- **Das ruhige Regeln ist noch nicht am echten Rotor geprueft.** Die
-  Zahlen oben (600 ms, 3 s Vorausschau, 4 RPM Ruhezone) sind gegen eine
-  nachgebildete Strecke mit ~1,6 s Zeitkonstante belegt. Traegere
-  Turbinen brauchen womoeglich ein laengeres Stellintervall — genau das
-  setzt die gelernte Kennlinie dann selbst
-  (`profile.min_adjust_interval_ms`).
 - **Groessenordnung des gemessenen Werts pruefen.** Der Livetest mass
   834 054 315 RF/t aus 25 Turbinen, also rund 33 M RF/t je Turbine.
   Die Zahl ist in sich stimmig (dieselbe Quelle
