@@ -423,11 +423,21 @@ function M:refresh_peripherals()
       -- Je nach physischer Entfernung des Reaktors vom Transportnetz
       -- unterschiedlich lang, daher pro Reaktor einstellbar (Router-UI).
       resupply_cooldown_s = math.max(0, tonumber(entry.resupply_cooldown_s) or 30),
+      -- Vom config_normalizer stillgelegt: dieser Eintrag wird nie
+      -- beliefert, die uebrigen laufen weiter. Muss hier mitgefuehrt
+      -- werden, sonst waere die Stilllegung ab _state.reactors vergessen.
+      disabled_reason = entry.disabled_reason,
       cfg          = entry,
     }
   end
   self._state.reactors = reactors
-  cfg.redstone_tree = build_redstone_tree_from_reactors(reactors)
+  -- Stillgelegte Eintraege gehoeren auch nicht in den Ventilbaum -- ein
+  -- Weg, der nie benutzt wird, waere dort nur ein Stolperstein.
+  local routable = {}
+  for _, r in ipairs(reactors) do
+    if not r.disabled_reason then routable[#routable + 1] = r end
+  end
+  cfg.redstone_tree = build_redstone_tree_from_reactors(routable)
 
   -- Waste outlets
   local waste_outlets = {}
@@ -481,13 +491,52 @@ end
 
 -- ---- supply cycle (demand-driven, per reactor) -----------------------------
 
+-- Warum in diesem Zyklus nichts geliefert wurde.
+--
+-- _run_supply() hatte fuenf Ausstiege, von denen zwei voellig still waren
+-- ("keine ME-Bridge", "Lieferung laeuft noch") und der Rest nur ueber
+-- warn_once()/DEBUG in den Log-Collector ging -- also nie auf den Schirm
+-- des Rechners. Im Betrieb sah das so aus: Logistik an, Brennstoff im ME,
+-- und trotzdem passiert nichts, ohne jeden Hinweis worauf es wartet.
+--
+-- Der Grund wird deshalb strukturiert festgehalten, in get_summary()
+-- mitgegeben und bei JEDER AENDERUNG gemeldet -- auch direkt am Rechner,
+-- weil utils.log() zum Log-Collector routet, nicht auf den Bildschirm.
+local function note_block(self, code, detail)
+  local s = self._state
+  local key = tostring(code) .. "|" .. tostring(detail or "")
+  s.supply_block = code and { code = code, detail = detail, ts = os.epoch("utc") } or nil
+  if key == s.supply_block_key then return end
+  s.supply_block_key = key
+  if code then
+    local msg = "Logistik liefert nicht: " .. tostring(code)
+      .. (detail and (" -- " .. tostring(detail)) or "")
+    self.log("WARN", msg)
+    pcall(print, "[FUEL] " .. msg)
+  else
+    self.log("INFO", "Logistik liefert wieder")
+    pcall(print, "[FUEL] Logistik liefert wieder")
+  end
+end
+
 function M:_run_supply(cycle_log)
   local bridge = self._state.bridge
-  if not bridge then return 0, 0 end
+  if not bridge then
+    note_block(self, "KEINE_ME_BRIDGE",
+      "keine ME Bridge gefunden -- ohne sie kann nichts aus dem ME geholt werden")
+    return 0, 0
+  end
   -- Never overwrite the operator-visible lifecycle of an in-flight routed
   -- delivery. The router serializes transactions; supply is retried after its
   -- final BLOCKED confirmation, while waste collection may continue.
-  if self._state.current_request then return 0, 0 end
+  if self._state.current_request then
+    local req = self._state.current_request
+    note_block(self, "LIEFERUNG_LAEUFT", string.format(
+      "%s seit %.0fs in Phase %s -- der Router faehrt immer nur EINE Lieferung",
+      tostring(req.label), ((os.epoch("utc") - (req.started_ts or 0)) / 1000),
+      tostring(req.phase)))
+    return 0, 0
+  end
   local exported, errors = 0, 0
 
   -- The shared export chest is a global precondition, not a per-reactor one
@@ -495,7 +544,8 @@ function M:_run_supply(cycle_log)
   -- routing/ME stock, so this is checked once up front.
   local export_chest = self._state.export_chest
   if not export_chest then
-    self.warn_once("no_export_chest", "Logistics: no export_chest configured — cannot supply any reactor")
+    note_block(self, "KEIN_UEBERGABEPUNKT",
+      "logistics.export_chest fehlt oder ist nicht gefunden -- es gibt nichts, wohin exportiert werden koennte")
     return 0, 0
   end
 
@@ -508,7 +558,13 @@ function M:_run_supply(cycle_log)
   local candidates = {}
   for _, r in ipairs(self._state.reactors) do
     local requesting, fuel_pct = false, nil
-    if r.reactor_id then
+    -- Vom Normalizer stillgelegt (ungueltiger Eintrag). Ueberspringen --
+    -- aber nur DIESEN, nicht die ganze Anlage: frueher schaltete ein
+    -- einziger unbrauchbarer Eintrag die Logistik komplett ab.
+    if r.disabled_reason then
+      self.warn_once("entry_disabled:" .. tostring(r.label),
+        "Logistik: Eintrag " .. tostring(r.label) .. " stillgelegt -- " .. tostring(r.disabled_reason))
+    elseif r.reactor_id then
       local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
       if fuel_amt and capacity and capacity > 0 then
         fuel_pct = fuel_amt / capacity
@@ -576,8 +632,8 @@ function M:_run_supply(cycle_log)
   -- komplett (kein Routing-Versuch, aber auch kein Direkt-Export-Fallback).
   local routing_state = rs and rs:get_routing_state() or "ROUTING_NOT_CONFIGURED"
   if routing_state == "ROUTING_INVALID" or routing_state == "ROUTING_REQUIRED_BUT_EMPTY" then
-    self.warn_once("routing_blocked:" .. routing_state,
-      "Logistics: Routing " .. routing_state .. " -- Belieferung diesen Zyklus komplett blockiert, kein ungeschuetzter Direktexport")
+    note_block(self, "ROUTING_" .. tostring(routing_state),
+      "die Ventilwege sind unbrauchbar -- es wird weder geroutet noch ungeschuetzt direkt exportiert")
     return exported, errors
   end
   local routed = routing_state == "ROUTING_VALID"
@@ -589,7 +645,14 @@ function M:_run_supply(cycle_log)
   local families = build_fuel_families(self.config.reserve_items)
   local family = #candidates > 0 and pick_fuel_family(bridge, families) or nil
   if #candidates > 0 and not family then
-    self.warn_once("no_fuel_family", "Logistics: no fuel (Uranium/Blutonium) available in the ME system — cannot supply any reactor")
+    note_block(self, "KEIN_BRENNSTOFF_IM_ME",
+      "kein Uran/Blutonium im ME gefunden, obwohl " .. #candidates .. " Reaktor(en) anfordern")
+    return exported, errors
+  end
+  if #candidates == 0 then
+    note_block(self, "NIEMAND_FORDERT_AN", string.format(
+      "%d Eintrag/Eintraege geprueft, keiner unter seiner Schwelle (oder Abklingzeit/stillgelegt)",
+      #self._state.reactors))
   end
 
   for _, cand in ipairs(candidates) do
@@ -744,6 +807,7 @@ function M:_run_supply(cycle_log)
 
     ::continue::
   end
+  if exported > 0 then note_block(self, nil) end
   self._state.current_request = nil
   return exported, errors
 end
@@ -858,15 +922,29 @@ function M:get_summary()
       local amt, cap = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
       if amt and cap and cap > 0 then fuel_pct = math.floor(amt / cap * 100) end
     end
+    -- identity_known heisst: der Knoten kennt die Kennung dieses Reaktors
+    -- (aus der RT-Statusmeldung). Es heisst NICHT, dass Brennstoff
+    -- ankommt.
+    --
+    -- Genau das war im Betrieb irrefuehrend: das Feld hiess "connected",
+    -- die Oberflaeche machte daraus "verbunden/wird beliefert", und ein
+    -- Reaktor galt als versorgt, obwohl nie etwas losgeschickt wurde.
+    -- Wer beliefert wird, steht jetzt daneben -- aus dem, was
+    -- tatsaechlich geflossen ist.
+    local last_ts = r.reactor_id and self._state.last_export_ts[r.reactor_id] or nil
     reactor_status[#reactor_status + 1] = {
-      label         = r.label,
-      fuel_pct      = fuel_pct,
-      reactor_id    = r.reactor_id,
-      path          = r.path,
-      -- Delivery to a reactor no longer depends on a peripheral dedicated
-      -- to it (see export_chest below) -- only on having learned its
-      -- identity from the owning RT node.
-      connected     = r.reactor_id ~= nil,
+      label           = r.label,
+      fuel_pct        = fuel_pct,
+      reactor_id      = r.reactor_id,
+      path            = r.path,
+      identity_known  = r.reactor_id ~= nil,
+      disabled_reason = r.disabled_reason,
+      last_export_ts  = last_ts,
+      supplied        = last_ts ~= nil,
+      -- Alter Name, bewusst beibehalten: operational_summary.lua liest ihn.
+      -- Bedeutung unveraendert (Kennung bekannt), nur nicht mehr die
+      -- einzige Auskunft.
+      connected       = r.reactor_id ~= nil,
     }
   end
   local active_tx = s.rs_router and type(s.rs_router.get_active_transaction) == "function"
@@ -917,6 +995,8 @@ function M:get_summary()
   end
   return {
     enabled        = cfg.enabled == true,
+    -- Warum in diesem Zyklus nichts geliefert wurde (nil = es lief).
+    supply_block   = s.supply_block,
     bridge         = s.bridge and s.bridge.name or nil,
     export_chest   = s.export_chest and s.export_chest.name or nil,
     reactors       = reactor_status,

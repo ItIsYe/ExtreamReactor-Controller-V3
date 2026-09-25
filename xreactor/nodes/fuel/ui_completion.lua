@@ -54,6 +54,26 @@ function M.compute_view_state(model, devices, reserve, minimum)
     return { code = "NO_ME_BRIDGE", severity = "WARNING", title = "ME Bridge fehlt", detail = "Keine betriebsbereite ME Bridge erkannt", action = "ME Bridge/Wired Modem pruefen" }
   end
 
+  -- Stillgelegte Eintraege: DIESE Reaktoren werden nicht beliefert, die
+  -- uebrigen schon. Frueher legte ein solcher Eintrag die ganze Logistik
+  -- lahm und man sah nur "deaktiviert" -- als haette man selbst
+  -- abgeschaltet.
+  local disabled = affected(reactors, function(r) return r.disabled_reason ~= nil end)
+  if #disabled > 0 then
+    return { code = "ENTRY_DISABLED", severity = "WARNING", title = "Eintrag stillgelegt",
+      detail = table.concat(disabled, ", "), action = "Route im Router-UI neu einlernen oder Eintrag entfernen" }
+  end
+
+  -- Warum gerade nichts geliefert wird -- der Grund kommt direkt aus
+  -- logistics_router._run_supply(). Ohne ihn stand die Anlage still, ohne
+  -- dass irgendwo ablesbar war, worauf sie wartet.
+  local block = logistics.supply_block
+  if type(block) == "table" and block.code then
+    return { code = "SUPPLY_BLOCKED", severity = "WARNING", title = "Keine Lieferung",
+      detail = tostring(block.code) .. (block.detail and (": " .. tostring(block.detail)) or ""),
+      action = "Grund oben beheben" }
+  end
+
   local blocked = affected(reactors, function(r) return r.operational_state == "BLOCKED" end)
   if #blocked > 0 then
     return { code = "LOGISTICS_BLOCKED", severity = "WARNING", title = "Lieferweg blockiert", detail = table.concat(blocked, ", "), action = "Inlet/Routing/VALVE pruefen" }
