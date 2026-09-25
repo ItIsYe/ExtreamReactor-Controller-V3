@@ -250,7 +250,7 @@ Ergebnis wird persistiert.
 
 | Datei | Inhalt |
 |---|---|
-| `rt.lua` | `engine = "v2"`, Sicherheitsgrenzen |
+| `rt.lua` | `engine = "v2"`, Sicherheitsgrenzen — **legt der Installer an** |
 | `rt2_capacity_cache.lua` | gemessene Knotenleistung (flach — eine Flotte) |
 | `rt2_reactor_tuning.lua` | Anlagenprofil je Reaktor |
 | `rt2_turbine_model.lua` | Kennlinie je Turbine |
@@ -286,6 +286,29 @@ v2, die Anzeige las v1:
 der Aufrufer ihm gibt, und faellt ohne diese Vorgaben auf v1 zurueck.
 Abgesichert in `rt2_monitor_v2_display_test.lua` — inklusive der Pruefung,
 dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
+
+## Umschalten
+
+Der Schalter steht in `/xreactor_config/rt.lua`:
+
+```lua
+engine = "v2",
+```
+
+Genau so: klein, in Anfuehrungszeichen. Alles andere setzt
+`config_normalizer.validate_config()` still auf `"v1"` zurueck. Danach
+den Rechner neu starten; beim Start steht am Bildschirm
+
+    [RT] engine=v2 AKTIV -- 1 Reaktor(en), 25 Turbinen
+
+Der **Installer legt die Datei an** (`installer/init.lua`), mit
+`engine = "v1"` und einem Kommentarblock, der beides erklaert — sie muss
+also nur editiert werden. Eine **vorhandene** Datei fasst er nie an:
+`/xreactor_config/` liegt ausserhalb von `/xreactor` und ueberlebt jede
+Neuinstallation und jedes Auto-Update. Einmal setzen reicht.
+
+Der Schalter existiert nur, solange es beide Engines gibt. Abgesichert in
+`installer_rt_engine_config_test.lua`.
 
 ## Was v2 bewusst NICHT tut
 

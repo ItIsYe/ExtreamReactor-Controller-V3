@@ -405,6 +405,59 @@ else
   p("WARN: startup.lua nicht von XReactor — unverändert")
 end
 
+-- Knoten-Config der Rolle RT: der Schalter zwischen den beiden
+-- Regel-Engines.
+--
+-- Warum der Installer die Datei anlegt: nodes/rt/config.lua traegt zwar
+-- engine = "v1" als Vorgabe, aber utils.load_config() SCHREIBT eine
+-- fehlende Datei nicht -- es liefert nur die Vorgaben zurueck. Auf einem
+-- frischen Knoten gab es /xreactor_config/rt.lua also gar nicht, und wer
+-- v2 wollte, musste sie von Hand anlegen und dabei den genauen
+-- Schluesselnamen kennen. Jetzt liegt sie da und muss nur editiert
+-- werden.
+--
+-- Eine VORHANDENE Datei wird nie angefasst (gleiches Muster wie
+-- remote_update.lua darunter) -- sonst wuerde jedes Update die Wahl des
+-- Betreibers und alle uebrigen Einstellungen ueberschreiben.
+--
+-- Der Eintrag existiert nur, solange es beide Engines gibt. Ersetzt v2
+-- irgendwann v1, faellt er mitsamt diesem Block weg.
+if role.label == "RT" then
+  local rt_cfg = CONFIG_DIR .. "/rt.lua"
+  if not fs.exists(rt_cfg) then
+    local ok_rt, err_rt = stage_mod.write(rt_cfg, table.concat({
+      "-- /xreactor_config/rt.lua -- Einstellungen dieses RT-Knotens.\n",
+      "--\n",
+      "-- Diese Datei liegt ausserhalb von /xreactor und ueberlebt jede\n",
+      "-- Neuinstallation und jedes Auto-Update. Der Installer legt sie\n",
+      "-- einmal an und fasst eine vorhandene nie wieder an.\n",
+      "--\n",
+      "-- engine -- welche Regel-Engine diesen Knoten regelt:\n",
+      "--     \"v1\"  die bisherige (Vorgabe)\n",
+      "--     \"v2\"  die neue (rt2_*.lua)\n",
+      "--\n",
+      "-- Genau so schreiben: klein, in Anfuehrungszeichen. Alles andere\n",
+      "-- (\"V2\", v2, 2) wird beim Start stillschweigend auf \"v1\"\n",
+      "-- zurueckgestellt. Nach einer Aenderung den Rechner neu starten;\n",
+      "-- beim Start steht dann am Bildschirm:\n",
+      "--     [RT] engine=v2 AKTIV -- 1 Reaktor(en), 25 Turbinen\n",
+      "--\n",
+      "-- Alle uebrigen Einstellungen fuellt der Knoten beim ersten Start\n",
+      "-- aus seinen Vorgabewerten auf und schreibt die Datei dabei neu --\n",
+      "-- diese Kommentare gehen dabei verloren, der Eintrag engine bleibt.\n",
+      "return {\n",
+      "  engine = \"v1\",\n",
+      "}\n",
+    }))
+    if not ok_rt then
+      error("rt.lua konnte nicht geschrieben werden: " .. tostring(err_rt), 0)
+    end
+    p("RT-Config angelegt: " .. rt_cfg .. " (engine = \"v1\"; fuer v2 dort aendern)")
+  else
+    p("RT-Config vorhanden: " .. rt_cfg .. " -- unveraendert")
+  end
+end
+
 -- Auto-Update Config
 local auto_cfg = CONFIG_DIR .. "/remote_update.lua"
 if not fs.exists(auto_cfg) then

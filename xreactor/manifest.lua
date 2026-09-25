@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 740,
-  manifest_id = "manifest-v740",
+  manifest_version = 741,
+  manifest_id = "manifest-v741",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -11,11 +11,11 @@ return {
   { path = "installer/stage.lua", size_bytes = 11074, hash = "5c62baaa", always = true },
   { path = "installer/ui.lua", size_bytes = 1971, hash = "02e204ae", always = true },
   { path = "installer/auto_update.lua", size_bytes = 19510, hash = "e8d5f1ec", always = true },
-  { path = "installer/init.lua", size_bytes = 19559, hash = "93422940", always = true },
+  { path = "installer/init.lua", size_bytes = 22015, hash = "642155ff", always = true },
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "330e1273", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "d22b4df4", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -131,7 +131,7 @@ return {
     { path = "nodes/rt/turbine_control.lua", size_bytes = 48162, hash = "81525fb5", required_for={"RT"} },
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 4766, hash = "cdfb8a49", required_for={"RT"} },
     { path = "nodes/rt/capacity_cache.lua", size_bytes = 1556, hash = "86f9a268", required_for={"RT"} },
-    { path = "nodes/rt/config.lua", size_bytes = 6759, hash = "e6ff9422", required_for={"RT"} },
+    { path = "nodes/rt/config.lua", size_bytes = 7176, hash = "6f8032a3", required_for={"RT"} },
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 27824, hash = "ab523564", required_for={"RT"} },
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"} },
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 12388, hash = "019f696f", required_for={"RT"} },

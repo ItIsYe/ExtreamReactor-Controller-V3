@@ -26,9 +26,16 @@ return {
   -- rt2_*.lua engine (single unified state machine, mode-independent
   -- steam-tank reactor control, AUS-slot overspeed fix). Per-node
   -- opt-in for canary rollout -- set explicitly in /xreactor_config/
-  -- rt.lua on ONE node first, compare, then widen. v2 only supports a
-  -- single reactor per node; main.lua falls back to v1 with a WARN log
-  -- if more than one reactor is discovered while engine="v2".
+  -- rt.lua on ONE node first, compare, then widen. Der Installer legt
+  -- diese Datei an (installer/init.lua), sie muss nur editiert werden.
+  --
+  -- KORREKTUR: hier stand, v2 unterstuetze nur EINEN Reaktor je Knoten
+  -- und main.lua falle sonst auf v1 zurueck. Das galt bis zum Umbau auf
+  -- rt2_unit.lua und ist seitdem falsch -- es gibt weder die Begrenzung
+  -- noch den Rueckfall. Mehrere Reaktoren speisen dasselbe Dampfnetz und
+  -- regeln unabhaengig aus IHREM eigenen Tank (siehe RT_ENGINE_V2.md,
+  -- Abschnitt "Mehrere Reaktoren"). Die Turbinenzahl ist ebenfalls nicht
+  -- begrenzt (nachgemessen bis 100).
   engine = "v1",
   debug_logging = true,
   reset_log_on_start = true,
