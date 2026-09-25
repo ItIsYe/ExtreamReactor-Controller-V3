@@ -23,6 +23,15 @@ ein. Details in [`RT_ENGINE_V2.md`](RT_ENGINE_V2.md), Abschnitt
 „Selbstvermessung der Turbinen".
 
 Wieder drin seit v738, mit Fix und `rt2_unreadable_turbine_write_test.lua`.
+
+Seit v739 ist auch die **Ursache der unlesbaren Messwerte** beseitigt:
+`adapters/turbine.lua` fiel bei einer fehlgeschlagenen
+Faehigkeitsabfrage auf `getRotorRPM` zurueck — eine Methode, die es bei
+Extreme Reactors 2 nicht gibt, und deren Aufruf CC:Tweaked mit
+`No such method` quittiert. Faehigkeiten werden jetzt je Peripherie
+gemerkt und es wird nie eine Methode aufgerufen, von der nicht bekannt
+ist, dass es sie gibt (`turbine_adapter_capability_probe_test.lua`).
+
 **Steht noch im Livetest.**
 
 ### Platzbedarf auf dem Knoten

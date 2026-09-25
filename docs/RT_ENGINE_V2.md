@@ -205,6 +205,39 @@ auf dem Schirm sah alles normal aus.
 
 Festgehalten in `rt2_unreadable_turbine_write_test.lua`.
 
+**Und warum die Messwerte ueberhaupt unlesbar waren** (Ursache, eine
+Ebene tiefer): CC:Tweaked wirft bei einer unbekannten Methode einen
+Lua-Fehler — `PeripheralWrapper.call()` in `PeripheralAPI.java`:
+`if (method == null) throw new LuaException("No such method " + methodName);`
+`utils.safe_peripheral_call()` faengt den ab, `read_number()` macht
+daraus `"n/a"`, also einen nicht lesbaren Messwert.
+
+`adapters/turbine.lua`'s `inspect()` holte die Methodenliste bei **jedem
+Aufruf** neu (25 Turbinen, mehrmals pro Sekunde) und waehlte daraus den
+Namen fuer die Drehzahl:
+
+```lua
+read_number(name, has_method(method_set, "getRotorSpeed") and "getRotorSpeed" or "getRotorRPM")
+```
+
+Schlug `utils.safe_get_methods()` einmal fehl — ein Rennen gegen ein
+kurz nicht erreichbares Peripheral genuegt —, war die Liste leer und der
+Aufruf ging an `getRotorRPM`. Die gibt es bei Extreme Reactors 2
+(MC 1.21.1) nicht; dort heisst sie `getRotorSpeed`. Der Ausweichweg war
+damit ein garantierter Fehlschlag statt eines Ausweichwegs.
+
+`adapters/reactor.lua` hatte das nie: dort ist **jeder** Aufruf durch
+`has_method()` gedeckt. Die Turbine haelt es jetzt genauso, und merkt
+sich die Faehigkeiten ausserdem je Peripherie:
+
+- Ein fehlgeschlagener Versuch behaelt die zuletzt bekannte Liste,
+  statt auf „leer" zusammenzufallen.
+- Ohne bekannte Liste wird **nichts geraten** — der Messwert gilt als
+  unbekannt, und die Regelung faehrt auf die sichere Seite.
+- Nebenbei entfaellt je Turbine und Takt ein Peripherieaufruf.
+
+Festgehalten in `turbine_adapter_capability_probe_test.lua`.
+
 ## Selbstvermessung des Reaktors
 
 `rt2_tuning.lua` misst **je Reaktor**, wie schnell sein Dampftank auf
