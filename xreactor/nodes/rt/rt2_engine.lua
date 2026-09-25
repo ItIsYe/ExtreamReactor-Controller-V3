@@ -53,6 +53,9 @@ local turbine_model_path
 -- Sicherheitslage, ob sein Anlagenprofil schon geschrieben wurde.
 local reactor_state = {}
 local last_saved_max_output
+-- Wachhund: was zuletzt gemeldet wurde, damit die Meldung nicht jeden
+-- Takt erscheint.
+local last_idle_reason
 
 -- Die Reaktoren dieses Knotens (Peripherienamen). Die Turbinen bleiben
 -- EINE Flotte: sie haengen alle am selben Dampfnetz, und jeder Reaktor
@@ -157,7 +160,19 @@ end
 --   ctx.adapters.turbine / ctx.adapters.reactor -- adapters/turbine.lua, adapters/reactor.lua
 --   ctx.CONFIG.LOG_PREFIX
 function M.tick(ctx)
-  if not engine then return nil end
+  -- Ohne Engine wurde M.init() nie (erfolgreich) durchlaufen. Das still
+  -- zu schlucken hiesse: main.lua's v2-Zweig ruft hier jeden Takt hinein,
+  -- bekommt nil zurueck und gibt sich zufrieden -- die Anlage laeuft
+  -- ungeregelt weiter und niemand erfaehrt es. Einmal melden, dann ruhig
+  -- sein.
+  if not engine then
+    if not last_idle_reason then
+      last_idle_reason = "v2 REGELT NICHT: Engine nicht initialisiert"
+      if ctx and type(ctx.log) == "function" then ctx.log("ERROR", last_idle_reason) end
+      pcall(print, "[RT] " .. last_idle_reason)
+    end
+    return nil
+  end
   local now_ms = os.epoch and os.epoch("utc") or 0
 
   -- Discovery laeuft nach init(), deshalb die Reaktorliste hier frisch
@@ -215,13 +230,58 @@ function M.tick(ctx)
     reactors = reactor_inputs,
   })
 
+  local wrote_turbines, wrote_reactors = 0, 0
   for _, t in ipairs(result.turbines) do
     adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
+    wrote_turbines = wrote_turbines + 1
   end
   for index, decision in ipairs(result.reactors) do
     local name = reactor_names[index]
     if name then
       adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
+      wrote_reactors = wrote_reactors + 1
+    end
+  end
+
+  -- ── Wachhund: regelt hier ueberhaupt noch jemand? ─────────────────────
+  --
+  -- Aus dem Livetest (node-101): 25 Turbinen standen bei 967-1256 RPM mit
+  -- vollem Durchfluss und GELOESTER Spule. Unter v2 ist dieser Zustand
+  -- unmoeglich, solange geschrieben wird -- compute_coil_decision kuppelt
+  -- oberhalb von Ziel+Band immer ein. Es wurde also gar nichts
+  -- geschrieben, und niemand hat es gemerkt: die Oberflaeche laeuft als
+  -- eigener Service weiter und sah voellig normal aus.
+  --
+  -- Der Knoten kennt seine Geraete aus der Discovery (ctx.modules). Kennt
+  -- er welche, hat aber in diesem Takt keine einzige Entscheidung an die
+  -- Hardware gegeben, dann laeuft die Anlage gerade ungeregelt -- und das
+  -- muss am Rechner selbst stehen, nicht nur beim Log-Collector.
+  local known_turbines, known_reactors = 0, 0
+  for _, module in pairs(ctx.modules or {}) do
+    if module.type == "turbine" then known_turbines = known_turbines + 1
+    elseif module.type == "reactor" then known_reactors = known_reactors + 1 end
+  end
+
+  local idle_reason
+  if known_turbines > 0 and wrote_turbines == 0 then
+    idle_reason = string.format(
+      "v2 REGELT NICHT: %d Turbine(n) entdeckt, aber keine einzige angesteuert"
+        .. " (gelesen: %d) -- Turbinenliste in der Konfiguration leer oder"
+        .. " Peripherie nicht lesbar. Die Anlage laeuft gerade ungeregelt.",
+      known_turbines, #turbine_readings)
+  elseif known_reactors > 0 and wrote_reactors == 0 then
+    idle_reason = string.format(
+      "v2 REGELT NICHT: %d Reaktor(en) entdeckt, aber keiner angesteuert"
+        .. " (bekannt: %d) -- Reaktorliste in der Konfiguration leer.",
+      known_reactors, #reactor_names)
+  end
+  if idle_reason ~= last_idle_reason then
+    last_idle_reason = idle_reason
+    if idle_reason then
+      ctx.log("ERROR", idle_reason)
+      pcall(print, "[RT] " .. idle_reason)
+    elseif last_idle_reason ~= nil then
+      ctx.log("INFO", "v2 regelt wieder")
     end
   end
 

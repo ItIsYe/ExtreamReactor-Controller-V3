@@ -72,6 +72,17 @@ local function rt_status(model)
   return "LEISTUNG WEICHT AB", "WARNING"
 end
 
+-- Welche Regel-Engine diesen Knoten regelt. Gehoert in die Fusszeile
+-- JEDER Seite: der Unterschied ist erheblich (v1 hat den bekannten
+-- Fehler, eine abgewaehlte Turbine bei vollem Durchfluss und geloester
+-- Spule hochdrehen zu lassen), und ein Knoten, der still auf v1
+-- zurueckgefallen ist, sah bisher aus wie jeder andere.
+local function with_engine(model, label)
+  local engine = model and model.engine
+  if type(engine) ~= "string" or engine == "" then return label end
+  return label .. "  " .. engine:upper()
+end
+
 local function page_header(mon, model, title, page, icon)
   mux.clear(mon)
   mux.header(mon, { title = title, node_id = tostring(model.node_id or "RT-?"), page = page, status = health(model), icon = icon })
@@ -160,7 +171,7 @@ function M.render_overview(mon, model)
     mux.data_row(mon, 2, y_at(18), w - 3, { label = rods_label .. "   |   STEAM " .. short(s.steam_amount), value = "RPM " .. fmt(s.avg_rpm, 0, ""), status = "text" })
   end
 
-  return mux.footer_nav(mon, h, w, { center = "RT OVERVIEW" })
+  return mux.footer_nav(mon, h, w, { center = with_engine(model, "RT OVERVIEW") })
 end
 
 function M.render_turbines(mon, model)
@@ -219,7 +230,7 @@ function M.render_turbines(mon, model)
     y = y + 1
   end
 
-  return mux.footer_nav(mon, h, w, { center = "TURBINEN" })
+  return mux.footer_nav(mon, h, w, { center = with_engine(model, "TURBINEN") })
 end
 
 local function reactor_key(r)
@@ -275,7 +286,7 @@ function M.render_reactors(mon, model)
     end
   end
 
-  return mux.footer_nav(mon, h, w, { center = "REAKTOREN" })
+  return mux.footer_nav(mon, h, w, { center = with_engine(model, "REAKTOREN") })
 end
 
 function M.render_diagnostics(mon, model)
@@ -351,7 +362,7 @@ function M.render_diagnostics(mon, model)
     end
   end
 
-  return mux.footer_nav(mon, h, w, { center = "DIAGNOSTICS" })
+  return mux.footer_nav(mon, h, w, { center = with_engine(model, "DIAGNOSTICS") })
 end
 
 return M

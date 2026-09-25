@@ -276,6 +276,8 @@ function M.update(monitor, ctx)
     -- ctx.monitor_scale wird von main.lua gesetzt (der aktuell wirksame,
     -- ggf. per Touch geaenderte Wert).
     monitor_scale = ctx.monitor_scale,
+    -- Welche Regel-Engine laeuft (siehe main.lua). Steht in der Fusszeile.
+    engine = ctx.engine,
   }
 
   if not M.monitor_router then
