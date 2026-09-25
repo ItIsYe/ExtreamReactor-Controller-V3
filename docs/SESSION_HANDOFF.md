@@ -32,7 +32,11 @@ Extreme Reactors 2 nicht gibt, und deren Aufruf CC:Tweaked mit
 gemerkt und es wird nie eine Methode aufgerufen, von der nicht bekannt
 ist, dass es sie gibt (`turbine_adapter_capability_probe_test.lua`).
 
-**Steht noch im Livetest.**
+**Im Betrieb bestaetigt (2026-09-25):** ein Reaktor mit 25 Turbinen
+laeuft im Spiel einwandfrei, der Regler bleibt ruhig und haelt die
+Drehzahl. Nicht bestaetigt: mehrere Reaktoren und mehr als 25 Turbinen
+(nur gegen Tests belegt). Die gelernte Kennlinie war nicht beteiligt --
+ohne Lastwechsel entsteht kein zweiter Betriebspunkt.
 
 ### Platzbedarf auf dem Knoten
 

@@ -336,18 +336,33 @@ Der Schalter existiert nur, solange es beide Engines gibt. Abgesichert in
 | `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt v2s Zustand, nicht v1s leeren |
 | plus Modultests je `rt2_*`-Datei | |
 
+## Stand im Betrieb
+
+**Bestaetigt (Betreiber, 2026-09-25): ein Reaktor mit 25 Turbinen laeuft
+im Spiel einwandfrei.** Der Regler bleibt ruhig und haelt die Drehzahl.
+
+Das galt fuer die Fassung v740 — also mit allen drei Korrekturen, die
+der Livetest erzwungen hat:
+
+| | |
+|---|---|
+| v733 | RT-Monitor zeigt v2-Daten statt v1 |
+| v738 | unbekannt ≠ 0; Schutzentscheidungen werden immer geschrieben |
+| v739 | keine geratenen Peripherie-Methodennamen mehr |
+
+Nicht bestaetigt ist damit alles, was diese Anlage nicht hat: **mehrere
+Reaktoren** und **mehr als 25 Turbinen** sind nur gegen Tests belegt
+(`rt2_twin_reactor_integration_test.lua`, nachgemessen bis 100
+Turbinen), nicht im Spiel.
+
+Die **gelernte Kennlinie** war in diesem Lauf nicht beteiligt: ohne
+Lastwechsel entsteht nur EIN Betriebspunkt, und acht verschiedene sind
+noetig (nachgemessen). Was hier ruhig laeuft, sind Stellintervall,
+Vorausschau und Ruhezone — die brauchen kein Lernen. Siehe
+„Selbstvermessung der Turbinen".
+
 ## Offen
 
-- **Livetest laeuft.** Erster Durchlauf auf node-101 (25 Turbinen,
-  1 Reaktor): Einlernen ging durch und meldete einen gemessenen Wert.
-  Befund daraus war die fehlende Uebersetzung fuer den RT-eigenen
-  Monitor (siehe „Anzeige"), nicht die Regelung selbst.
-- **Das ruhige Regeln ist noch nicht am echten Rotor geprueft.** Die
-  Zahlen oben (600 ms, 3 s Vorausschau, 4 RPM Ruhezone) sind gegen eine
-  nachgebildete Strecke mit ~1,6 s Zeitkonstante belegt. Traegere
-  Turbinen brauchen womoeglich ein laengeres Stellintervall — genau das
-  setzt die gelernte Kennlinie dann selbst
-  (`profile.min_adjust_interval_ms`).
 - **Groessenordnung des gemessenen Werts pruefen.** Der Livetest mass
   834 054 315 RF/t aus 25 Turbinen, also rund 33 M RF/t je Turbine.
   Die Zahl ist in sich stimmig (dieselbe Quelle
