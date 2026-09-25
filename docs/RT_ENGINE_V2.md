@@ -74,6 +74,26 @@ ueber den Dampf, nicht ueber Code.
 
 Turbinenzahl ist nicht begrenzt (nachgemessen bis 100).
 
+Die Einheitenliste wird **je Takt** an die Reaktoren angeglichen, die der
+Takt mitbringt, und nach **Namen** gepaart. Beides musste sein:
+
+- Die Discovery laeuft nach `init()` weiter und bindet den zweiten
+  Reaktor oft erst spaeter. Die Liste entstand frueher einmalig beim
+  Start — jeder Takt brachte dann zwar zwei Messwerte, es gab aber nur
+  eine Einheit, und der zweite Reaktor blieb ungeregelt stehen (im
+  Betrieb gemeldet, 2026-09-25).
+- Die Discovery sortiert nicht stabil. Ueber die Position zu paaren
+  hiesse, einem Reaktor die Staebe des anderen zu stellen — schlimmer,
+  als ihn gar nicht zu regeln.
+
+Ein Reaktor behaelt dabei seinen Messzustand (Stellrate, Anlagenprofil,
+Sicherheitslage); einer, der erst spaeter dazukommt, bekommt sein
+gemessenes Profil aus `rt2_reactor_tuning.lua`. Festgehalten in
+`rt2_late_reactor_discovery_test.lua` — bewusst auf dem Weg der Anlage
+(erst einer bekannt, dann zwei), denn die bestehenden Zwei-Reaktor-Tests
+uebergeben beide schon an `orchestrator.new()` und sind dem Fehler
+deshalb entgangen.
+
 ## Zustaende
 
 | Zustand | Bedeutung | Turbinenziel |
@@ -350,10 +370,17 @@ der Livetest erzwungen hat:
 | v738 | unbekannt ≠ 0; Schutzentscheidungen werden immer geschrieben |
 | v739 | keine geratenen Peripherie-Methodennamen mehr |
 
-Nicht bestaetigt ist damit alles, was diese Anlage nicht hat: **mehrere
-Reaktoren** und **mehr als 25 Turbinen** sind nur gegen Tests belegt
-(`rt2_twin_reactor_integration_test.lua`, nachgemessen bis 100
-Turbinen), nicht im Spiel.
+Ebenfalls bestaetigt: **Lastwechsel** und dass der gemeldete Ausstoss zu
+dem passt, was an der ENERGY-Node ankommt — die Groessenordnung des
+gemessenen RF/t-Werts ist damit geklaert.
+
+**Zwei Reaktoren liefen zunaechst nicht**: einer wurde geregelt, der
+andere nicht, waehrend die Turbinen sauber liefen. Ursache und Behebung
+siehe „Mehrere Reaktoren"; behoben in v742, im Spiel noch nicht
+nachgeprueft.
+
+Nicht bestaetigt bleibt **mehr als 25 Turbinen** — nur gegen Tests belegt
+(nachgemessen bis 100).
 
 Die **gelernte Kennlinie** war in diesem Lauf nicht beteiligt: ohne
 Lastwechsel entsteht nur EIN Betriebspunkt, und acht verschiedene sind
@@ -363,7 +390,12 @@ Vorausschau und Ruhezone — die brauchen kein Lernen. Siehe
 
 ## Offen
 
-- **Groessenordnung des gemessenen Werts pruefen.** Der Livetest mass
+- **Zwei Reaktoren im Spiel nachpruefen.** Behoben in v742, aber nur
+  gegen Tests belegt.
+- ~~**Groessenordnung des gemessenen Werts pruefen.**~~ Erledigt: der
+  Betreiber hat bestaetigt, dass der gemeldete Ausstoss zu dem passt, was
+  an der ENERGY-Node ankommt. Zum Nachlesen, was da gemessen wurde: der
+  Livetest mass
   834 054 315 RF/t aus 25 Turbinen, also rund 33 M RF/t je Turbine.
   Die Zahl ist in sich stimmig (dieselbe Quelle
   `getEnergyProducedLastTick` speist auch die IST-Anzeige, und die lag

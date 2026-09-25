@@ -130,6 +130,10 @@ function M.init(opts)
     master_timeout_ms = opts.master_timeout_ms,
     initial_capacity = loaded,
     reactors = specs,
+    -- Auch fuer Reaktoren, die die Discovery erst NACH init() bindet --
+    -- der Orchestrator baut deren Einheit dann selbst und holt sich das
+    -- gemessene Profil hier ab.
+    tuning_profiles = profiles,
     turbine_models = turbine_models,
   })
   last_result = nil
@@ -164,7 +168,17 @@ function M.tick(ctx)
   -- nehmen. Die Turbinen bleiben EINE Flotte.
   local live = (ctx.config and ctx.config.reactors) or {}
   if #live > 0 then
-    if #live ~= #reactor_names then
+    -- Nach INHALT vergleichen, nicht nur nach Anzahl: tauscht die
+    -- Discovery zwei Reaktoren (gleiche Anzahl, andere Namen), waere die
+    -- Liste sonst still veraltet und jeder Reaktor bekaeme die
+    -- Entscheidung des anderen.
+    local differs = (#live ~= #reactor_names)
+    if not differs then
+      for index = 1, #live do
+        if live[index] ~= reactor_names[index] then differs = true; break end
+      end
+    end
+    if differs then
       reactor_names = {}
       for _, name in ipairs(live) do reactor_names[#reactor_names + 1] = name end
     end
@@ -219,7 +233,12 @@ function M.tick(ctx)
     adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
   end
   for index, decision in ipairs(result.reactors) do
-    local name = reactor_names[index]
+    -- Der Name aus der Entscheidung selbst, nicht ueber die Position:
+    -- die Einheitenliste wird je Takt an die gemeldeten Reaktoren
+    -- angeglichen, ihre Reihenfolge muss also nicht mehr mit
+    -- reactor_names uebereinstimmen. Ueber den Index zu paaren hiesse,
+    -- einem Reaktor die Staebe des anderen zu stellen.
+    local name = decision.name or reactor_names[index]
     if name then
       adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
     end

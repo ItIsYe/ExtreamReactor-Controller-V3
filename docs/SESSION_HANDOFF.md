@@ -34,8 +34,10 @@ ist, dass es sie gibt (`turbine_adapter_capability_probe_test.lua`).
 
 **Im Betrieb bestaetigt (2026-09-25):** ein Reaktor mit 25 Turbinen
 laeuft im Spiel einwandfrei, der Regler bleibt ruhig und haelt die
-Drehzahl. Nicht bestaetigt: mehrere Reaktoren und mehr als 25 Turbinen
-(nur gegen Tests belegt). Die gelernte Kennlinie war nicht beteiligt --
+Drehzahl. Ebenfalls bestaetigt: Lastwechsel, und der gemeldete Ausstoss passt zu
+dem, was an der ENERGY-Node ankommt. Zwei Reaktoren liefen zunaechst
+NICHT (einer geregelt, einer nicht) -- behoben in v742, im Spiel noch
+nicht nachgeprueft. Nicht bestaetigt bleibt mehr als 25 Turbinen. Die gelernte Kennlinie war nicht beteiligt --
 ohne Lastwechsel entsteht kein zweiter Betriebspunkt.
 
 ### Platzbedarf auf dem Knoten

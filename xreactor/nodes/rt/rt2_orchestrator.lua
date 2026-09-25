@@ -52,14 +52,72 @@ function M.new(opts)
     -- Profile, die in DIESEM Takt neu entstanden sind -- rt2_engine
     -- schreibt sie weg und meldet sie einmal.
     new_turbine_models = {},
+    -- Anlagenprofile je Reaktorname, damit ein Reaktor, der erst spaeter
+    -- dazukommt, sein gemessenes Profil trotzdem bekommt.
+    reactor_tuning_profiles = opts.tuning_profiles or {},
+    -- Einheiten nach Name, damit eine Turbine... pardon, ein Reaktor bei
+    -- einer geaenderten Reihenfolge seinen Messzustand behaelt.
+    reactors_by_name = {},
   }
 
   -- opts.reactors: { { name = <Peripheriename>, tuning_profile = ... }, ... }
-  for _, spec in ipairs(opts.reactors or {}) do
-    self.reactors[#self.reactors + 1] = rt2_unit.new(spec)
+  local function add_unit(spec)
+    local unit = rt2_unit.new(spec)
+    self.reactors[#self.reactors + 1] = unit
+    if spec.name then self.reactors_by_name[spec.name] = unit end
+    return unit
   end
+
+  for _, spec in ipairs(opts.reactors or {}) do add_unit(spec) end
   if #self.reactors == 0 then
-    self.reactors[1] = rt2_unit.new({ name = opts.reactor_name, tuning_profile = opts.tuning_profile })
+    add_unit({ name = opts.reactor_name, tuning_profile = opts.tuning_profile })
+  end
+
+  -- Die Einheitenliste an die Reaktoren angleichen, die dieser Takt
+  -- tatsaechlich mitbringt.
+  --
+  -- Warum das noetig ist: die Liste entstand bisher EINMAL beim Start aus
+  -- opts.reactors. Bindet die Discovery den zweiten Reaktor erst spaeter
+  -- -- und das ist der Normalfall, sie laeuft nach init() weiter --, dann
+  -- brachte jeder Takt zwar zwei Messwerte, aber es gab nur EINE Einheit.
+  -- "for index, unit in ipairs(self.reactors)" lief einmal, es entstand
+  -- eine Entscheidung, und der zweite Reaktor wurde nie angefasst. Genau
+  -- so im Spiel beobachtet: einer geregelt, einer nicht, waehrend die
+  -- Turbinen sauber liefen (die werden ohnehin je Takt frisch aus
+  -- input.turbines aufgebaut).
+  --
+  -- Nach NAME, nicht nach Position: ein Reaktor behaelt damit seinen
+  -- Messzustand (Stellrate, Anlagenprofil, Sicherheitslage), auch wenn
+  -- sich die Reihenfolge der Discovery aendert.
+  local function reconcile(reactor_inputs)
+    local named = 0
+    for _, ri in ipairs(reactor_inputs or {}) do
+      if ri.name then named = named + 1 end
+    end
+    -- Ein-Reaktor-Aufruf ohne Namen (Alt-Form): nichts anzugleichen.
+    if named == 0 then return end
+
+    local seen, ordered = {}, {}
+    for _, ri in ipairs(reactor_inputs) do
+      if ri.name then
+        local unit = self.reactors_by_name[ri.name]
+        if not unit then
+          unit = rt2_unit.new({
+            name = ri.name,
+            tuning_profile = self.reactor_tuning_profiles[ri.name],
+          })
+          self.reactors_by_name[ri.name] = unit
+        end
+        seen[ri.name] = true
+        ordered[#ordered + 1] = unit
+      end
+    end
+    -- Verschwundene Reaktoren verlieren ihre Einheit -- sonst bekaeme ein
+    -- abgebauter Reaktor weiter Entscheidungen, die ins Leere gehen.
+    for name in pairs(self.reactors_by_name) do
+      if not seen[name] then self.reactors_by_name[name] = nil end
+    end
+    self.reactors = ordered
   end
 
   function self.current_state()
@@ -139,6 +197,8 @@ function M.new(opts)
     if not reactor_inputs then
       reactor_inputs = { { reactor = input.reactor, safety_tripped = input.safety_tripped } }
     end
+
+    reconcile(reactor_inputs)
 
     -- Erst messen, DANN den Zustand entscheiden -- mit den Messwerten
     -- desselben Takts. Andersherum verliesse eine fertig eingelernte
