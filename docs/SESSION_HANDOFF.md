@@ -7,24 +7,23 @@
 Kein offener PR, keine offene Issue. `beta` ist der aktive Entwicklungszweig;
 `main` bleibt unangetastet (stabile Releases, nie direkt bearbeiten).
 
-### Zurueckgenommen: Turbinen-Selbstvermessung (v734)
+### Turbinen-Selbstvermessung — zurueckgenommen und gefixt wieder drin
 
-Der Regler-Umbau aus v734 (Stellintervall, Vorausschau, Ruhezone,
-gelernte Kennlinie je Turbine — `rt2_turbine_model.lua`) ist **komplett
-zurueckgenommen**. Im Livetest auf node-101 standen danach alle 25
-Turbinen bei 967–1256 RPM mit vollem Durchfluss und geloester Spule, und
-Regler wie Spulenansteuerung arbeiteten nicht mehr.
+Der Regler-Umbau (Stellintervall, Vorausschau, Ruhezone, gelernte
+Kennlinie je Turbine — `rt2_turbine_model.lua`) lief im ersten Anlauf
+(v734) im Spiel auf: 25 Turbinen bei 967–1256 RPM, voller Durchfluss,
+geloeste Spule, keine Reaktion. Zurueckgenommen in v737.
 
-Die Ursache ist **nicht gefunden**. Nachweisbar ist nur, was sie NICHT
-ist: unter v2 kuppelt `compute_coil_decision()` oberhalb von Ziel+Band
-ausnahmslos ein, und der Patch fasste ausschliesslich den Durchfluss an,
-nie die Spule — der beobachtete Zustand laesst sich also nur erklaeren,
-wenn der Regeltakt gar nicht mehr bis zum Schreiben kam. Gegen die echte
-Engine nachgestellt liess sich der Zustand nicht reproduzieren.
+Ursache gefunden und nachgemessen: nicht die Regellogik, sondern die
+Schreibersparnis. `rt2_adapter.read_turbine()` machte aus einem
+unlesbaren Durchfluss (`"n/a"`) eine `0`, und der Dirty-Check hielt
+diese erfundene 0 fuer einen echten Rueckmesswert — ein einziger
+fehlgeschlagener Peripherieaufruf stellte das Schreiben damit dauerhaft
+ein. Details in [`RT_ENGINE_V2.md`](RT_ENGINE_V2.md), Abschnitt
+„Selbstvermessung der Turbinen".
 
-Die Regelkette (`nodes/rt/`, `adapters/`) ist byteweise wieder auf dem
-Stand von v733. Wer den Umbau erneut angeht: er steckt vollstaendig in
-Commit `c00fda41`, samt Tests und Begruendung.
+Wieder drin seit v738, mit Fix und `rt2_unreadable_turbine_write_test.lua`.
+**Steht noch im Livetest.**
 
 ### Platzbedarf auf dem Knoten
 

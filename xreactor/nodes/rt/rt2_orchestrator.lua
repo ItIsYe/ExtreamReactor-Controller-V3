@@ -20,6 +20,7 @@ local rt2_master_link = require('nodes.rt.rt2_master_link')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_command_handler = require('nodes.rt.rt2_command_handler')
 local rt2_unit = require('nodes.rt.rt2_unit')
+local rt2_turbine_model = require('nodes.rt.rt2_turbine_model')
 
 local M = {}
 
@@ -39,6 +40,18 @@ function M.new(opts)
     rotation_offset = 0,
     last_rotate_ms = 0,
     reactors = {},
+    -- Je Turbine, nach NAME (die Reihenfolge der Flotte ist nicht stabil):
+    -- das gelernte Streckenmodell, der laufende Messzustand und wann
+    -- zuletzt gestellt wurde. Siehe rt2_turbine_model.lua.
+    turbine_models = opts.turbine_models or {},
+    turbine_model_state = {},
+    turbine_last_change_ms = {},
+    -- Letzte Drehzahlmessung je Turbine, um daraus abzuleiten, wie schnell
+    -- der Rotor gerade steigt oder faellt.
+    turbine_rpm_trace = {},
+    -- Profile, die in DIESEM Takt neu entstanden sind -- rt2_engine
+    -- schreibt sie weg und meldet sie einmal.
+    new_turbine_models = {},
   }
 
   -- opts.reactors: { { name = <Peripheriename>, tuning_profile = ... }, ... }
@@ -96,16 +109,6 @@ function M.new(opts)
   -- -- der Suchlauf sieht dann nie eine tragende Stufe und kommt nie vom
   -- Fleck. Ausserdem soll waehrend der Suche ohnehin dieselbe Turbine
   -- oben bleiben, waehrend die naechste dazukommt.
-  local function rotated_slot(turbine_index, turbine_count, now_ms, state)
-    if turbine_count <= 1 then return turbine_index end
-    if state ~= rt2_state.states.MASTER then return turbine_index end
-    if (now_ms or 0) - self.last_rotate_ms >= M.ROTATE_INTERVAL_MS then
-      self.rotation_offset = (self.rotation_offset + 1) % turbine_count
-      self.last_rotate_ms = now_ms or self.last_rotate_ms
-    end
-    return ((turbine_index - 1 + self.rotation_offset) % turbine_count) + 1
-  end
-
   local function rotated_slot(index, count, now_ms, state)
     if count <= 1 then return index end
     -- Die Rotation existiert nur dafuer, dass unter MASTER nicht immer
@@ -165,6 +168,28 @@ function M.new(opts)
       safety_tripped   = all_tripped or self.manual_safety_trip,
     })
 
+    -- Selbstvermessung der Turbinen -- rein beobachtend, aus den
+    -- Messwerten DIESES Takts, und nur solange die Turbine noch kein
+    -- Profil hat. Waehrend SAFE nicht: der Durchfluss ist dort erzwungen
+    -- 0, die Paare beschrieben also nicht die Strecke.
+    self.new_turbine_models = {}
+    if state ~= rt2_state.states.SAFE then
+      for _, t in ipairs(input.turbines or {}) do
+        local name = t.name
+        if name and not self.turbine_models[name] then
+          local measured = rt2_turbine_model.observe(self.turbine_model_state[name], {
+            now_ms = now_ms, flow = t.current_flow, rpm = t.rpm, coil_engaged = t.coil_engaged,
+          })
+          self.turbine_model_state[name] = measured
+          local profile = rt2_turbine_model.derive(measured)
+          if profile then
+            self.turbine_models[name] = profile
+            self.new_turbine_models[#self.new_turbine_models + 1] = { name = name, profile = profile }
+          end
+        end
+      end
+    end
+
     local reactor_decisions = {}
     for index, unit in ipairs(self.reactors) do
       local ri = reactor_inputs[index] or {}
@@ -190,12 +215,60 @@ function M.new(opts)
         power_percent = input.master_percent or self.master_percent,
         max_active = max_active,
       })
+      local name = t.name
+      -- Drehzahlaenderung seit der letzten Messung dieser Turbine.
+      local rpm_rate
+      local rpm_now = tonumber(t.rpm)
+      if name and rpm_now and now_ms then
+        local trace = self.turbine_rpm_trace[name]
+        if trace and trace.ms and now_ms > trace.ms then
+          rpm_rate = (rpm_now - trace.rpm) / ((now_ms - trace.ms) / 1000)
+        end
+        self.turbine_rpm_trace[name] = { rpm = rpm_now, ms = now_ms }
+      end
+      local flow_decision = rt2_turbine.compute_flow_decision({
+        rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
+        rpm_rate = rpm_rate,
+        coil_engaged = t.coil_engaged == true,
+        -- Das Stellintervall braucht beide Zeiten; ohne sie faellt
+        -- compute_flow_decision auf sein altes Verhalten zurueck.
+        now_ms = now_ms,
+        last_change_ms = name and self.turbine_last_change_ms[name] or nil,
+        model = name and self.turbine_models[name] or nil,
+      })
+      -- Steht die Vorgabe schon so an, muss sie nicht erneut geschrieben
+      -- werden. Das ist der Normalfall -- eine eingeschwungene Turbine
+      -- wird gar nicht mehr verstellt -- und spart je Takt einen
+      -- Peripherieaufruf pro Turbine.
+      --
+      -- Zwei Bedingungen muessen dafuer erfuellt sein, und beide fehlten
+      -- im ersten Anlauf (Livetest node-101: 25 Turbinen bei vollem
+      -- Durchfluss, geloester Spule und ohne jede Reaktion):
+      --
+      --   1. Es muss ein ECHTER Rueckmesswert vorliegen. Ist der
+      --      Durchfluss nicht lesbar, ist er unbekannt -- und unbekannt
+      --      ist nie ein Grund, das Schreiben zu unterlassen. Vorher kam
+      --      hier eine vom Adapter erfundene 0 an, die zufaellig genau
+      --      dem entsprach, was der Regler bei fehlender Drehzahl setzen
+      --      wollte: die Vorgabe galt als erledigt und ging nie raus.
+      --   2. Es darf keine SCHUTZentscheidung sein. Fehlende Drehzahl,
+      --      Ueberdrehzahl und ein abgewaehlter Slot fahren den Dampf auf
+      --      null -- solche Entscheidungen werden geschrieben, immer,
+      --      auch wenn der Rueckmesswert behauptet, es staende schon so
+      --      an. Eine Bremsung darf nicht an einer Ersparnis scheitern.
+      local readback = tonumber(t.current_flow)
+      local protective = flow_decision.reason == "NO_RPM_READING"
+        or flow_decision.reason == "OVERSPEED"
+        or flow_decision.reason == "TARGET_ZERO"
+      if readback ~= nil and readback == flow_decision.flow and not protective then
+        flow_decision.unchanged = true
+      elseif name then
+        self.turbine_last_change_ms[name] = now_ms
+      end
       turbine_results[#turbine_results + 1] = {
-        name = t.name,
+        name = name,
         target_rpm = target_rpm,
-        flow_decision = rt2_turbine.compute_flow_decision({
-          rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
-        }),
+        flow_decision = flow_decision,
         coil_decision = rt2_turbine.compute_coil_decision({
           rpm = t.rpm, target_rpm = target_rpm, currently_engaged = t.coil_engaged,
         }),
@@ -219,6 +292,8 @@ function M.new(opts)
       turbines = turbine_results,
       capacity = self.capacity,
       max_active = max_active,
+      turbine_models = self.turbine_models,
+      new_turbine_models = self.new_turbine_models,
       tripped_reactors = tripped,
       tuning = self.reactors[1] and self.reactors[1].tuning_profile or nil,
       tuning_samples = self.reactors[1] and self.reactors[1].tuning_state.n or 0,

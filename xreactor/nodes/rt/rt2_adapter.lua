@@ -33,7 +33,15 @@ function M.read_turbine(name, turbine_info)
     rpm = num_or_nil(turbine_info.rpm),
     energy = num_or_nil(turbine_info.energy) or 0,
     coil_engaged = turbine_info.coil_engaged == true,
-    current_flow = num_or_nil(turbine_info.flow) or 0,
+    -- NICHT auf 0 vorbelegen. adapters/turbine.lua's read_number() liefert
+    -- bei einem fehlgeschlagenen Peripherieaufruf den String "n/a" -- daraus
+    -- eine 0 zu machen heisst, "unbekannt" als "steht auf 0" auszugeben.
+    -- Genau darauf ist der Livetest auf node-101 aufgelaufen: der Regler
+    -- entschied korrekt auf Durchfluss 0, verglich das gegen diese erfundene
+    -- 0, hielt die Vorgabe fuer bereits gesetzt und schrieb nie -- waehrend
+    -- im Mod weiter 2000 anstanden und die Rotoren lastfrei hochliefen.
+    -- nil heisst jetzt nil, und der Aufrufer muss damit umgehen.
+    current_flow = num_or_nil(turbine_info.flow),
     active = turbine_info.active == true,
   }
 end
@@ -64,7 +72,11 @@ end
 -- setActive(true) once the turbine is confirmed on.
 function M.apply_turbine(turbine_adapter, name, log_prefix, turbine_result)
   local result = {}
-  if turbine_result.flow_decision then
+  -- unchanged: die Vorgabe steht bereits genau so an der Turbine (vom
+  -- Orchestrator gegen den zurueckgelesenen Wert geprueft). Seit der
+  -- Regler eine Ruhezone hat, ist das der Normalfall, und ein Schreiben
+  -- je Turbine und Takt waere reine Last ohne Wirkung.
+  if turbine_result.flow_decision and turbine_result.flow_decision.unchanged ~= true then
     result.flow_ok, result.flow_err = turbine_adapter.set_flow(name, turbine_result.flow_decision.flow, log_prefix)
   end
   if turbine_result.coil_decision then

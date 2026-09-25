@@ -285,6 +285,67 @@ assert_eq(math.floor(fields.power_target + 0.5),
   math.floor(fields.capacity_max * fields.master_percent / 100 + 0.5),
   'der angezeigte Sollwert muss genau der Anteil der gemessenen Kapazitaet sein')
 
+-- ── Turbinenkennlinien ueberdauern den Neustart ──────────────────────────
+--
+-- rt2_turbine_model.lua misst je Turbine, wieviel Drehzahl ein mB/t wert
+-- ist. Das nuetzt nur, wenn die gemessene Kennlinie beim naechsten Start
+-- auch wieder da ist und der Regler sie dann wirklich benutzt -- sonst
+-- taestet sich jede Turbine nach jedem Neustart von vorne heran.
+
+do
+  local rt2_turbine_model = require('nodes.rt.rt2_turbine_model')
+  local utils = require('core.utils')
+  local MODEL_PATH = '/xreactor_config/rt2_integration_turbine_model.lua'
+
+  -- Eine gemessene Kennlinie, wie sie im Betrieb entstanden waere: genau
+  -- die Strecke, die step_physics() oben nachbildet.
+  local profiles = {}
+  for _, name in ipairs(turbine_names) do
+    profiles[name] = {
+      slope = RPM_PER_FLOW, intercept = 0,
+      min_adjust_interval_ms = 800, samples = 12, flow_spread = 300,
+    }
+  end
+  assert_true(rt2_turbine_model.save_units(profiles, {
+    path = MODEL_PATH,
+    write_config = function(path, data) return utils.write_config(path, data) end,
+  }), 'die Kennlinien muessen sich schreiben lassen')
+  assert_true(files[MODEL_PATH] ~= nil, 'und dabei wirklich auf der Platte landen')
+
+  local loaded_msg = nil
+  rt2_engine.init({
+    cache_path = '/xreactor_config/rt2_integration_cache.lua',
+    turbine_model_path = MODEL_PATH,
+    turbine_count = TURBINE_COUNT,
+    log = function(level, msg)
+      ctx.log(level, msg)
+      if tostring(msg):find('Turbinenkennlinien geladen') then loaded_msg = msg end
+    end,
+  })
+  assert_true(loaded_msg ~= nil, 'der Neustart muss die Kennlinien laden und das auch sagen')
+  assert_true(loaded_msg:find(tostring(TURBINE_COUNT)) ~= nil,
+    'und zwar alle: ' .. tostring(loaded_msg))
+
+  -- Und sie muessen auch wirklich regeln: eine Turbine weit unter ihrem
+  -- Ziel bekommt jetzt den Durchfluss, den die Kennlinie dafuer nennt --
+  -- in einem Zug, statt in Schritten von TRIM_STEP.
+  for _, t in pairs(plant.turbines) do t.rpm = 300; t.coil = true end
+  local first
+  for _ = 1, 40 do
+    first = rt2_engine.tick(ctx)
+    clock_ms = clock_ms + 500
+    local reason = first.turbines[1].flow_decision.reason
+    if reason == 'MODEL_FEEDFORWARD' then break end
+  end
+  assert_eq(first.turbines[1].flow_decision.reason, 'MODEL_FEEDFORWARD',
+    'mit geladener Kennlinie muss der Regler sie auch benutzen')
+  assert_true(math.abs(first.turbines[1].flow_decision.flow - 900 / RPM_PER_FLOW) <= 5,
+    'und genau den Durchfluss stellen, den sie fuer 900 RPM nennt -- war '
+      .. tostring(first.turbines[1].flow_decision.flow))
+  assert_eq(rt2_engine.status_fields().turbines_modelled, TURBINE_COUNT,
+    'die Statusfelder muessen melden, dass die ganze Flotte vermessen ist')
+end
+
 -- ── Safety trip ──────────────────────────────────────────────────────────
 --
 -- Regression: rt2_engine.tick() never passed safety_tripped into the
