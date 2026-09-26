@@ -589,6 +589,17 @@ end
 -- Auch ein Rueckgabewert, der KEINE Zahl ist, landet hier: dann hat die
 -- Bridge zwar etwas geantwortet, aber nicht das erwartete Stueckzahl-Ergebnis
 -- -- bisher wurde daraus wortlos "0 bewegt".
+-- Ein harter Fehler der ME Bridge: der Ziel-Name ist ihr unbekannt, der
+-- Gegenstand existiert nicht, die Methode fehlt. Das ist der direkteste
+-- Grund dafuer, dass nichts aus dem ME herauskommt -- und er lief bisher
+-- ausschliesslich ueber warn_once() in den Log-Collector.
+local function note_export_failed(self, label, item, chest_name, err)
+  note_block(self, "EXPORT_FEHLER", string.format(
+    "%s: die ME Bridge lehnte den Export ab (%s → %s): %s",
+    tostring(label), tostring(item), tostring(chest_name), tostring(err)),
+    { key = "EXPORT_FEHLER|" .. tostring(chest_name) .. "|" .. tostring(err) })
+end
+
 local function note_export_nothing(self, label, item, wanted, chest_name, raw)
   local shape = type(raw) == "number" and "0"
     or ("kein Zahlwert, sondern " .. type(raw))
@@ -751,6 +762,21 @@ function M:_run_supply(cycle_log)
   end
   local routed = routing_state == "ROUTING_VALID"
 
+  -- "Ich weiss nicht, ob die Ventile gestellt werden" -- das konnte der
+  -- Knoten bisher nirgends beantworten. Ohne eingerichtetes Routing wird
+  -- NIE ein Ventil gestellt: dann geht alles direkt in die Uebergabekiste,
+  -- und wo es von dort landet, entscheidet allein die Verrohrung. Das ist
+  -- ein voellig anderer Betrieb als der geroutete -- er gehoert angesagt.
+  if self._state.routing_mode_said ~= routing_state then
+    self._state.routing_mode_said = routing_state
+    local msg = routed
+      and "Ventilsteuerung eingerichtet -- vor jeder Lieferung wird der Weg gestellt"
+      or ("Ventilsteuerung NICHT eingerichtet (" .. tostring(routing_state)
+        .. ") -- es wird ohne Ventile direkt in die Uebergabekiste exportiert")
+    self.log("INFO", "Logistik: " .. msg)
+    pcall(print, "[FUEL] " .. msg)
+  end
+
   -- Which fuel family to deliver is decided once per cycle (freshest ME
   -- read available), not per reactor -- see pick_fuel_family() above. At
   -- most one delivery happens per cycle anyway (see comment above), so a
@@ -765,6 +791,20 @@ function M:_run_supply(cycle_log)
   if #candidates == 0 then
     note_block(self, "NIEMAND_FORDERT_AN", describe_idle(self._state.reactors, tally))
   end
+
+  -- Jeder Ausstieg aus dieser Schleife war bisher entweder voellig still
+  -- oder nur DEBUG -- also im Log-Collector, nie auf dem Schirm. Wurden
+  -- alle Kandidaten so uebersprungen, endete _run_supply() ohne ein
+  -- einziges Wort, und die Oberflaeche zeigte weiter den Grund des
+  -- vorigen Zyklus. Genau so verschwand "es passiert nichts" spurlos.
+  local skips = {}
+  local function skip(label, reason)
+    if #skips < 4 then skips[#skips + 1] = tostring(label) .. ": " .. reason end
+  end
+  -- Sobald ein Export ueberhaupt VERSUCHT wurde, hat dieser Zyklus seinen
+  -- eigenen, spezifischen Grund (Erfolg, EXPORT_FEHLER, EXPORT_BEWEGTE_
+  -- NICHTS). Der Sammelgrund unten darf ihn dann nicht ueberschreiben.
+  local delivery_attempted = false
 
   for _, cand in ipairs(candidates) do
     local r, fuel_pct = cand.r, cand.fuel_pct
@@ -782,6 +822,9 @@ function M:_run_supply(cycle_log)
 
     -- ME availability, in ingot-equivalent units of the chosen family.
     if family.total < r.min_in_me then
+      skip(r.label, string.format(
+        "nur %d %s im ME, die Mindestreserve min_in_me=%d haelt alles zurueck",
+        family.total, family.element, r.min_in_me))
       self.log("DEBUG", string.format(
         "Logistics: %s: ME has %d %s-equivalent (need >%d) — skip",
         r.label, family.total, family.element, r.min_in_me))
@@ -789,10 +832,19 @@ function M:_run_supply(cycle_log)
     end
 
     local push = math.min(r.fill_amount, family.total - r.min_in_me)
-    if push <= 0 then goto continue end
+    if push <= 0 then
+      skip(r.label, string.format(
+        "ueber der Mindestreserve min_in_me=%d bleibt nichts uebrig (%d %s im ME)",
+        r.min_in_me, family.total, family.element))
+      goto continue
+    end
 
     local deliver_item, deliver_count = pick_fuel_form(family, push)
-    if not deliver_item or deliver_count <= 0 then goto continue end
+    if not deliver_item or deliver_count <= 0 then
+      skip(r.label, string.format(
+        "keine lieferbare Form von %s im ME (weder Barren noch Block)", family.element))
+      goto continue
+    end
 
     do
       local default_valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
@@ -815,12 +867,18 @@ function M:_run_supply(cycle_log)
           self.hop_timing:begin_delivery(r.reactor_id, r.path, deliver_item, request.started_ts)
         end
         local function do_export()
+          delivery_attempted = true
           request.phase = "EXPORTING"
           request.state = "delivering"
           local ok, result = me_bridge_compat.export_to(bridge.wrapped,
             { name = deliver_item, count = deliver_count }, export_chest.name)
           if not ok then
             local err = tostring(result)
+            -- warn_once() schreibt in den Log-Collector, nicht auf den
+            -- Schirm, und ausserdem nur ein einziges Mal. Ein dauerhaft
+            -- scheiternder Export war damit unsichtbar -- obwohl er genau
+            -- der Grund ist, dass nichts aus dem ME kommt.
+            note_export_failed(self, r.label, deliver_item, export_chest.name, err)
             self.warn_once("exp_err:" .. export_chest.name,
               "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
             account_async_error(self, request)
@@ -882,16 +940,24 @@ function M:_run_supply(cycle_log)
           if self.hop_timing then self.hop_timing:finish_delivery(r.reactor_id) end
           self._state.current_request = nil
           if reason == "busy" then
+            note_block(self, "ROUTER_BESCHAEFTIGT",
+              "eine andere Transaktion laeuft noch -- der Router faehrt immer nur EINE")
             self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
             return exported, errors
           end
           if reason == "safety_latched" or reason == "quiescing" then
+            note_block(self, "ROUTER_GESPERRT", "Sicherheitssperre aktiv (" .. tostring(reason)
+              .. ") -- es wird kein Ventil gestellt und nichts exportiert")
             self.log("WARN", "Logistics: Router sicherheitsgesperrt (" .. tostring(reason) .. ") — keine weitere Lieferung")
             return exported, errors
           end
+          -- Der haeufigste Fall hinter "die Ventile werden nicht gestellt":
+          -- der Router findet den Weg zu diesem Reaktor nicht.
+          skip(r.label, "Ventilweg nicht stellbar (" .. tostring(reason) .. ")")
           self.log("DEBUG", "Logistics: " .. r.label .. ": Routing nicht moeglich (" .. tostring(reason) .. ") — naechster Kandidat")
           goto continue
         end
+        delivery_attempted = true
         request.transaction_id = router_tx_id or request.transaction_id
         request.state = "delivering"
         local active = type(rs.get_active_transaction) == "function" and rs:get_active_transaction() or nil
@@ -903,10 +969,12 @@ function M:_run_supply(cycle_log)
       -- stable transaction identity/terminal semantics.
       request.state = "delivering"
       request.phase = "EXPORTING"
+      delivery_attempted = true
       local ok, result = me_bridge_compat.export_to(bridge.wrapped,
         { name = deliver_item, count = deliver_count }, export_chest.name)
       if not ok then
         local err = tostring(result)
+        note_export_failed(self, r.label, deliver_item, export_chest.name, err)
         self.warn_once("exp_err:" .. export_chest.name,
           "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
         errors = errors + 1
@@ -932,6 +1000,14 @@ function M:_run_supply(cycle_log)
     ::continue::
   end
   if exported > 0 then note_block(self, nil) end
+  -- Alle Kandidaten uebersprungen, kein Export auch nur versucht: bisher
+  -- endete der Zyklus hier wortlos.
+  if #candidates > 0 and not delivery_attempted and exported == 0 then
+    note_block(self, "KEIN_KANDIDAT_BEDIENBAR", string.format(
+      "%d Reaktor(en) fordern an, keiner konnte bedient werden -- %s",
+      #candidates,
+      #skips > 0 and table.concat(skips, "; ") or "ohne erkennbaren Grund"))
+  end
   self._state.current_request = nil
   return exported, errors
 end

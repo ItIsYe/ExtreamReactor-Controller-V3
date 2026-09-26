@@ -400,4 +400,105 @@ do
       .. tostring(summary.supply_block and summary.supply_block.code))
 end
 
+-- ══ 12. Jeder Ausstieg aus der Kandidatenschleife hinterlaesst einen Grund
+
+-- Aus dem Betrieb: "es passiert weiterhin nichts, es sieht so aus, als
+-- wuerde nichts aus der ME Bridge rausgenommen". Genau dieser Fall war
+-- spurlos: die Schleife sprang ueber jeden Kandidaten (Mindestreserve,
+-- keine lieferbare Form, kein stellbarer Ventilweg) und _run_supply()
+-- endete ohne ein einziges Wort -- die Oberflaeche zeigte weiter den
+-- Grund des VORIGEN Zyklus.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  -- 100 Barren im ME, aber min_in_me haelt 500 zurueck.
+  router.config.reserve_items =
+    { { element = 'uranium', item = 'xr:uranium_ingot', unit_multiplier = 1 } }
+  local exported_calls = 0
+  router._state.bridge = { name = 'meBridge_0', wrapped = {
+    getItem = function(_) return { amount = 100 } end,
+    exportItemToPeripheral = function(_, _) exported_calls = exported_calls + 1; return 64 end,
+  } }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  router.fuel_status = {
+    master_relay = { ['node-14:REACTOR-x'] = { ts = os.epoch('utc'), fuel_amount = 10, fuel_capacity = 1000 } },
+    direct_heard = {},
+  }
+  router._state.reactors = {
+    { label = 'Reaktor 14', reactor_id = 'node-14:REACTOR-x', request_below = 0.65,
+      fill_amount = 64, min_in_me = 500, resupply_cooldown_s = 0, path = {} },
+  }
+
+  local _, _, printed = supply(router)
+  assert_eq(exported_calls, 0, 'die Mindestreserve verhindert den Export -- richtig so')
+
+  local block = router:get_summary().supply_block
+  assert_true(block ~= nil, 'aber wortlos darf das nicht passieren')
+  assert_eq(block.code, 'KEIN_KANDIDAT_BEDIENBAR')
+  local d = tostring(block.detail)
+  assert_true(d:find('Reaktor 14', 1, true) ~= nil, d)
+  assert_true(d:find('min_in_me=500', 1, true) ~= nil,
+    'der Grund muss die Stellschraube benennen, an der der Betreiber drehen kann: ' .. d)
+  assert_true(#printed > 0, 'und am Rechner selbst stehen')
+end
+
+-- ══ 13. Ein abgelehnter Export ist nicht nur eine Zeile im Log ═════════
+--
+-- Lehnt die ME Bridge ab (unbekannter Ziel-Name, unbekannter Gegenstand),
+-- lief das bisher ausschliesslich ueber warn_once() -- also in den
+-- Log-Collector und dort genau ein einziges Mal. Es ist aber der
+-- direkteste Grund dafuer, dass nichts aus dem ME herauskommt.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router.config.reserve_items =
+    { { element = 'uranium', item = 'xr:uranium_ingot', unit_multiplier = 1 } }
+  router._state.bridge = { name = 'meBridge_0', wrapped = {
+    getItem = function(_) return { amount = 512 } end,
+    exportItemToPeripheral = function(_, _) error('No such container chest_0', 0) end,
+  } }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  router.fuel_status = {
+    master_relay = { ['node-14:REACTOR-x'] = { ts = os.epoch('utc'), fuel_amount = 10, fuel_capacity = 1000 } },
+    direct_heard = {},
+  }
+  router._state.reactors = {
+    { label = 'Reaktor 14', reactor_id = 'node-14:REACTOR-x', request_below = 0.65,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 0, path = {} },
+  }
+
+  local _, _, printed = supply(router)
+  local block = router:get_summary().supply_block
+  assert_eq(block.code, 'EXPORT_FEHLER')
+  assert_true(tostring(block.detail):find('No such container', 1, true) ~= nil,
+    'der Wortlaut der Bridge gehoert in die Meldung -- er benennt das Problem: '
+      .. tostring(block.detail))
+  assert_true(#printed > 0, 'und er muss am Rechner stehen, nicht nur im Log-Collector')
+end
+
+-- ══ 14. Ob ueberhaupt Ventile gestellt werden, muss ablesbar sein ══════
+--
+-- Aus dem Betrieb: "die Valves, weiss ich nicht, ob die gestellt werden".
+-- Ohne eingerichtetes Routing wird NIE ein Ventil gestellt -- dann geht
+-- alles direkt in die Uebergabekiste und die Verrohrung entscheidet
+-- allein. Das ist ein voellig anderer Betrieb, und er war nirgends
+-- angesagt.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router._state.bridge = { name = 'meBridge_0', wrapped = {} }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  router._state.reactors = {}
+  local _, _, printed = supply(router)
+  local said = table.concat(printed, ' | ')
+  assert_true(said:find('Ventilsteuerung NICHT eingerichtet', 1, true) ~= nil,
+    'ohne Routing muss der Knoten genau das sagen: ' .. said)
+
+  -- und nur bei Aenderung, nicht in jedem Zyklus
+  local _, _, again = supply(router)
+  local repeated = table.concat(again, ' | ')
+  assert_true(repeated:find('Ventilsteuerung', 1, true) == nil,
+    'aber nicht in jedem Zyklus erneut: ' .. repeated)
+end
+
 print('fuel_supply_block_reason_test.lua: ok')
