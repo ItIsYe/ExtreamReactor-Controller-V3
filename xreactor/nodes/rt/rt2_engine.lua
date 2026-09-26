@@ -160,151 +160,6 @@ end
 --   ctx.config.turbines / ctx.config.reactors -- discovered peripheral names
 --   ctx.adapters.turbine / ctx.adapters.reactor -- adapters/turbine.lua, adapters/reactor.lua
 --   ctx.CONFIG.LOG_PREFIX
--- Ein abgelehnter Schreibbefehl war bisher voellig unsichtbar.
---
--- rt2_adapter.apply_reactor()/apply_turbine() geben ihr Ergebnis samt
--- Fehlertext zurueck -- rt2_engine.tick() hat es weggeworfen. Scheitert
--- der Stabbefehl also dauerhaft (Teilschreibung, unbekannte Methoden,
--- fehlgeschlagene Rueckleseprobe), rechnet der Regler jeden Takt sauber
--- eine neue Stellung aus, die Hardware nimmt sie nie an, der Messwert
--- bleibt stehen -- und der Knoten sagt kein Wort. Von aussen sieht das
--- exakt so aus wie "der Regler tut nichts".
---
--- Genau dieses Bild kam aus dem Betrieb: beide Reaktoren unveraendert auf
--- RODS 100%, ohne eine einzige Meldung.
-local rod_write_said, turbine_write_said = {}, nil
-
-local function announce_rod_write(ctx, name, decision, write)
-  local rod_failed = not (write and write.ok == true)
-  local rod_err = write and write.err or "ohne Fehlertext"
-  -- Der EINSCHALTBEFEHL ist ein eigener Schreibvorgang mit eigenem
-  -- Ergebnis. Er wurde bisher nirgends ausgewertet -- und genau er ist
-  -- gemeint, wenn der Betreiber sagt "die Reaktoren wurden gar nicht
-  -- angemacht": der Regler fordert das Einschalten in JEDEM Takt an
-  -- (compute_active_decision), der Reaktor bleibt trotzdem aus, und kein
-  -- Wort dazu. Extreme Reactors verweigert setActive unter anderem ohne
-  -- Brennstoff und bei unvollstaendigem Multiblock.
-  local wanted_active = decision and decision.activate == true
-  local active_failed = wanted_active and not (write and write.active_ok == true)
-  local active_err = write and write.active_err or "ohne Fehlertext"
-
-  local key = (rod_failed and ("ROD|" .. tostring(rod_err)) or "ROD_OK")
-    .. "/" .. (active_failed and ("ON|" .. tostring(active_err)) or "ON_OK")
-  if rod_write_said[name] == key then return end
-  local previous = rod_write_said[name]
-  rod_write_said[name] = key
-
-  if not rod_failed and not active_failed then
-    if previous ~= nil then
-      ctx.log("INFO", "v2 " .. tostring(name) .. ": Befehle werden wieder angenommen")
-    end
-    return
-  end
-  if rod_failed then
-    local msg = string.format(
-      "v2 %s: Stabbefehl ABGELEHNT (Soll %s%%) -- %s. Der Regler rechnet weiter,"
-        .. " die Hardware nimmt nichts an: die Staebe bleiben stehen, wo sie sind.",
-      tostring(name), tostring(decision and decision.rods), tostring(rod_err))
-    ctx.log("ERROR", msg)
-    pcall(print, "[RT] " .. msg)
-  end
-  if active_failed then
-    local msg = string.format(
-      "v2 %s: EINSCHALTEN ABGELEHNT -- %s. Der Regler fordert es in jedem Takt an;"
-        .. " der Reaktor bleibt aus. Haeufigste Gruende: kein Brennstoff im Reaktor,"
-        .. " oder der Multiblock ist unvollstaendig.",
-      tostring(name), tostring(active_err))
-    ctx.log("ERROR", msg)
-    pcall(print, "[RT] " .. msg)
-  end
-end
-
--- Die Flotte gesammelt: bei 50 Turbinen waere eine Zeile je Turbine kein
--- Hinweis mehr, sondern ein Vorhang.
-local function note_turbine_write(acc, write, name)
-  if type(write) ~= "table" then return end
-  local err = (write.flow_ok == false or write.flow_err) and (write.flow_err or "Durchfluss abgelehnt")
-    or ((write.coil_ok == false or write.coil_err) and (write.coil_err or "Kupplung abgelehnt"))
-    or nil
-  if not err then return end
-  acc.count = acc.count + 1
-  acc.first_error = acc.first_error or tostring(err)
-  acc.first_name = acc.first_name or tostring(name)
-end
-
-local function announce_turbine_writes(ctx, acc)
-  local key = acc.count > 0 and (acc.count .. "|" .. tostring(acc.first_error)) or "OK"
-  if turbine_write_said == key then return end
-  turbine_write_said = key
-  if acc.count == 0 then
-    ctx.log("INFO", "v2 Turbinenbefehle werden wieder angenommen")
-    return
-  end
-  local msg = string.format(
-    "v2 %d Turbine(n) nehmen keine Befehle an, z.B. %s: %s -- Durchfluss und Kupplung"
-      .. " bleiben stehen, wo sie sind.",
-    acc.count, tostring(acc.first_name), tostring(acc.first_error))
-  ctx.log("ERROR", msg)
-  pcall(print, "[RT] " .. msg)
-end
-
--- Warum die Staebe stehen, wo sie stehen.
---
--- Im Betrieb gemeldet (2 Reaktoren, 50 Turbinen): beide Reaktoren auf
--- RODS 100%, kein Dampf, der Knoten kam nie aus dem Einlernen. 100%
--- Einfahrung ist im Regler aber EIN Ergebnis mit mehreren voellig
--- verschiedenen Ursachen -- und keine davon war irgendwo ablesbar:
---
---   NO_STEAM_READING   GAR KEIN Dampfmesswert -> es wird sicherheitshalber
---                      voll eingefahren. Ausdruecklich NICHT der Fall bei
---                      Fuellstand 0: das ist ein gueltiger Messwert (ein
---                      Geraet, das lange aus war, steht eben auf 0) und
---                      fuehrt regulaer zum Ausfahren der Staebe.
---   SAFETY_FULL_INSERT Ausloesung oder Knoten auf SAFE.
---   DEADBAND/CONVERGING der Tank steht, wo er soll -- alles in Ordnung.
---
--- Dazu der umgekehrte Fall: Staebe am unteren Anschlag (70%) und der Tank
--- bleibt trotzdem leer. Das ist laut rt2_reactor.lua ausdruecklich KEIN
--- Reglerfehler, sondern die Anlage fordert mehr Dampf, als die bewusst
--- gesetzte 70%-Grenze hergibt -- bei 50 Turbinen an 2 Reaktoren genau die
--- Frage, die der Betreiber beantwortet haben will.
-local rod_reason_said = {}
-
-local function announce_rod_reason(ctx, name, decision, input)
-  local reading = input and input.reactor or nil
-  local fill = reading and tonumber(reading.fill_ratio) or nil
-  local key = tostring(decision.reason)
-  if decision.reason == "NO_STEAM_READING" then
-    key = "NO_STEAM_READING"
-  elseif decision.rods and decision.rods <= rt2_reactor.ROD_MIN
-      and fill and fill < (rt2_reactor.DEFAULT_TARGET_FILL - rt2_reactor.DEADBAND) then
-    key = "AT_POWER_CAP"
-  else
-    key = "OK"
-  end
-  if rod_reason_said[name] == key then return end
-  rod_reason_said[name] = key
-
-  local msg
-  if key == "NO_STEAM_READING" then
-    msg = string.format(
-      "v2 %s: GAR KEIN Dampfmesswert (nicht 0 -- 0 ist ein gueltiger Messwert und loest das hier"
-        .. " nicht aus) -- die Staebe bleiben sicherheitshalber voll eingefahren (%d%%)."
-        .. " Ohne Messwert faehrt dieser Reaktor nicht hoch.",
-      tostring(name), rt2_reactor.ROD_MAX)
-  elseif key == "AT_POWER_CAP" then
-    msg = string.format(
-      "v2 %s: Staebe am unteren Anschlag (%d%%) und der Dampftank bleibt bei %.0f%% -- die Flotte"
-        .. " fordert mehr Dampf, als die gesetzte %d%%-Grenze hergibt. Das ist eine Lastfrage,"
-        .. " kein Reglerfehler.",
-      tostring(name), rt2_reactor.ROD_MIN, fill * 100, rt2_reactor.ROD_MIN)
-  end
-  if msg then
-    ctx.log("WARN", msg)
-    pcall(print, "[RT] " .. msg)
-  end
-end
-
 function M.tick(ctx)
   if not engine then return nil end
   local now_ms = os.epoch and os.epoch("utc") or 0
@@ -374,10 +229,8 @@ function M.tick(ctx)
     reactors = reactor_inputs,
   })
 
-  local write_errors = { count = 0 }
   for _, t in ipairs(result.turbines) do
-    note_turbine_write(write_errors,
-      adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t), t.name)
+    adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
   end
   for index, decision in ipairs(result.reactors) do
     -- Der Name aus der Entscheidung selbst, nicht ueber die Position:
@@ -387,13 +240,9 @@ function M.tick(ctx)
     -- einem Reaktor die Staebe des anderen zu stellen.
     local name = decision.name or reactor_names[index]
     if name then
-      local write = adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
-      announce_rod_write(ctx, name, decision, write)
-      announce_rod_reason(ctx, name, decision, reactor_inputs[index])
+      adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
     end
   end
-
-  announce_turbine_writes(ctx, write_errors)
 
   -- Einlernen sichtbar machen.
   local cap = result.capacity
@@ -415,8 +264,7 @@ function M.tick(ctx)
     elseif cap.reason == "FLOW_SATURATED" then
       msg = string.format(
         "v2 Einlernen: %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM"
-        .. " -- im Zielbereich %d von %d, noetig %d. Das ist eine DAMPFfrage: die Turbinen"
-        .. " werden deswegen NICHT gedrosselt, der Reaktor faehrt seine Staebe aus.",
+        .. " -- im Zielbereich %d von %d, noetig %d.",
         cap.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
         cap.at_target or 0, cap.total_turbines or 0, cap.required_at_target or 0)
     elseif cap.reason == "BELOW_FRACTION" and waiting then
