@@ -47,6 +47,12 @@ M.MIN_FLOW = 0
 M.MAX_FLOW = 2000
 M.TRIM_STEP = 35
 
+-- Unterhalb dieses Vorsteuerwerts gilt eine Kennlinie als unbrauchbar:
+-- eine Turbine, die ihre Zieldrehzahl mit so wenig Dampf halten soll,
+-- beschreibt keine reale Anlage. Siehe die Begruendung bei der Pruefung
+-- in compute_flow_decision().
+M.MODEL_MIN_OPERATING_FLOW = 10
+
 -- So lange bleibt eine Durchflussvorgabe stehen, bevor die naechste
 -- kommt.
 --
@@ -306,9 +312,28 @@ function M.compute_flow_decision(input)
   -- die Spule offen ist, bleibt es deshalb bei der Rampe, die dank der
   -- Vorausschau oben ohnehin nicht mehr ueberschwingt.
   local slope = model and tonumber(model.slope)
+  local operating = slope and slope > 0
+    and ((target_rpm - (tonumber(model.intercept) or 0)) / slope) or nil
+  if operating and operating < 0 then operating = max_flow end
+
+  -- Sicherheitsnetz gegen eine unbrauchbare Kennlinie.
+  --
+  -- Behauptet sie, die Zieldrehzahl sei mit (fast) keinem Dampf zu
+  -- halten, ist sie falsch -- und sie stellt dann Durchfluss 0 und haelt
+  -- ihn fuer richtig. Genau so stand der Knoten im Betrieb: LEARNING,
+  -- Spule eingehaengt, Drehzahl unter Ziel, Durchfluss auf der ganzen
+  -- Flotte 0.
+  --
+  -- rt2_turbine_model verwirft so eine Kennlinie inzwischen schon beim
+  -- Ableiten UND beim Laden. Das hier deckt den Rest ab: eine Kennlinie,
+  -- die auf anderem Weg hereinkommt, darf die Turbine nicht abwuergen.
+  -- Dann gilt wieder die Rampe -- die braucht kein Modell und kommt
+  -- langsamer, aber sicher ans Ziel.
+  if operating and target_rpm > 0 and operating < M.MODEL_MIN_OPERATING_FLOW then
+    slope = nil
+  end
+
   if slope and slope > 0 and input.coil_engaged == true then
-    local operating = (target_rpm - (tonumber(model.intercept) or 0)) / slope
-    if operating < 0 then operating = max_flow end
 
     -- Grosse Abweichung -- typisch: MASTER hat die Vorgabe verschoben.
     -- Die Kennlinie kennt den Durchfluss, der die neue Drehzahl traegt,

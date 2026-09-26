@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 762,
-  manifest_id = "manifest-v762",
+  manifest_version = 763,
+  manifest_id = "manifest-v763",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "cc4fcc84", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "2d6a9303", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -154,8 +154,8 @@ return {
     { path = "nodes/rt/rt2_state.lua", size_bytes = 5990, hash = "b17e8aa4", required_for={"RT"} },
     { path = "nodes/rt/rt2_unit.lua", size_bytes = 4793, hash = "8aea53c7", required_for={"RT"} },
     { path = "nodes/rt/rt2_tuning.lua", size_bytes = 13210, hash = "de6cbda3", required_for={"RT"} },
-    { path = "nodes/rt/rt2_turbine.lua", size_bytes = 23287, hash = "ce40c59b", required_for={"RT"} },
-    { path = "nodes/rt/rt2_turbine_model.lua", size_bytes = 11793, hash = "853a3d74", required_for={"RT"} },
+    { path = "nodes/rt/rt2_turbine.lua", size_bytes = 24410, hash = "4a0744ad", required_for={"RT"} },
+    { path = "nodes/rt/rt2_turbine_model.lua", size_bytes = 13303, hash = "2c22b82a", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },
     { path = "nodes/rt/state_handlers.lua", size_bytes = 14491, hash = "5bb53c6b", required_for={"RT"} },
     { path = "nodes/rt/status_snapshot.lua", size_bytes = 6415, hash = "26a67eb2", required_for={"RT"} },

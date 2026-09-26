@@ -66,6 +66,28 @@ M.MIN_SAMPLE_RPM = 100
 -- 18000 mB/t fuer 900 RPM (jenseits jeder Turbine), 20 hiesse 45 mB/t.
 M.MIN_SLOPE, M.MAX_SLOPE = 0.05, 20
 
+-- Obergrenze fuer den Achsenabschnitt: "Drehzahl bei Durchfluss 0".
+--
+-- Die Steigung war begrenzt, der Achsenabschnitt nicht -- und genau der
+-- hat im Betrieb die Regelung stillgelegt. Eine Kennlinie mit einem
+-- Achsenabschnitt nahe der Zieldrehzahl behauptet, der Rotor halte seine
+-- Drehzahl OHNE Dampf. Der Vorsteuerwert
+--
+--     operating = (Ziel - Achsenabschnitt) / Steigung
+--
+-- wird dann winzig und auf 0 gerundet: der Regler stellt Durchfluss 0
+-- und haelt ihn fuer richtig. Das Bild am Knoten war LEARNING, Spule
+-- eingehaengt, Drehzahl unter Ziel -- und Durchfluss 0 auf der ganzen
+-- Flotte.
+--
+-- So eine Kennlinie entsteht genau dann, wenn ein AUSLAUFENDER Rotor bei
+-- Durchfluss 0 mit eingehaengter Spule vermessen wird: hohe Drehzahl,
+-- kein Dampf. Der Zustand, in dem dieser Knoten stundenlang stand.
+--
+-- Physikalisch gilt: ohne Dampf kommt der Rotor zum Stehen. Ein kleiner
+-- positiver Wert bleibt als Anpassungsrauschen erlaubt, mehr nicht.
+M.MAX_INTERCEPT_RPM = 200
+
 -- Abgeleitetes Stellintervall: so lange wartet der Regler zwischen zwei
 -- Verstellungen. Gemessen wird, wie lange der Rotor tatsaechlich zum
 -- Einschwingen brauchte.
@@ -201,6 +223,11 @@ function M.derive(state)
     return nil, string.format("unplausible Steigung: %.3f RPM je mB/t", slope)
   end
   local intercept = (state.sum_y - slope * state.sum_x) / n
+  if intercept > M.MAX_INTERCEPT_RPM then
+    return nil, string.format(
+      "unplausibler Achsenabschnitt: %.0f RPM bei Durchfluss 0 -- ohne Dampf steht der Rotor",
+      intercept)
+  end
 
   local settle_ms = state.sum_settle_ms / n
   return {
@@ -234,9 +261,15 @@ local function sane(entry)
   -- Beim Laden neu klemmen: eine von Hand editierte oder veraltete Datei
   -- darf den Regler nicht ueber das aufweiten, was die Ableitung darf.
   if slope < M.MIN_SLOPE or slope > M.MAX_SLOPE then return nil end
+  -- Dieselbe Pruefung wie beim Ableiten: eine bereits gespeicherte
+  -- Kennlinie liegt auf dem Rechner und ueberdauert jede Codeaenderung.
+  -- Ohne sie bliebe genau die Kennlinie gueltig, die die Regelung
+  -- stillgelegt hat.
+  local intercept = tonumber(entry.intercept) or 0
+  if intercept > M.MAX_INTERCEPT_RPM then return nil end
   return {
     slope = slope,
-    intercept = tonumber(entry.intercept) or 0,
+    intercept = intercept,
     min_adjust_interval_ms = clamp(interval, M.INTERVAL_MIN_MS, M.INTERVAL_MAX_MS),
     samples = tonumber(entry.samples) or 0,
     flow_spread = tonumber(entry.flow_spread) or 0,
