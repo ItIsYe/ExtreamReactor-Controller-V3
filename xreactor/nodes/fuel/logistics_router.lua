@@ -502,6 +502,34 @@ end
 -- Der Grund wird deshalb strukturiert festgehalten, in get_summary()
 -- mitgegeben und bei JEDER AENDERUNG gemeldet -- auch direkt am Rechner,
 -- weil utils.log() zum Log-Collector routet, nicht auf den Bildschirm.
+-- Aufschluesselung, warum kein Eintrag anfordert. Jede Teilmenge hat eine
+-- eigene Massnahme: ohne Fuellstand-Daten fehlt die RT-Meldung (RT-Knoten aus,
+-- Reaktor nicht eingelernt, Master-Relay stumm), ueber der Schwelle heisst der
+-- Reaktor ist schlicht satt, Abklingzeit heisst die letzte Lieferung zaehlt noch.
+local function describe_idle(reactors, t)
+  local parts = {}
+  if t.no_data > 0 then
+    parts[#parts + 1] = t.no_data .. " ohne Fuellstand-Daten (keine frische RT-Meldung)"
+  end
+  if t.above > 0 then
+    local detail = ""
+    if t.lowest_pct then
+      detail = string.format(" (niedrigster: %s %.0f%%, Schwelle %.0f%%)",
+        tostring(t.lowest_label), t.lowest_pct * 100, (t.lowest_threshold or 0) * 100)
+    end
+    parts[#parts + 1] = t.above .. " ueber der Schwelle" .. detail
+  end
+  if t.cooldown > 0 then
+    parts[#parts + 1] = t.cooldown .. " in Abklingzeit"
+  end
+  if t.disabled > 0 then
+    parts[#parts + 1] = t.disabled .. " stillgelegt"
+  end
+  if #parts == 0 then parts[1] = "kein Eintrag konfiguriert" end
+  return string.format("%d Eintrag/Eintraege geprueft: %s",
+    #reactors, table.concat(parts, ", "))
+end
+
 local function note_block(self, code, detail)
   local s = self._state
   local key = tostring(code) .. "|" .. tostring(detail or "")
@@ -556,12 +584,19 @@ function M:_run_supply(cycle_log)
   -- Fuellstaenden eingeplant, da ihre Dringlichkeit nicht vergleichbar ist.
   local now_ts = os.epoch and os.epoch("utc") or 0
   local candidates = {}
+  -- Warum ein Eintrag NICHT anfordert, mitzaehlen. "Keiner fordert an" hat
+  -- drei voellig verschiedene Ursachen (kein Fuellstand bekannt / ueber der
+  -- Schwelle / Abklingzeit) mit drei verschiedenen Massnahmen -- die pauschale
+  -- Meldung zwang den Betreiber bisher zum Raten.
+  local tally = { disabled = 0, no_data = 0, above = 0, cooldown = 0,
+                  lowest_pct = nil, lowest_label = nil, lowest_threshold = nil }
   for _, r in ipairs(self._state.reactors) do
     local requesting, fuel_pct = false, nil
     -- Vom Normalizer stillgelegt (ungueltiger Eintrag). Ueberspringen --
     -- aber nur DIESEN, nicht die ganze Anlage: frueher schaltete ein
     -- einziger unbrauchbarer Eintrag die Logistik komplett ab.
     if r.disabled_reason then
+      tally.disabled = tally.disabled + 1
       self.warn_once("entry_disabled:" .. tostring(r.label),
         "Logistik: Eintrag " .. tostring(r.label) .. " stillgelegt -- " .. tostring(r.disabled_reason))
     elseif r.reactor_id then
@@ -569,11 +604,19 @@ function M:_run_supply(cycle_log)
       if fuel_amt and capacity and capacity > 0 then
         fuel_pct = fuel_amt / capacity
         requesting = fuel_pct < r.request_below
+        if not requesting then
+          tally.above = tally.above + 1
+          if tally.lowest_pct == nil or fuel_pct < tally.lowest_pct then
+            tally.lowest_pct, tally.lowest_label = fuel_pct, r.label
+            tally.lowest_threshold = r.request_below
+          end
+        end
         self.log("DEBUG", string.format(
           "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
           r.label, fuel_pct * 100, fuel_amt, capacity,
           requesting and "YES" or "no"))
       else
+        tally.no_data = tally.no_data + 1
         self.warn_once("fuel_read_fail:" .. r.label,
           "Logistics: no fresh network fuel data for " .. r.label
           .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
@@ -594,6 +637,7 @@ function M:_run_supply(cycle_log)
       local cooldown_ms = (r.resupply_cooldown_s or 0) * 1000
       if last_ts and (now_ts - last_ts) < cooldown_ms then
         requesting = false
+        tally.cooldown = tally.cooldown + 1
         self.log("DEBUG", string.format(
           "Logistics: %s: resupply_cooldown aktiv (%.0fs verbleibend) — kein Nachlegen diesen Zyklus",
           r.label, (cooldown_ms - (now_ts - last_ts)) / 1000))
@@ -650,9 +694,7 @@ function M:_run_supply(cycle_log)
     return exported, errors
   end
   if #candidates == 0 then
-    note_block(self, "NIEMAND_FORDERT_AN", string.format(
-      "%d Eintrag/Eintraege geprueft, keiner unter seiner Schwelle (oder Abklingzeit/stillgelegt)",
-      #self._state.reactors))
+    note_block(self, "NIEMAND_FORDERT_AN", describe_idle(self._state.reactors, tally))
   end
 
   for _, cand in ipairs(candidates) do

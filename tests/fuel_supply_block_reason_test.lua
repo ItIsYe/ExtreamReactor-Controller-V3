@@ -142,4 +142,58 @@ do
   assert_eq(entry.last_export_ts, nil)
 end
 
+-- ══ 7. "Niemand fordert an" hat drei Ursachen -- sie muessen getrennt sein ═
+--
+-- Aus dem Betrieb: "16 Eintrag/Eintraege geprueft, keiner unter seiner
+-- Schwelle (oder Abklingzeit/stillgelegt)". Das trifft auf drei voellig
+-- verschiedene Lagen zu, mit drei verschiedenen Massnahmen:
+--   * kein Fuellstand bekannt  -> die RT-Meldung fehlt (Knoten aus, Reaktor
+--     nicht eingelernt, Master-Relay stumm) -- die Logistik ist unschuldig
+--   * ueber der Schwelle       -> der Reaktor ist satt, alles in Ordnung
+--   * Abklingzeit              -> die letzte Lieferung zaehlt noch
+-- Die Pauschalmeldung zwang zum Raten. Die Aufschluesselung muss jede
+-- Teilmenge beziffern und den knappsten bekannten Fuellstand nennen.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router._state.bridge = { name = 'meBridge_0', wrapped = {} }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  local now = os.epoch('utc')
+  router.fuel_status = {
+    master_relay = {
+      ['node-2:REACTOR-satt'] = { ts = now, fuel_amount = 600, fuel_capacity = 1000 },
+      ['node-3:REACTOR-kalt'] = { ts = now, fuel_amount = 10,  fuel_capacity = 1000 },
+    },
+    direct_heard = {},
+  }
+  router._state.last_export_ts['node-3:REACTOR-kalt'] = now
+  router._state.reactors = {
+    -- kein Eintrag im fuel_status: RT meldet nichts
+    { label = 'Stumm', reactor_id = 'node-1:REACTOR-stumm', request_below = 0.25,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 0, path = {} },
+    { label = 'Satt', reactor_id = 'node-2:REACTOR-satt', request_below = 0.25,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 0, path = {} },
+    -- unter der Schwelle, aber gerade beliefert
+    { label = 'Kalt', reactor_id = 'node-3:REACTOR-kalt', request_below = 0.25,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 30, path = {} },
+    { label = 'Kaputt', disabled_reason = 'ohne reactor_id', request_below = 0.25,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 0, path = {} },
+  }
+  supply(router)
+
+  local block = router:get_summary().supply_block
+  assert_eq(block.code, 'NIEMAND_FORDERT_AN')
+  local d = tostring(block.detail)
+  assert_true(d:find('1 ohne Fuellstand-Daten', 1, true) ~= nil,
+    'die fehlende RT-Meldung muss beziffert sein, nicht in einem Sammelsatz verschwinden: ' .. d)
+  assert_true(d:find('1 ueber der Schwelle', 1, true) ~= nil, d)
+  assert_true(d:find('1 in Abklingzeit', 1, true) ~= nil, d)
+  assert_true(d:find('1 stillgelegt', 1, true) ~= nil, d)
+  -- Der knappste bekannte Fuellstand beantwortet die eigentliche Frage des
+  -- Betreibers: "wie weit ist der naechste Reaktor von einer Lieferung weg?"
+  assert_true(d:find('Satt', 1, true) ~= nil and d:find('60%', 1, true) ~= nil,
+    'der knappste bekannte Fuellstand und seine Schwelle gehoeren in die Meldung: ' .. d)
+  assert_true(d:find('Schwelle 25%', 1, true) ~= nil, d)
+end
+
 print('fuel_supply_block_reason_test.lua: ok')
