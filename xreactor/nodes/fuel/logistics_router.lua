@@ -593,10 +593,29 @@ end
 -- Gegenstand existiert nicht, die Methode fehlt. Das ist der direkteste
 -- Grund dafuer, dass nichts aus dem ME herauskommt -- und er lief bisher
 -- ausschliesslich ueber warn_once() in den Log-Collector.
-local function note_export_failed(self, label, item, chest_name, err)
+-- Welche Aufrufkonvention die Bridge angenommen hat, einmal ansagen. Bei
+-- einem kuenftigen Fehlerbild ist das die erste Frage -- und die Antwort
+-- ist dann schon protokolliert, statt erneut erarbeitet werden zu muessen.
+local function announce_convention(self, convention)
+  if not convention or self._state.export_convention_said == convention then return end
+  self._state.export_convention_said = convention
+  local msg = "ME-Bridge-Aufrufkonvention ermittelt: " .. tostring(convention)
+  self.log("INFO", "Logistik: " .. msg)
+  pcall(print, "[FUEL] " .. msg)
+end
+
+local function note_export_failed(self, bridge, label, item, chest_name, err)
+  -- Bei einem Signatur-Streit ist die Methodenliste der Peripherie die
+  -- einzige belastbare Auskunft darueber, welche Mod-Fassung wirklich
+  -- installiert ist. Sie gehoert deshalb in die Meldung, nicht in eine
+  -- Vermutung.
+  local methods = me_bridge_compat.transfer_methods(bridge)
+  local method_hint = #methods > 0
+    and (" -- die Bridge bietet an: " .. table.concat(methods, ", "))
+    or ""
   note_block(self, "EXPORT_FEHLER", string.format(
-    "%s: die ME Bridge lehnte den Export ab (%s → %s): %s",
-    tostring(label), tostring(item), tostring(chest_name), tostring(err)),
+    "%s: die ME Bridge lehnte den Export ab (%s → %s): %s%s",
+    tostring(label), tostring(item), tostring(chest_name), tostring(err), method_hint),
     { key = "EXPORT_FEHLER|" .. tostring(chest_name) .. "|" .. tostring(err) })
 end
 
@@ -870,15 +889,16 @@ function M:_run_supply(cycle_log)
           delivery_attempted = true
           request.phase = "EXPORTING"
           request.state = "delivering"
-          local ok, result = me_bridge_compat.export_to(bridge.wrapped,
+          local ok, result, convention = me_bridge_compat.export_to(bridge.wrapped,
             { name = deliver_item, count = deliver_count }, export_chest.name)
+          announce_convention(self, convention)
           if not ok then
             local err = tostring(result)
             -- warn_once() schreibt in den Log-Collector, nicht auf den
             -- Schirm, und ausserdem nur ein einziges Mal. Ein dauerhaft
             -- scheiternder Export war damit unsichtbar -- obwohl er genau
             -- der Grund ist, dass nichts aus dem ME kommt.
-            note_export_failed(self, r.label, deliver_item, export_chest.name, err)
+            note_export_failed(self, bridge.wrapped, r.label, deliver_item, export_chest.name, err)
             self.warn_once("exp_err:" .. export_chest.name,
               "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
             account_async_error(self, request)
@@ -970,11 +990,12 @@ function M:_run_supply(cycle_log)
       request.state = "delivering"
       request.phase = "EXPORTING"
       delivery_attempted = true
-      local ok, result = me_bridge_compat.export_to(bridge.wrapped,
+      local ok, result, convention = me_bridge_compat.export_to(bridge.wrapped,
         { name = deliver_item, count = deliver_count }, export_chest.name)
+      announce_convention(self, convention)
       if not ok then
         local err = tostring(result)
-        note_export_failed(self, r.label, deliver_item, export_chest.name, err)
+        note_export_failed(self, bridge.wrapped, r.label, deliver_item, export_chest.name, err)
         self.warn_once("exp_err:" .. export_chest.name,
           "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
         errors = errors + 1
