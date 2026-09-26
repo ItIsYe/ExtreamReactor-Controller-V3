@@ -104,6 +104,22 @@ end
 -- Reaktoren selbst, nur aufs ME-System.
 local MAX_FUEL_DATA_AGE_MS = 30000
 
+-- Wie alt ist die juengste Probe -- OHNE Frischepruefung. "Kein Fuellstand"
+-- hat zwei voellig verschiedene Ursachen, und nur das Alter trennt sie:
+-- nie gehoert (der Reaktor ist der Anlage unbekannt) gegen zu alt (er wurde
+-- gehoert, meldet aber nicht mehr). Erstes ist ein Einlern-Problem, zweites
+-- ein RT- oder Funkproblem.
+local function newest_sample_age_ms(fuel_status, reactor_id)
+  if not fuel_status or not reactor_id then return nil end
+  local now, newest = os.epoch("utc"), nil
+  for _, source in ipairs({ fuel_status.master_relay, fuel_status.direct_heard }) do
+    local entry = source and source[reactor_id]
+    if entry and entry.ts and (not newest or entry.ts > newest) then newest = entry.ts end
+  end
+  if not newest then return nil end
+  return math.max(0, now - newest)
+end
+
 local function read_reactor_fuel_from_network(fuel_status, reactor_id)
   if not fuel_status or not reactor_id then return nil, nil end
   local now = os.epoch("utc")
@@ -509,7 +525,12 @@ end
 local function describe_idle(reactors, t)
   local parts = {}
   if t.no_data > 0 then
-    parts[#parts + 1] = t.no_data .. " ohne Fuellstand-Daten (keine frische RT-Meldung)"
+    local names = ""
+    if t.no_data_notes and #t.no_data_notes > 0 then
+      names = ": " .. table.concat(t.no_data_notes, ", ")
+        .. (t.no_data > #t.no_data_notes and ", ..." or "")
+    end
+    parts[#parts + 1] = t.no_data .. " ohne Fuellstand-Daten" .. names
   end
   if t.above > 0 then
     local detail = ""
@@ -627,7 +648,8 @@ function M:_run_supply(cycle_log)
   -- Schwelle / Abklingzeit) mit drei verschiedenen Massnahmen -- die pauschale
   -- Meldung zwang den Betreiber bisher zum Raten.
   local tally = { disabled = 0, no_data = 0, above = 0, cooldown = 0,
-                  lowest_pct = nil, lowest_label = nil, lowest_threshold = nil }
+                  lowest_pct = nil, lowest_label = nil, lowest_threshold = nil,
+                  no_data_notes = {} }
   for _, r in ipairs(self._state.reactors) do
     local requesting, fuel_pct = false, nil
     -- Vom Normalizer stillgelegt (ungueltiger Eintrag). Ueberspringen --
@@ -655,6 +677,15 @@ function M:_run_supply(cycle_log)
           requesting and "YES" or "no"))
       else
         tally.no_data = tally.no_data + 1
+        -- Den Eintrag beim Namen nennen, samt Alter der juengsten Probe:
+        -- eine blosse Anzahl liess offen, WELCHER Reaktor fehlt, und die
+        -- Oberflaeche zeigte fuer denselben Reaktor gleichzeitig einen
+        -- frischen Fuellstand. Genau dieser Widerspruch war nicht aufloesbar.
+        if #tally.no_data_notes < 4 then
+          local age_ms = newest_sample_age_ms(self.fuel_status, r.reactor_id)
+          tally.no_data_notes[#tally.no_data_notes + 1] = tostring(r.label)
+            .. (age_ms and string.format(" (%.0fs alt)", age_ms / 1000) or " (nie gehoert)")
+        end
         self.warn_once("fuel_read_fail:" .. r.label,
           "Logistics: no fresh network fuel data for " .. r.label
           .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
@@ -804,6 +835,11 @@ function M:_run_supply(cycle_log)
               export_chest.name, result)
           end
           if moved > 0 then
+            -- Eine geroutete Lieferung kehrt sofort zurueck (sie laeuft
+            -- asynchron weiter), also erreicht sie das exported > 0 am Ende
+            -- von _run_supply() nie -- der letzte Grund blieb dadurch fuer
+            -- immer in der Oberflaeche stehen, auch waehrend alles lief.
+            note_block(self, nil)
             record_export(self, request.reactor_id, moved)
             local move_line = string.format(
               "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)

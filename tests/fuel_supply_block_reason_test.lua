@@ -313,4 +313,91 @@ do
       .. tostring(block.detail))
 end
 
+-- ══ 10. "ohne Fuellstand-Daten" muss die Eintraege benennen ════════════
+--
+-- Aus dem Betrieb ein direkter Widerspruch: die Meldung zaehlte "15 ohne
+-- Fuellstand-Daten, 1 ueber der Schwelle", waehrend die Oberflaeche im
+-- selben Moment ZWEI Reaktoren mit frischem Fuellstand zeigte -- einen
+-- davon (Reaktor 14, 51% bei Schwelle 65%) sogar als ANFORDERUNG.
+--
+-- Mit blossen Anzahlen ist so ein Widerspruch nicht aufloesbar. Die
+-- Meldung nennt die Eintraege jetzt beim Namen und sagt dazu, ob ihre
+-- juengste Probe zu alt oder ueberhaupt nie eingetroffen ist -- das sind
+-- zwei verschiedene Fehler (Einlernen gegen RT/Funk).
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router._state.bridge = { name = 'meBridge_0', wrapped = {} }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  local now = os.epoch('utc')
+  router.fuel_status = {
+    -- zu alt fuer die Frischepruefung (>30s), aber gehoert
+    master_relay = { ['node-9:REACTOR-alt'] = { ts = now - 90000, fuel_amount = 10, fuel_capacity = 1000 } },
+    direct_heard = {},
+  }
+  router._state.reactors = {
+    { label = 'Reaktor 9', reactor_id = 'node-9:REACTOR-alt', request_below = 0.65,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 0, path = {} },
+    { label = 'Reaktor 13', reactor_id = 'node-13:REACTOR-nie', request_below = 0.65,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 0, path = {} },
+  }
+  supply(router)
+
+  local d = tostring(router:get_summary().supply_block.detail)
+  assert_true(d:find('Reaktor 9', 1, true) ~= nil, 'der Eintrag muss benannt sein: ' .. d)
+  assert_true(d:find('90s alt', 1, true) ~= nil,
+    'gehoert, aber veraltet -- das ist ein RT-/Funkproblem: ' .. d)
+  assert_true(d:find('Reaktor 13', 1, true) ~= nil, d)
+  assert_true(d:find('nie gehoert', 1, true) ~= nil,
+    'nie gehoert -- das ist ein Einlern-Problem, ein anderer Fehler: ' .. d)
+end
+
+-- ══ 11. Eine geroutete Lieferung raeumt den Grund weg ══════════════════
+--
+-- Sie kehrt sofort zurueck (der Rest laeuft asynchron), erreicht also das
+-- "exported > 0" am Ende von _run_supply() nie. Der letzte Grund blieb
+-- dadurch fuer immer in der Oberflaeche stehen -- auch waehrend laengst
+-- alles lief. Genau das zeigte das Betriebsbild: ein Banner "keine
+-- Lieferung", darunter ein Reaktor in ANFORDERUNG.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router.config.reserve_items =
+    { { element = 'uranium', item = 'xr:uranium_ingot', unit_multiplier = 1 } }
+  router._state.bridge = { name = 'meBridge_0', wrapped = {
+    getItem = function(_) return { amount = 512 } end,
+    exportItemToPeripheral = function(_, _) return 64 end,
+  } }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  router.fuel_status = {
+    master_relay = { ['node-14:REACTOR-x'] = { ts = os.epoch('utc'), fuel_amount = 510, fuel_capacity = 1000 } },
+    direct_heard = {},
+  }
+  router._state.reactors = {
+    { label = 'Reaktor 14', reactor_id = 'node-14:REACTOR-x', request_below = 0.65,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 30, path = { 'v1' } },
+  }
+
+  -- Ein Router, der so tut, als sei Routing eingerichtet: er fuehrt den
+  -- Export sofort aus und laesst die Transaktion danach offen weiterlaufen.
+  router._state.rs_router = {
+    get_routing_state = function() return 'ROUTING_VALID' end,
+    begin_transaction = function(_, _, do_export, _, _)
+      do_export()
+      return true, nil, 'tx-1'
+    end,
+    get_active_transaction = function() return { transaction_id = 'tx-1', phase = 'OPENING' } end,
+  }
+
+  -- Erst ein Grund aus einem frueheren Zyklus ...
+  router._state.supply_block = { code = 'NIEMAND_FORDERT_AN', detail = 'alt' }
+  router._state.supply_block_key = 'NIEMAND_FORDERT_AN|alt'
+
+  supply(router)
+  local summary = router:get_summary()
+  assert_true(summary.supply_block == nil or summary.supply_block.code == 'LIEFERUNG_LAEUFT',
+    'sobald wirklich etwas bewegt wurde, darf kein alter "liefert nicht"-Grund stehen bleiben: '
+      .. tostring(summary.supply_block and summary.supply_block.code))
+end
+
 print('fuel_supply_block_reason_test.lua: ok')
