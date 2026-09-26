@@ -175,22 +175,48 @@ end
 local rod_write_said, turbine_write_said = {}, nil
 
 local function announce_rod_write(ctx, name, decision, write)
-  local failed = not (write and write.ok == true)
-  local err = write and write.err or "ohne Fehlertext"
-  local key = failed and ("FAIL|" .. tostring(err)) or "OK"
+  local rod_failed = not (write and write.ok == true)
+  local rod_err = write and write.err or "ohne Fehlertext"
+  -- Der EINSCHALTBEFEHL ist ein eigener Schreibvorgang mit eigenem
+  -- Ergebnis. Er wurde bisher nirgends ausgewertet -- und genau er ist
+  -- gemeint, wenn der Betreiber sagt "die Reaktoren wurden gar nicht
+  -- angemacht": der Regler fordert das Einschalten in JEDEM Takt an
+  -- (compute_active_decision), der Reaktor bleibt trotzdem aus, und kein
+  -- Wort dazu. Extreme Reactors verweigert setActive unter anderem ohne
+  -- Brennstoff und bei unvollstaendigem Multiblock.
+  local wanted_active = decision and decision.activate == true
+  local active_failed = wanted_active and not (write and write.active_ok == true)
+  local active_err = write and write.active_err or "ohne Fehlertext"
+
+  local key = (rod_failed and ("ROD|" .. tostring(rod_err)) or "ROD_OK")
+    .. "/" .. (active_failed and ("ON|" .. tostring(active_err)) or "ON_OK")
   if rod_write_said[name] == key then return end
+  local previous = rod_write_said[name]
   rod_write_said[name] = key
-  if not failed then
-    if key ~= "OK" then return end
-    ctx.log("INFO", "v2 " .. tostring(name) .. ": Stabbefehle werden wieder angenommen")
+
+  if not rod_failed and not active_failed then
+    if previous ~= nil then
+      ctx.log("INFO", "v2 " .. tostring(name) .. ": Befehle werden wieder angenommen")
+    end
     return
   end
-  local msg = string.format(
-    "v2 %s: Stabbefehl ABGELEHNT (Soll %s%%) -- %s. Der Regler rechnet weiter,"
-      .. " die Hardware nimmt nichts an: die Staebe bleiben stehen, wo sie sind.",
-    tostring(name), tostring(decision and decision.rods), tostring(err))
-  ctx.log("ERROR", msg)
-  pcall(print, "[RT] " .. msg)
+  if rod_failed then
+    local msg = string.format(
+      "v2 %s: Stabbefehl ABGELEHNT (Soll %s%%) -- %s. Der Regler rechnet weiter,"
+        .. " die Hardware nimmt nichts an: die Staebe bleiben stehen, wo sie sind.",
+      tostring(name), tostring(decision and decision.rods), tostring(rod_err))
+    ctx.log("ERROR", msg)
+    pcall(print, "[RT] " .. msg)
+  end
+  if active_failed then
+    local msg = string.format(
+      "v2 %s: EINSCHALTEN ABGELEHNT -- %s. Der Regler fordert es in jedem Takt an;"
+        .. " der Reaktor bleibt aus. Haeufigste Gruende: kein Brennstoff im Reaktor,"
+        .. " oder der Multiblock ist unvollstaendig.",
+      tostring(name), tostring(active_err))
+    ctx.log("ERROR", msg)
+    pcall(print, "[RT] " .. msg)
+  end
 end
 
 -- Die Flotte gesammelt: bei 50 Turbinen waere eine Zeile je Turbine kein

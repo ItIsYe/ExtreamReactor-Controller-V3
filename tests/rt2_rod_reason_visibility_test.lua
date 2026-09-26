@@ -244,4 +244,53 @@ do
   assert_true(said:find('50 Turbine', 1, true) ~= nil, 'und der Anzahl: ' .. said)
 end
 
+-- ══ 6. Ein abgelehntes EINSCHALTEN war ebenfalls unsichtbar ═══════════
+--
+-- Aus dem Betrieb, nachdem Kuehlmittel und Dampfanschluesse als Ursache
+-- ausgeschlossen waren: "die Reaktoren wurden gar nicht angemacht, die
+-- Staebe waren von Start an auf 100% bei beiden".
+--
+-- Der Regler fordert das Einschalten in JEDEM Takt an, solange der
+-- Reaktor nicht aktiv meldet (compute_active_decision). Das Ergebnis
+-- dieses Schreibvorgangs wurde nirgends ausgewertet -- auch nicht von der
+-- Stabbefehl-Meldung, die nur write.ok kennt. Extreme Reactors verweigert
+-- setActive unter anderem ohne Brennstoff und bei unvollstaendigem
+-- Multiblock: ohne diese Meldung sieht der Betreiber nur einen Reaktor,
+-- der aus bleibt.
+
+do
+  engine.init({ config = { reactors = { 'R-A' }, turbines = { 'T1' } }, log = function() end })
+  local readings = {
+    -- aus, Tank messbar -> der Regler will einschalten
+    ['R-A'] = { control_rod_level = 100, active = false, temperature = 20, steam_fill_ratio = 0.0 },
+  }
+  local ctx, printed = make_ctx(readings)
+  ctx.config.reactors = { 'R-A' }
+  local activations = 0
+  ctx.adapters.reactor.apply_rod_level = function() return true end
+  ctx.adapters.reactor.set_active = function()
+    activations = activations + 1
+    return nil, 'reactor has no fuel'
+  end
+  run(ctx, printed, 3)
+
+  assert_true(activations > 0, 'der Regler muss das Einschalten ueberhaupt anfordern')
+  local said = table.concat(printed, ' | ')
+  assert_true(said:find('EINSCHALTEN ABGELEHNT', 1, true) ~= nil,
+    'ein verweigertes Einschalten darf nicht spurlos bleiben: ' .. said)
+  assert_true(said:find('reactor has no fuel', 1, true) ~= nil,
+    'mit dem Wortlaut des Mods -- der nennt den Grund: ' .. said)
+  assert_true(said:find('kein Brennstoff', 1, true) ~= nil, said)
+
+  -- Nimmt der Reaktor das Einschalten spaeter an, wird nicht weiter gemeldet.
+  ctx.adapters.reactor.set_active = function() return true end
+  local before = #printed
+  run(ctx, printed, 3)
+  local again = 0
+  for i = before + 1, #printed do
+    if tostring(printed[i]):find('EINSCHALTEN ABGELEHNT', 1, true) then again = again + 1 end
+  end
+  assert_true(again == 0, 'und danach nicht weiter (' .. again .. ')')
+end
+
 print('rt2_rod_reason_visibility_test.lua: ok')
