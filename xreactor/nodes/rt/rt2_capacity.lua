@@ -93,6 +93,20 @@ M.TOPOLOGY_DEBOUNCE_MS = 3000
 -- Einlernen genau das, was sustainable_turbines behauptet zu sein.
 M.STAGE_TIMEOUT_MS = 8000
 
+-- Und wieder hinauf. Eine Stufe, die sauber traegt (keine einzige Turbine
+-- gesaettigt), ist KEIN Beweis, dass mehr nicht ginge -- sie beweist nur,
+-- dass so viel geht. Ohne diesen Weg zurueck waere jede einmal
+-- zurueckgenommene Freigabe eine Decke fuer immer.
+--
+-- Genau so im Betrieb gesehen (node-101, direkt nach dem Einbau der
+-- Staffelung): CAP READY, 50 Turbinen aktiv -- und genau EINE lief. In
+-- der Dampfknappheit war 1 gelernt worden, und danach durfte die Anlage
+-- nie wieder zeigen, dass sie mehr traegt: bei einer Freigabe von 1 kann
+-- nie mehr als 1 gleichzeitig am Ziel stehen, der Hoechstwert kann sich
+-- also nie verbessern. Eine Selbstsperre, nur eine Ebene hoeher als die
+-- vorige.
+M.RECLIMB_MS = 15000
+
 local function copy(t)
   local out = {}
   for k, v in pairs(t or {}) do out[k] = v end
@@ -128,6 +142,7 @@ function M.new_state()
     -- 0/nil heisst "alle" -- so faengt jede Anlage an.
     released = 0,
     stage_since_ms = nil,
+    climb_since_ms = nil,
   }
 end
 
@@ -214,6 +229,7 @@ function M.update(previous, turbines, opts)
     -- ganzen Flotte.
     state.released = 0
     state.stage_since_ms = nil
+    state.climb_since_ms = nil
     state.reason = "TOPOLOGY_CHANGED"
     return state
   end
@@ -263,6 +279,13 @@ function M.update(previous, turbines, opts)
         and now_ms - (state.stage_since_ms or now_ms) >= M.STAGE_TIMEOUT_MS then
       state.released = math.max(1, math.floor(released / 2))
       state.stage_since_ms = now_ms
+      state.climb_since_ms = nil
+      -- Die Anlage traegt nachweislich weniger als gedacht: der gemessene
+      -- Wert darf das nicht weiter behaupten, sonst verteilt MASTER
+      -- weiterhin auf Turbinen, die nie ans Ziel kommen.
+      if (state.sustainable_turbines or 0) > state.released then
+        state.sustainable_turbines = state.released
+      end
       state.reason = "STAGE_DOWN"
       return state
     end
@@ -274,6 +297,29 @@ function M.update(previous, turbines, opts)
   -- Die Stufe traegt: die Uhr fuer den Rueckschritt laeuft neu.
   state.stage_since_ms = nil
   state.released = released
+
+  -- ... und die fuer den Weg zurueck nach oben laeuft an. Nur solange
+  -- KEINE Turbine gesaettigt ist: Saettigung hiesse, der Dampf ist schon
+  -- jetzt knapp, dann waere mehr Freigabe das Gegenteil einer Verbesserung.
+  if saturated == 0 and released < total then
+    if not state.climb_since_ms then state.climb_since_ms = now_ms end
+    if now_ms - state.climb_since_ms >= M.RECLIMB_MS then
+      state.released = math.min(total, released + math.max(1, math.floor(total * 0.1)))
+      -- Auch die gemessene Zahl mitziehen: sie ist es, die im Betrieb
+      -- deckelt (rt2_orchestrator). Bliebe sie stehen, duerfte die groessere
+      -- Freigabe sich nie zeigen -- es koennten nie mehr Turbinen
+      -- gleichzeitig ans Ziel kommen, der Hoechstwert koennte sich nie
+      -- verbessern, und die Decke bliebe fuer immer.
+      if (state.sustainable_turbines or 0) < state.released then
+        state.sustainable_turbines = state.released
+      end
+      state.climb_since_ms = now_ms
+      state.reason = "STAGE_UP"
+      return state
+    end
+  else
+    state.climb_since_ms = nil
+  end
 
   if output > (state.best_output or 0) then
     state.best_output = output

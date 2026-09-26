@@ -269,6 +269,11 @@ function M.new(opts)
       local released = tonumber(self.capacity.released) or 0
       if released > 0 then max_active = released end
     elseif self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
+      -- Im Betrieb deckelt die gemessene Zahl -- nicht mehr anfahren, als
+      -- je gleichzeitig geliefert haben. Dass diese Zahl bei nachlassender
+      -- Knappheit wieder WACHSEN kann, regelt rt2_capacity selbst
+      -- (RECLIMB_MS); sonst bliebe eine in der Knappheit gelernte 1 fuer
+      -- immer die Decke.
       max_active = self.capacity.sustainable_turbines
     end
 

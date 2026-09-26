@@ -295,4 +295,81 @@ do
   assert_true(tostring(why):find('alter Cache'), 'und der Grund muss genannt werden: ' .. tostring(why))
 end
 
+-- ── Und wieder hinauf, wenn der Dampf zurueckkommt ──────────────────────
+--
+-- Aus dem Betrieb, unmittelbar nach dem Einbau der Staffelung (node-101):
+-- CAP READY, 50 Turbinen aktiv -- und genau EINE lief, alle uebrigen mit
+-- Flow 0 im Auslaufen.
+--
+-- In der Dampfknappheit war 1 gelernt worden. Danach durfte die Anlage
+-- nie wieder zeigen, dass sie mehr traegt: bei einer Freigabe von 1 kann
+-- nie mehr als 1 gleichzeitig am Ziel stehen, der Hoechstwert kann sich
+-- also nie verbessern -- die Decke blieb fuer immer. Dieselbe Selbstsperre
+-- wie vorher, nur eine Ebene hoeher.
+
+do
+  -- Eine Anlage, die zunaechst nur 1 von 20 traegt ...
+  local state, now = rt2_capacity.new_state(), 1000
+  for _ = 1, 30 do
+    local carries = ((state.released or 0) > 0 and state.released <= 1) and 1 or 0
+    state = rt2_capacity.update(state, plant(20, carries, 100), { now_ms = now })
+    if state.ready then break end
+    now = now + rt2_capacity.STAGE_TIMEOUT_MS
+  end
+  assert_true(state.ready, 'erst einmal wird die knappe Stufe gelernt')
+  assert_eq(state.sustainable_turbines, 1, 'genau eine trug')
+
+  -- ... und danach ist wieder Dampf da.
+  --
+  -- Wichtig fuer das Modell: die gedeckelten Turbinen bekommen Flow 0,
+  -- nicht vollen Flow -- der Knoten hat sie ja abgestellt. Genau so sah
+  -- es im Betrieb aus: 49 Turbinen mit FLOW 0.0 im Auslaufen, eine lief.
+  -- Sie sind damit NICHT gesaettigt, und genau das ist das Signal, dass
+  -- ein Versuch nach oben gefahrlos ist.
+  local function parked(total, carries)
+    local f = {}
+    for i = 1, total do
+      if i <= carries then f[i] = turbine(900, 100, true, 1200)
+      else f[i] = turbine(450, 0, false, 0) end
+    end
+    return f
+  end
+
+  for _ = 1, 30 do
+    local allowed = math.min(state.sustainable_turbines or 1, 20)
+    state = rt2_capacity.update(state, parked(20, allowed), { now_ms = now })
+    now = now + rt2_capacity.RECLIMB_MS
+  end
+
+  assert_true(state.sustainable_turbines > 1,
+    'ohne Saettigung muss die Anlage wieder zeigen duerfen, dass sie mehr traegt -- sonst'
+      .. ' bleibt eine in der Knappheit gelernte 1 fuer immer die Decke (jetzt: '
+      .. tostring(state.sustainable_turbines) .. ')')
+  assert_eq(state.sustainable_turbines, 20, 'und zwar bis hinauf zur ganzen Flotte')
+  assert_true(state.max_output > 0)
+end
+
+-- Aber NICHT bei Saettigung: dann ist der Dampf schon jetzt knapp, und
+-- mehr Freigabe waere das Gegenteil einer Verbesserung.
+
+do
+  local state, now = rt2_capacity.new_state(), 1000
+  for _ = 1, 30 do
+    local carries = ((state.released or 0) > 0 and state.released <= 3) and state.released or 0
+    state = rt2_capacity.update(state, plant(20, carries, 100), { now_ms = now })
+    if state.ready then break end
+    now = now + rt2_capacity.STAGE_TIMEOUT_MS
+  end
+  local settled = state.sustainable_turbines
+  assert_true(settled > 0 and settled <= 3, 'die Anlage traegt hoechstens drei')
+
+  -- Die uebrigen fahren vollen Flow und bleiben trotzdem zu langsam.
+  for _ = 1, 30 do
+    state = rt2_capacity.update(state, plant(20, settled, 100), { now_ms = now })
+    now = now + rt2_capacity.RECLIMB_MS
+  end
+  assert_true(state.sustainable_turbines <= settled + 2,
+    'bei Saettigung darf die Freigabe nicht davonlaufen: ' .. tostring(state.sustainable_turbines))
+end
+
 print('rt2_capacity_test.lua: ok')
