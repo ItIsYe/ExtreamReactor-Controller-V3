@@ -241,4 +241,76 @@ do
   assert_eq(#second, 0, 'aber nicht in jedem Zyklus erneut')
 end
 
+-- ══ 9. Der stillste Ausfall: Erfolg gemeldet, null Stueck bewegt ═══════
+--
+-- Aus dem Betrieb: die Transaktion lief sauber durch (OPENING → EXPORTING
+-- → FINAL_BLOCK), Ventile wurden gestellt, das Protokoll zeigte Lieferung
+-- um Lieferung -- und am Reaktor kam nie etwas an, ohne ein einziges Wort.
+--
+-- exportItemToPeripheral() meldet in diesem Fall Erfolg und bewegt null
+-- Stueck (volle Uebergabekiste, unbekannter Ziel-Name, reservierter
+-- Bestand). Der Code fragte nur "moved > 0" und schwieg sonst -- und weil
+-- record_export() ebenfalls nur bei moved > 0 laeuft, wurde auch keine
+-- Abklingzeit gesetzt: derselbe Reaktor lief sofort wieder los. Genau das
+-- endlose Wiederholen war im Betrieb zu sehen.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router.config.reserve_items =
+    { { element = 'uranium', item = 'xr:uranium_ingot', unit_multiplier = 1 } }
+  local exported_calls = {}
+  router._state.bridge = { name = 'meBridge_0', wrapped = {
+    getItem = function(_) return { amount = 512 } end,
+    -- Erfolg gemeldet, nichts bewegt.
+    exportItemToPeripheral = function(_, _) exported_calls[#exported_calls + 1] = true; return 0 end,
+  } }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  router.fuel_status = {
+    master_relay = { ['node-14:REACTOR-x'] = { ts = os.epoch('utc'), fuel_amount = 10, fuel_capacity = 1000 } },
+    direct_heard = {},
+  }
+  router._state.reactors = {
+    { label = 'Reaktor 14', reactor_id = 'node-14:REACTOR-x', request_below = 0.25,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 30, path = {} },
+  }
+
+  local exported, _, printed = supply(router)
+  assert_eq(exported, 0)
+  assert_true(#exported_calls > 0, 'der Export wurde versucht')
+
+  local block = router:get_summary().supply_block
+  assert_true(block ~= nil, 'null bewegte Stueck duerfen nicht laut- und spurlos bleiben')
+  assert_eq(block.code, 'EXPORT_BEWEGTE_NICHTS')
+  assert_true(tostring(block.detail):find('Reaktor 14', 1, true) ~= nil, tostring(block.detail))
+  assert_true(tostring(block.detail):find('chest_0', 1, true) ~= nil, tostring(block.detail))
+  assert_true(#printed > 0, 'und der Grund muss am Rechner selbst stehen')
+end
+
+-- Auch eine Antwort, die gar keine Zahl ist, wurde bisher wortlos zu "0".
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router.config.reserve_items =
+    { { element = 'uranium', item = 'xr:uranium_ingot', unit_multiplier = 1 } }
+  router._state.bridge = { name = 'meBridge_0', wrapped = {
+    getItem = function(_) return { amount = 512 } end,
+    exportItemToPeripheral = function(_, _) return { ok = false } end,
+  } }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  router.fuel_status = {
+    master_relay = { ['node-14:REACTOR-x'] = { ts = os.epoch('utc'), fuel_amount = 10, fuel_capacity = 1000 } },
+    direct_heard = {},
+  }
+  router._state.reactors = {
+    { label = 'Reaktor 14', reactor_id = 'node-14:REACTOR-x', request_below = 0.25,
+      fill_amount = 64, min_in_me = 32, resupply_cooldown_s = 30, path = {} },
+  }
+  supply(router)
+  local block = router:get_summary().supply_block
+  assert_eq(block.code, 'EXPORT_BEWEGTE_NICHTS')
+  assert_true(tostring(block.detail):find('kein Zahlwert', 1, true) ~= nil,
+    'die Form der Antwort gehoert in die Meldung -- sie sagt, WAS die Bridge stattdessen lieferte: '
+      .. tostring(block.detail))
+end
+
 print('fuel_supply_block_reason_test.lua: ok')

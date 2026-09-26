@@ -559,6 +559,25 @@ local function note_block(self, code, detail, opts)
   end
 end
 
+-- Der stillste aller Ausfaelle: exportItemToPeripheral() meldet Erfolg und
+-- bewegt NULL Stueck. Die Transaktion lief dann sauber durch (OPENING →
+-- EXPORTING → FINAL_BLOCK), alle Ventile wurden gestellt, das Protokoll
+-- zeigte eine Lieferung -- und am Reaktor kam nie etwas an, ohne ein
+-- einziges Wort. Genau diesen Fall meldet das hier.
+--
+-- Auch ein Rueckgabewert, der KEINE Zahl ist, landet hier: dann hat die
+-- Bridge zwar etwas geantwortet, aber nicht das erwartete Stueckzahl-Ergebnis
+-- -- bisher wurde daraus wortlos "0 bewegt".
+local function note_export_nothing(self, label, item, wanted, chest_name, raw)
+  local shape = type(raw) == "number" and "0"
+    or ("kein Zahlwert, sondern " .. type(raw))
+  note_block(self, "EXPORT_BEWEGTE_NICHTS", string.format(
+    "%s: ME meldete Erfolg, bewegte aber nichts (%s, %d angefordert, Ziel %s, Rueckgabe %s)"
+      .. " -- Uebergabekiste voll, Ziel-Name unbekannt, oder der Bestand ist reserviert",
+    tostring(label), tostring(item), tonumber(wanted) or 0, tostring(chest_name), shape),
+    { key = "EXPORT_BEWEGTE_NICHTS|" .. tostring(label) .. "|" .. tostring(item) })
+end
+
 function M:_run_supply(cycle_log)
   local bridge = self._state.bridge
   if not bridge then
@@ -780,6 +799,10 @@ function M:_run_supply(cycle_log)
           local moved = type(result) == "number" and result or 0
           request.moved = moved
           request.exported_at = os.epoch and os.epoch("utc") or 0
+          if moved <= 0 then
+            note_export_nothing(self, r.label, deliver_item, deliver_count,
+              export_chest.name, result)
+          end
           if moved > 0 then
             record_export(self, request.reactor_id, moved)
             local move_line = string.format(
@@ -856,6 +879,10 @@ function M:_run_supply(cycle_log)
       else
         local moved = type(result) == "number" and result or 0
         request.moved = moved
+        if moved <= 0 then
+          note_export_nothing(self, r.label, deliver_item, deliver_count,
+            export_chest.name, result)
+        end
         if moved > 0 then
           record_export(self, request.reactor_id, moved)
           exported = exported + moved
