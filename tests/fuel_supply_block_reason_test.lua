@@ -196,4 +196,49 @@ do
   assert_true(d:find('Schwelle 25%', 1, true) ~= nil, d)
 end
 
+-- ══ 8. Eine laufende Lieferung flutet den Bildschirm nicht ═════════════
+--
+-- Aus dem Betrieb: derselbe Satz Zeile fuer Zeile, nur mit anderem
+-- Sekundenzaehler ("seit 4s", "seit 5s", "seit 6s") und wechselnder Phase
+-- (OPENING/EXPORTING/FINAL_BLOCK), bis nichts anderes mehr lesbar war.
+--
+-- Ursache: der Entprellungs-Schluessel war der Meldungstext selbst -- und
+-- der aendert sich per Konstruktion in JEDEM Zyklus. Damit galt jede
+-- Sekunde als neuer Grund.
+--
+-- Zweitens ist eine laufende Lieferung ueberhaupt kein Missstand: sie ist
+-- genau das, was passieren soll. Gemeldet wird sie erst, wenn sie haengt --
+-- dann allerdings ist sie der wichtigste Hinweis, weil sie jede weitere
+-- Lieferung sperrt.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router._state.bridge = { name = 'meBridge_0', wrapped = {} }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  local started = os.epoch('utc')
+  router._state.current_request =
+    { label = 'Reaktor 14', phase = 'OPENING', started_ts = started }
+
+  local lines = 0
+  for _, phase in ipairs({ 'OPENING', 'OPENING', 'EXPORTING', 'FINAL_BLOCK', 'OPENING' }) do
+    router._state.current_request.phase = phase
+    local _, _, printed = supply(router)
+    lines = lines + #printed
+  end
+  assert_eq(lines, 0,
+    'eine frisch laufende Lieferung schreibt keine einzige Zeile -- sie ist kein Ausfall')
+
+  -- Der Zustand steht trotzdem fuer die UI bereit.
+  local block = router:get_summary().supply_block
+  assert_eq(block.code, 'LIEFERUNG_LAEUFT')
+  assert_true(tostring(block.detail):find('Reaktor 14', 1, true) ~= nil)
+
+  -- Haengt sie dagegen, wird genau EINMAL gemeldet.
+  router._state.current_request.started_ts = started - 45000
+  local _, _, first = supply(router)
+  local _, _, second = supply(router)
+  assert_eq(#first, 1, 'eine haengende Lieferung muss gemeldet werden')
+  assert_eq(#second, 0, 'aber nicht in jedem Zyklus erneut')
+end
+
 print('fuel_supply_block_reason_test.lua: ok')

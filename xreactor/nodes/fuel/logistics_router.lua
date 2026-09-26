@@ -530,12 +530,24 @@ local function describe_idle(reactors, t)
     #reactors, table.concat(parts, ", "))
 end
 
-local function note_block(self, code, detail)
+-- Eine laufende Lieferung ist so lange kein Missstand, bis sie haengt --
+-- danach ist sie der wichtigste Hinweis ueberhaupt, weil sie jede weitere
+-- Lieferung sperrt (der Router faehrt immer nur EINE).
+local STUCK_DELIVERY_MS = 30000
+
+-- opts.key   -- stabiler Schluessel fuer die Entprellung, wenn der Text selbst
+--               sich staendig aendert (Sekundenzaehler, Phasenwechsel). Ohne
+--               ihn galt jede neue Sekunde als neuer Grund und floss Zeile fuer
+--               Zeile auf den Bildschirm.
+-- opts.quiet -- Zustand nur fuer die UI festhalten, nicht melden.
+local function note_block(self, code, detail, opts)
+  opts = opts or {}
   local s = self._state
-  local key = tostring(code) .. "|" .. tostring(detail or "")
+  local key = opts.key or (tostring(code) .. "|" .. tostring(detail or ""))
   s.supply_block = code and { code = code, detail = detail, ts = os.epoch("utc") } or nil
   if key == s.supply_block_key then return end
   s.supply_block_key = key
+  if opts.quiet then return end
   if code then
     local msg = "Logistik liefert nicht: " .. tostring(code)
       .. (detail and (" -- " .. tostring(detail)) or "")
@@ -559,10 +571,17 @@ function M:_run_supply(cycle_log)
   -- final BLOCKED confirmation, while waste collection may continue.
   if self._state.current_request then
     local req = self._state.current_request
+    local elapsed_ms = os.epoch("utc") - (req.started_ts or 0)
+    local stuck = elapsed_ms >= STUCK_DELIVERY_MS
+    -- Der Text nennt Sekunden und Phase und aendert sich daher in JEDEM
+    -- Zyklus. Als Entprellungs-Schluessel taugt er nicht: er machte aus der
+    -- normalen Lieferung einen Dauerregen gleichlautender Warnungen. Der
+    -- Schluessel haengt deshalb an der Lieferung selbst, nicht an ihrem Text.
+    local key = "LIEFERUNG_LAEUFT|" .. tostring(req.started_ts) .. (stuck and "|haengt" or "")
     note_block(self, "LIEFERUNG_LAEUFT", string.format(
       "%s seit %.0fs in Phase %s -- der Router faehrt immer nur EINE Lieferung",
-      tostring(req.label), ((os.epoch("utc") - (req.started_ts or 0)) / 1000),
-      tostring(req.phase)))
+      tostring(req.label), elapsed_ms / 1000, tostring(req.phase)),
+      { key = key, quiet = not stuck })
     return 0, 0
   end
   local exported, errors = 0, 0
