@@ -372,4 +372,48 @@ do
     'bei Saettigung darf die Freigabe nicht davonlaufen: ' .. tostring(state.sustainable_turbines))
 end
 
+-- ── Nach einem Neustart darf die Decke nicht endgueltig werden ─────────
+--
+-- Der Zwischenspeicher haelt sustainable_turbines fest -- aber nicht die
+-- Stufe. Ohne sie bezieht sich die 80-%-Schwelle wieder auf die GANZE
+-- Flotte, waehrend im Betrieb nur `sustainable` Turbinen laufen duerfen.
+-- Bei 1 von 50: eine am Ziel, vierzig noetig -> der Takt gilt als
+-- untauglich, die Pruefung kehrt als "STABLE" zurueck, und der Weg nach
+-- oben wird nie erreicht. Eine in der Knappheit gelernte 1 waere damit
+-- ueber jeden Neustart hinweg endgueltig.
+
+do
+  local written
+  assert(rt2_capacity.save(
+    { ready = true, max_output = 380, total_turbines = 50, sustainable_turbines = 1 },
+    { path = '/c', write_config = function(_, data) written = data; return true end }))
+
+  local loaded = rt2_capacity.load({
+    path = '/c', turbine_count = 50,
+    read_config = function() return written end,
+  })
+  assert_true(loaded ~= nil, 'der Zwischenspeicher muss geladen werden')
+  assert_eq(loaded.sustainable_turbines, 1)
+  assert_eq(loaded.released, 1, 'und die Stufe kommt mit -- sonst laeuft der Aufstieg nie an')
+
+  -- Mit wiederhergestellter Stufe findet der Aufstieg statt.
+  local function parked(total, carries)
+    local f = {}
+    for i = 1, total do
+      if i <= carries then f[i] = turbine(900, 100, true, 1200)
+      else f[i] = turbine(450, 0, false, 0) end
+    end
+    return f
+  end
+  local state, now = loaded, 10000
+  for _ = 1, 40 do
+    state = rt2_capacity.update(state, parked(50, math.min(state.sustainable_turbines, 50)),
+      { now_ms = now })
+    now = now + rt2_capacity.RECLIMB_MS
+  end
+  assert_true(state.sustainable_turbines > 1,
+    'nach dem Neustart muss die Anlage wieder zeigen duerfen, dass sie mehr traegt: '
+      .. tostring(state.sustainable_turbines))
+end
+
 print('rt2_capacity_test.lua: ok')

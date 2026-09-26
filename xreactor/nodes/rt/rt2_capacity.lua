@@ -405,6 +405,16 @@ function M.load(opts)
   state.max_output = data.max_output
   state.total_turbines = data.turbine_count
   state.sustainable_turbines = math.min(sustainable, data.turbine_count or sustainable)
+  -- Die Stufe MIT wiederherstellen, nicht nur die Zahl.
+  --
+  -- Ohne sie bezieht sich die 80-%-Schwelle nach einem Neustart wieder auf
+  -- die GANZE Flotte, waehrend im Betrieb nur `sustainable` Turbinen
+  -- laufen duerfen. Bei 1 von 50 heisst das: 1 am Ziel, 40 noetig -- der
+  -- Takt gilt als untauglich, die Pruefung kehrt sofort als "STABLE"
+  -- zurueck, und der Weg nach oben (RECLIMB_MS) wird nie erreicht. Eine in
+  -- der Knappheit gelernte 1 waere damit ueber jeden Neustart hinweg
+  -- endgueltig.
+  state.released = state.sustainable_turbines
   state.best_output = data.max_output / (1 - M.SAFETY_MARGIN)
   state.reason = "LOADED_FROM_CACHE"
   return state
