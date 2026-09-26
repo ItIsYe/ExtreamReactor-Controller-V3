@@ -131,6 +131,53 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## FUEL-Logistik: warum nie Brennstoff ankam (v743–v750, geloest)
+
+Im Betrieb bestaetigt: **FUEL liefert.** Die Ursache war eine einzige
+Zeile, verdeckt von einer Kette stiller Ausstiege.
+
+**Die Ursache.** `me_bridge_compat.export_to()` rief
+`exportItemToPeripheral(item, container)` — die von Advanced Peripherals
+fuer **0.7 und aelter** dokumentierte Reihenfolge. Die 1.21-Fassung (0.8,
+neues ME/RS-Bridge-System) nimmt sie nicht an und antwortet mit
+`bad argument #1 (string expected, got table)`. Der Aufruf erreichte den
+Mod nie. Seit v749 wird die Konvention **ermittelt statt angenommen**
+(gleiches Vorgehen wie `adapters/turbine.lua`), und **nur nach einem
+Argumentfehler** weiterprobiert — der entsteht, bevor der Mod etwas
+bewegt, ein Fehlversuch kann also nichts verschieben. Jede andere Antwort
+gilt als endgueltig; ein zweiter Versuch koennte sonst doppelt liefern.
+
+**Warum es so lange unsichtbar blieb.** Der Lieferpfad hatte sieben
+Ausstiege, die entweder voellig still waren oder nur `DEBUG`/`warn_once()`
+schrieben — also in den Log-Collector, nie auf den Schirm, und `warn_once`
+ausserdem nur ein einziges Mal:
+
+- Export meldet Erfolg und bewegt **null** Stueck (v746)
+- die ME Bridge **lehnt ab** (v748) — genau hier steckte die Ursache
+- `min_in_me` haelt den ganzen Bestand zurueck (v748)
+- keine lieferbare Form der Fuel-Familie (v748)
+- Ventilweg nicht stellbar, Router beschaeftigt/gesperrt (v748)
+
+Dazu zwei Anzeigefehler, die aktiv in die Irre fuehrten: der Grund wurde
+nur bei `exported > 0` geraeumt — was eine **geroutete** Lieferung nie
+erreicht, sie kehrt sofort zurueck (v747) — und der Entprellungs-
+Schluessel war der Meldungstext samt Sekundenzaehler, was denselben Satz
+Zeile fuer Zeile auf den Schirm schrieb (v745).
+
+**Der zweite echte Defekt (v750).** `_run_supply()` steigt bei gesetztem
+`current_request` ganz oben aus. Kam der Abschluss-Rueckruf des
+Ventil-Routers nie an, blieb der Knoten **fuer immer** stehen. Die
+angezeigte Phase stammte dabei aus der Vorbelegung und wurde nur in
+`get_summary()` nachgezogen — „seit 33s in Phase BLOCKING" war unmoeglich
+(BLOCKING hat 15s Frist) und kostete eine Runde Fehlersuche. Die Phase
+kommt jetzt live vom Router, und ohne laufende Transaktion wird die
+Lieferung nach 45s freigegeben.
+
+**Regel daraus:** kein Ausstieg aus einem Wirkpfad ohne ablesbaren Grund
+am Rechner selbst. `utils.log()` routet zum Log-Collector — das ist keine
+Anzeige. Und: eine Mod-API-Signatur, die nur fuer eine aeltere Version
+dokumentiert ist, wird gemessen, nicht angenommen.
+
 ## FUEL-Logistik (Stand PR #547–#550)
 
 - Ein gemeinsamer `export_chest` für alle Reaktoren; welcher Reaktor
