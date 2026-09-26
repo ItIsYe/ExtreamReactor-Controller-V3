@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 760,
-  manifest_id = "manifest-v760",
+  manifest_version = 761,
+  manifest_id = "manifest-v761",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "d57475cb", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "34512a4c", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -149,7 +149,7 @@ return {
     { path = "nodes/rt/rt2_master_link.lua", size_bytes = 1555, hash = "aa8589ad", required_for={"RT"} },
     { path = "nodes/rt/rt2_orchestrator.lua", size_bytes = 16314, hash = "b3a9dcb5", required_for={"RT"} },
     { path = "nodes/rt/rt2_projection.lua", size_bytes = 7019, hash = "502b3dad", required_for={"RT"} },
-    { path = "nodes/rt/rt2_reactor.lua", size_bytes = 8910, hash = "abfd495b", required_for={"RT"} },
+    { path = "nodes/rt/rt2_reactor.lua", size_bytes = 9198, hash = "750b8504", required_for={"RT"} },
     { path = "nodes/rt/rt2_safety.lua", size_bytes = 3496, hash = "786dee0c", required_for={"RT"} },
     { path = "nodes/rt/rt2_state.lua", size_bytes = 5990, hash = "b17e8aa4", required_for={"RT"} },
     { path = "nodes/rt/rt2_unit.lua", size_bytes = 4793, hash = "8aea53c7", required_for={"RT"} },

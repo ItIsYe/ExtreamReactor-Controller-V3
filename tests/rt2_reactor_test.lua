@@ -77,19 +77,50 @@ end
 do
   local seen, steps = {}, 0
   for e = 7, 50 do
-    local d = rt2_reactor.compute_rod_level({ fill_ratio = 0.5 + e / 100, current_rods = 85 })
+    -- Relativ zum Sollwert, nicht gegen eine fest verdrahtete 0.5: hier
+    -- wird das REGELGESETZ geprueft, nicht der eingestellte Sollwert. Der
+    -- ist eine Betriebsvorgabe und darf sich aendern, ohne diesen Test zu
+    -- beruehren (2026-09-26 von 50 auf 70 % angehoben).
+    local d = rt2_reactor.compute_rod_level({
+      fill_ratio = rt2_reactor.DEFAULT_TARGET_FILL + e / 100, current_rods = 85 })
     local step = d.rods - 85
     if not seen[step] then seen[step] = true; steps = steps + 1 end
   end
   assert_true(steps > 3, 'the step must take on a range of values, not a single saturated one -- got ' .. steps)
 
   -- Small deviation just past the deadband -> the smallest useful move.
-  local near = rt2_reactor.compute_rod_level({ fill_ratio = 0.5 + rt2_reactor.DEADBAND + 0.001, current_rods = 85 })
+  local near = rt2_reactor.compute_rod_level({
+    fill_ratio = rt2_reactor.DEFAULT_TARGET_FILL + rt2_reactor.DEADBAND + 0.001,
+    current_rods = 85 })
   assert_eq(near.rods - 85, rt2_reactor.MIN_STEP, 'right at the deadband edge the correction is minimal')
 
-  -- Far outside -> full authority, but never more than MAX_STEP.
-  local far = rt2_reactor.compute_rod_level({ fill_ratio = 1.0, current_rods = 85 })
-  assert_eq(far.rods - 85, rt2_reactor.MAX_STEP, 'a large deviation gets the full step')
+  -- Weit ausserhalb -> volle Stellautoritaet, aber nie mehr als MAX_STEP.
+  -- Gemessen wird an der Bandkante, nicht an einem festen Fuellstand:
+  -- volle Autoritaet setzt eine Abweichung von DEADBAND + PROPORTIONAL_BAND
+  -- voraus, und wieviel davon oberhalb bzw. unterhalb des Sollwerts
+  -- ueberhaupt PASST, haengt vom Sollwert ab.
+  local band = rt2_reactor.DEADBAND + rt2_reactor.PROPORTIONAL_BAND
+  local far = rt2_reactor.compute_rod_level({
+    fill_ratio = rt2_reactor.DEFAULT_TARGET_FILL - band - 0.01, current_rods = 85 })
+  assert_eq(85 - far.rods, rt2_reactor.MAX_STEP, 'a large deviation gets the full step')
+
+  -- Die Kehrseite eines hohen Sollwerts, und der Grund, warum das hier
+  -- ausdruecklich steht: oberhalb von 70 % bleiben nur 30 Punkte Weg, das
+  -- Band braucht aber 31. Ein randvoller Tank erreicht die volle
+  -- Stellautoritaet deshalb knapp NICHT -- er kommt auf 96 % davon.
+  --
+  -- In der Sache belanglos (Bruchteil eines Stab-Punktes, und die Stellung
+  -- wird ohnehin ganzzahlig geschrieben), aber es ist eine bewusste Folge
+  -- der Betreibervorgabe und keine Panne: wer den Sollwert weiter anhebt,
+  -- nimmt der Einfahr-Richtung weiter Autoritaet.
+  local brim = rt2_reactor.compute_rod_level({ fill_ratio = 1.0, current_rods = 85 })
+  local step_up = brim.rods - 85
+  assert_true(step_up > 0, 'ein voller Tank faehrt die Staebe ein')
+  assert_true(step_up <= rt2_reactor.MAX_STEP, 'aber nie mehr als MAX_STEP')
+  if rt2_reactor.ROD_MAX - rt2_reactor.DEFAULT_TARGET_FILL * 100 < band * 100 then
+    assert_true(step_up < rt2_reactor.MAX_STEP,
+      'bei diesem Sollwert passt das Band oberhalb nicht mehr ganz')
+  end
 
   -- MIN_STEP must stay at least 1: the mod stores rod levels as integers,
   -- so a smaller step would be rounded away on write and the controller
@@ -101,18 +132,24 @@ end
 -- own, adding more correction only overshoots. Same reading, same rods --
 -- only the direction of travel differs.
 do
+  -- Alle drei Faelle relativ zum Sollwert: geprueft wird die Daempfung,
+  -- nicht der eingestellte Sollwert (Betriebsvorgabe, 2026-09-26 auf
+  -- 70 % angehoben). Ausgangslage jeweils: Tank UEBER dem Sollwert.
+  local target = rt2_reactor.DEFAULT_TARGET_FILL
+  local above  = target + 0.12
+
   local still_falling = rt2_reactor.compute_rod_level({
-    fill_ratio = 0.62, current_rods = 85, previous_fill = 0.70 })
+    fill_ratio = above, current_rods = 85, previous_fill = above + 0.08 })
   assert_eq(still_falling.reason, 'CONVERGING', 'a tank already falling toward target must be left alone')
   assert_eq(still_falling.rods, 85, 'and its rods must not move')
 
   local still_rising = rt2_reactor.compute_rod_level({
-    fill_ratio = 0.62, current_rods = 85, previous_fill = 0.60 })
+    fill_ratio = above, current_rods = 85, previous_fill = above - 0.02 })
   assert_eq(still_rising.reason, 'TANK_FULL_INSERT', 'a tank still moving away must be corrected')
   assert_true(still_rising.rods > 85)
 
   -- Without a previous reading the damping simply does not apply.
-  local no_history = rt2_reactor.compute_rod_level({ fill_ratio = 0.62, current_rods = 85 })
+  local no_history = rt2_reactor.compute_rod_level({ fill_ratio = above, current_rods = 85 })
   assert_eq(no_history.reason, 'TANK_FULL_INSERT', 'no trend available -> plain proportional response')
 end
 

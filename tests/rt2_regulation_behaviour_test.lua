@@ -232,7 +232,11 @@ do
   -- The control law itself, directly.
   local low  = rt2_reactor.compute_rod_level({ fill_ratio = 0.10, current_rods = 90 })
   local high = rt2_reactor.compute_rod_level({ fill_ratio = 0.90, current_rods = 90 })
-  local hold = rt2_reactor.compute_rod_level({ fill_ratio = 0.52, current_rods = 90 })
+  -- Knapp neben dem Sollwert, relativ formuliert -- der Sollwert selbst
+  -- ist eine Betriebsvorgabe (2026-09-26: 70 %) und gehoert nicht in die
+  -- Pruefung des Regelgesetzes.
+  local hold = rt2_reactor.compute_rod_level({
+    fill_ratio = rt2_reactor.DEFAULT_TARGET_FILL + 0.02, current_rods = 90 })
   assert_true(low.rods < 90,  'tank low -> withdraw rods -> more power')
   assert_true(high.rods > 90, 'tank full -> insert rods -> less power')
   assert_eq(hold.rods, 90,    'inside the deadband nothing moves')

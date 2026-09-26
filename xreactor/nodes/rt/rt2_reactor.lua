@@ -38,7 +38,12 @@ local M = {}
 -- question, not a controller bug.
 M.ROD_MIN = 70
 M.ROD_MAX = 100
-M.DEFAULT_TARGET_FILL = 0.5   -- keep the internal steam tank ~50% full
+-- Sollwert des internen Dampftanks (Betreibervorgabe, 2026-09-26: von 50
+-- auf 70 % angehoben). Hoeher heisst mehr Puffer fuer Lastspitzen: die
+-- Flotte kann ploetzlich mehr ziehen, ohne dass der Tank leerlaeuft,
+-- bevor die Staebe nachgekommen sind. Der Preis ist ein Reaktor, der im
+-- Mittel etwas weiter ausgefahren faehrt.
+M.DEFAULT_TARGET_FILL = 0.7
 M.DEADBAND = 0.06             -- +/-6 percentage points: no rod movement inside this
 
 -- Proportional response. The step used to be
