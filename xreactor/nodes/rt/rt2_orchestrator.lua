@@ -46,6 +46,10 @@ function M.new(opts)
     turbine_models = opts.turbine_models or {},
     turbine_model_state = {},
     turbine_last_change_ms = {},
+    -- Was zuletzt WIRKLICH gestellt wurde. Ohne das ist der Regler auf
+    -- den Rueckmesswert der Hardware angewiesen -- und wenn der fehlt,
+    -- hat er gar keinen Bezugspunkt mehr (siehe rt2_turbine.lua).
+    turbine_last_flow = {},
     -- Letzte Drehzahlmessung je Turbine, um daraus abzuleiten, wie schnell
     -- der Rotor gerade steigt oder faellt.
     turbine_rpm_trace = {},
@@ -294,6 +298,7 @@ function M.new(opts)
         -- compute_flow_decision auf sein altes Verhalten zurueck.
         now_ms = now_ms,
         last_change_ms = name and self.turbine_last_change_ms[name] or nil,
+        last_commanded_flow = name and self.turbine_last_flow[name] or nil,
         model = name and self.turbine_models[name] or nil,
       })
       -- Steht die Vorgabe schon so an, muss sie nicht erneut geschrieben
@@ -324,6 +329,9 @@ function M.new(opts)
         flow_decision.unchanged = true
       elseif name then
         self.turbine_last_change_ms[name] = now_ms
+      end
+      if name and flow_decision.unchanged ~= true then
+        self.turbine_last_flow[name] = flow_decision.flow
       end
       turbine_results[#turbine_results + 1] = {
         name = name,

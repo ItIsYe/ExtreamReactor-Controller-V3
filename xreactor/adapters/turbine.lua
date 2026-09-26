@@ -123,6 +123,18 @@ local function capabilities(name, log_prefix)
     set_coil_method = first_available(set, SET_COIL_METHODS),
     set_active_method = first_available(set, SET_ACTIVE_METHODS),
   }
+  -- Unvollstaendig heisst: NICHT merken. Das galt bisher nur fuer die
+  -- Drehzahl -- eine Turbine, die beim Bau zwar getRotorSpeed, aber noch
+  -- kein getFluidFlowRateMax meldete, wurde dauerhaft ohne Durchfluss-
+  -- Methode gemerkt. Ihr Rueckmesswert blieb damit fuer immer unbekannt,
+  -- obwohl die Drehzahl sauber las -- genau das Bild aus dem Betrieb.
+  if entry.rpm_method and not entry.flow_method then
+    log_once(log_prefix, tostring(name) .. ":no-flow-method",
+      "Turbine " .. tostring(name) .. " kennt keine der bekannten Durchfluss-Methoden ("
+        .. table.concat(FLOW_METHODS, ", ") .. ") -- der Rueckmesswert bleibt unbekannt,"
+        .. " es wird bei jedem Takt neu nachgesehen")
+    return entry
+  end
   if not entry.rpm_method then
     log_once(log_prefix, tostring(name) .. ":no-rpm-method",
       "Turbine " .. tostring(name) .. " kennt keine der bekannten Drehzahl-Methoden ("

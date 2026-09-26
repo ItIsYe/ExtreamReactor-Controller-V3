@@ -225,7 +225,40 @@ function M.compute_flow_decision(input)
   end
   local rpm = tonumber(input.rpm) or 0
   local target_rpm = tonumber(input.target_rpm) or 0
-  local current_flow = tonumber(input.current_flow) or 0
+  -- Der Rueckmesswert darf NICHT auf 0 vorbelegt werden.
+  --
+  -- adapters/turbine.lua liefert seit v738 ausdruecklich nil, wenn der
+  -- Durchfluss nicht lesbar ist ("nil heisst jetzt nil, und der Aufrufer
+  -- muss damit umgehen") -- und genau hier wurde daraus wieder eine 0.
+  -- Damit war derselbe Fehler eine Ebene tiefer zurueck, und er wirkte
+  -- schlimmer als das Original: JEDER Halte-Zweig (SETTLED, SETTLING,
+  -- HOLD, *_COASTING) gibt current_flow zurueck, entschied also 0. Die
+  -- Oberflaeche zeigt die ENTSCHEIDUNG, nicht den Messwert -- deshalb
+  -- stand dort "FLOW 0.0", waehrend Drehzahl, Reaktor und MASTER in
+  -- Ordnung waren. Und die Schmutzpruefung im Orchestrator kann eine
+  -- solche 0 nicht unterdruecken (sie hat ja keinen Messwert zum
+  -- Vergleichen), also wurde sie tatsaechlich geschrieben.
+  --
+  -- Was der Regler stattdessen nimmt: seinen EIGENEN zuletzt gestellten
+  -- Wert. Den kennt der Orchestrator, und er ist die einzige belastbare
+  -- Auskunft, solange die Hardware keine gibt.
+  local readback = tonumber(input.current_flow)
+  local last_commanded = tonumber(input.last_commanded_flow)
+  local current_flow = readback or last_commanded or 0
+  local flow_known = readback ~= nil or last_commanded ~= nil
+
+  -- Jeder Zweig, der "so lassen wie es ist" bedeutet, geht hier durch.
+  --
+  -- Ist der aktuelle Durchfluss UNBEKANNT, gibt es nichts zu halten -- und
+  -- die richtige Antwort ist dann nicht "0 stellen", sondern GAR NICHT
+  -- stellen. unchanged=true laesst rt2_adapter den Schreibbefehl
+  -- ueberspringen; die Hardware behaelt, was sie hat, bis wieder ein
+  -- Messwert da ist. Schutzentscheidungen (Drehzahl fehlt, Ueberdrehzahl,
+  -- Ziel 0) liegen oberhalb und sind davon nicht beruehrt -- eine Bremsung
+  -- darf nie unterbleiben.
+  local function hold(reason)
+    return { flow = current_flow, reason = reason, unchanged = (not flow_known) or nil }
+  end
   local min_flow = tonumber(input.min_flow) or M.MIN_FLOW
   local max_flow = tonumber(input.max_flow) or M.MAX_FLOW
   local band = tonumber(input.band) or M.RPM_BAND
@@ -260,7 +293,7 @@ function M.compute_flow_decision(input)
     interval_ms = math.min(M.RAMP_INTERVAL_MS, interval_ms)
   end
   if now_ms and last_change_ms and (now_ms - last_change_ms) < interval_ms then
-    return { flow = current_flow, reason = "SETTLING" }
+    return hold("SETTLING")
   end
 
   -- Wie schnell der Rotor gerade steigt oder faellt (RPM je Sekunde).
@@ -292,7 +325,7 @@ function M.compute_flow_decision(input)
   -- Zeitraeume, in denen der Durchfluss STILLSTEHT.
   local settle_band = tonumber(input.settle_band_rpm) or M.SETTLE_BAND_RPM
   if math.abs(error_rpm) <= settle_band then
-    return { flow = current_flow, reason = "SETTLED" }
+    return hold("SETTLED")
   end
 
   -- ── Mit Streckenmodell ────────────────────────────────────────────────
@@ -354,13 +387,13 @@ function M.compute_flow_decision(input)
     -- Weg dorthin -- dann ist jede weitere Verstellung eine Reaktion auf
     -- einen Zustand, den die vorige schon beseitigt. Genau so entsteht
     -- das Ueberziehen, das diese Aenderung beenden soll.
-    if coasting() then return { flow = current_flow, reason = "MODEL_COASTING" } end
+    if coasting() then return hold("MODEL_COASTING") end
 
     local max_step = math.max(5, math.floor(operating * M.MODEL_MAX_STEP_FRACTION))
     local step = clamp(M.MODEL_DAMPING * error_rpm / slope, -max_step, max_step)
     local next_flow = clamp(math.floor(current_flow + step + 0.5), min_flow, max_flow)
     if next_flow == current_flow then
-      return { flow = current_flow, reason = "SETTLED" }
+      return hold("SETTLED")
     end
     return { flow = next_flow, reason = error_rpm > 0 and "MODEL_UP" or "MODEL_DOWN" }
   end
@@ -368,11 +401,11 @@ function M.compute_flow_decision(input)
   if error_rpm > band then
     -- well under target: open up, but never overshoot straight to max in
     -- one step (the physical rotor takes time to respond).
-    if coasting() then return { flow = current_flow, reason = "RAMP_COASTING" } end
+    if coasting() then return hold("RAMP_COASTING") end
     return { flow = clamp(current_flow + M.TRIM_STEP, min_flow, max_flow), reason = "RAMP_UP" }
   end
   if error_rpm < -band then
-    if coasting() then return { flow = current_flow, reason = "RAMP_COASTING" } end
+    if coasting() then return hold("RAMP_COASTING") end
     return { flow = clamp(current_flow - M.TRIM_STEP, min_flow, max_flow), reason = "RAMP_DOWN" }
   end
   -- Inside the band: trim toward the exact target, proportionally.
@@ -399,7 +432,7 @@ function M.compute_flow_decision(input)
       return { flow = clamp(current_flow - step, min_flow, max_flow), reason = "HOLD_TRIM_DOWN" }
     end
   end
-  return { flow = current_flow, reason = "HOLD" }
+  return hold("HOLD")
 end
 
 -- ── Coil decision ────────────────────────────────────────────────────────
