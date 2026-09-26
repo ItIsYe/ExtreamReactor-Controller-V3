@@ -107,7 +107,28 @@ local function capabilities(name, log_prefix)
   if not entry.rpm_method then
     log_once(log_prefix, tostring(name) .. ":no-rpm-method",
       "Turbine " .. tostring(name) .. " kennt keine der bekannten Drehzahl-Methoden ("
-        .. table.concat(RPM_METHODS, ", ") .. ") -- Drehzahl bleibt unbekannt")
+        .. table.concat(RPM_METHODS, ", ") .. ") -- Drehzahl bleibt unbekannt,"
+        .. " es wird bei jedem Takt neu nachgesehen")
+    -- NICHT merken. Ein Multiblock, der noch nicht fertig zusammengesetzt
+    -- ist (oder dessen Chunk gerade laedt), meldet eine verkuerzte
+    -- Methodenliste -- ohne getRotorSpeed. Dieses Ergebnis dauerhaft zu
+    -- merken hiesse: die Drehzahl dieser Turbine bleibt fuer immer
+    -- unbekannt, obwohl sie eine Sekunde spaeter lesbar waere. Der Cache
+    -- wird sonst nur verworfen, wenn die Peripherie ganz verschwindet
+    -- (isPresent false) -- eine fertig gebaute Turbine verschwindet aber
+    -- nicht mehr.
+    --
+    -- Die Folge davon war im Betrieb nicht als Lesefehler zu erkennen,
+    -- sondern sah nach einem kaputten Regler aus: ohne Drehzahl faellt die
+    -- Turbinenregelung auf ihre Schutzentscheidung zurueck (Durchfluss 0),
+    -- die Spule bleibt aus Sicherheitsgruenden stehen, wo sie ist, und das
+    -- Einlernen wartet ewig, weil keine Turbine je "am Ziel" ist. Genau
+    -- dieses Bild kam aus dem doppelten Aufbau, in dem 25 Turbinen frisch
+    -- dazugebaut worden waren.
+    --
+    -- Der Preis ist ein getMethods() je Takt fuer eine Turbine, die
+    -- wirklich keine Drehzahl kennt. Das ist der guenstigere Fehler.
+    return entry
   end
   capability_cache[name] = entry
   return entry

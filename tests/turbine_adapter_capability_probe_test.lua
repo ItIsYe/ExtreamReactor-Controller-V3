@@ -170,4 +170,68 @@ do
   assert_eq(info.flow, 1400, 'dasselbe fuer den Durchfluss')
 end
 
+-- ══ Eine noch nicht fertige Turbine darf sich nicht festfahren ═════════
+--
+-- Aus dem Betrieb, doppelter Aufbau mit 25 frisch dazugebauten Turbinen:
+-- Durchfluss ueberall 0, Kupplungen eingehaengt obwohl die Drehzahl weit
+-- unter dem Ziel lag, und das Einlernen kam nie vom Fleck.
+--
+-- Das sah nach einem kaputten Regler aus, war aber ein Lesefehler. Ein
+-- Multiblock, der noch nicht fertig zusammengesetzt ist (oder dessen
+-- Chunk gerade laedt), meldet eine verkuerzte Methodenliste OHNE
+-- getRotorSpeed. Dieses Ergebnis wurde dauerhaft gemerkt -- und der
+-- Cache wird sonst nur verworfen, wenn die Peripherie ganz verschwindet.
+-- Eine fertig gebaute Turbine verschwindet aber nicht mehr.
+--
+-- Ohne Drehzahl faellt die Turbinenregelung auf ihre Schutzentscheidung
+-- zurueck (Durchfluss 0), die Spule bleibt stehen wo sie ist, und keine
+-- Turbine ist je "am Ziel" -- das Einlernen wartet ewig.
+
+do
+  local turbine = require('adapters.turbine')
+  turbine.forget_capabilities()
+
+  local stage = 'unfertig'
+  local probes = 0
+  _G.peripheral = {
+    isPresent = function() return true end,
+    getType = function() return 'BigReactors-Turbine' end,
+    getMethods = function()
+      probes = probes + 1
+      if stage == 'unfertig' then
+        -- Multiblock im Bau: kein getRotorSpeed dabei.
+        return { 'getConnected', 'getActive' }
+      end
+      return { 'getConnected', 'getActive', 'getRotorSpeed', 'getFluidFlowRateMax', 'getEnergyProducedLastTick' }
+    end,
+    call = function(_, method)
+      if method == 'getRotorSpeed' then return 880 end
+      if method == 'getFluidFlowRateMax' then return 1200 end
+      if method == 'getActive' then return true end
+      return nil
+    end,
+  }
+
+  local first = turbine.inspect('T-neu', 'RT')
+  assert_true(first == nil or tonumber(first.rpm) == nil,
+    'solange der Multiblock nicht fertig ist, ist die Drehzahl unbekannt -- und das ist richtig')
+  local probes_after_first = probes
+
+  -- Die Turbine wird fertiggestellt.
+  stage = 'fertig'
+  local second = turbine.inspect('T-neu', 'RT')
+  assert_true(probes > probes_after_first,
+    'ein negatives Ergebnis darf NICHT dauerhaft gemerkt werden -- sonst bleibt die'
+      .. ' Drehzahl fuer immer unbekannt, obwohl sie laengst lesbar waere')
+  assert_eq(tonumber(second and second.rpm), 880,
+    'sobald die Methode da ist, muss die Drehzahl gelesen werden')
+
+  -- Ein POSITIVES Ergebnis wird weiterhin gemerkt: sonst kostete jede
+  -- Turbine in jedem Takt ein getMethods().
+  local probes_before = probes
+  turbine.inspect('T-neu', 'RT')
+  assert_eq(probes, probes_before,
+    'eine erkannte Turbine wird nicht bei jedem Takt neu abgefragt')
+end
+
 print('turbine_adapter_capability_probe_test.lua: ok')
