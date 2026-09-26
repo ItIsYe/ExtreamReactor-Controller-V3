@@ -233,12 +233,84 @@ do
   assert_eq(block.code, 'LIEFERUNG_LAEUFT')
   assert_true(tostring(block.detail):find('Reaktor 14', 1, true) ~= nil)
 
-  -- Haengt sie dagegen, wird genau EINMAL gemeldet.
-  router._state.current_request.started_ts = started - 45000
+  -- Haengt sie dagegen, wird genau EINMAL gemeldet. Ein laufender
+  -- Ventil-Router haelt sie dabei am Leben -- sie ist haengend, nicht
+  -- verwaist.
+  router._state.rs_router = {
+    get_active_transaction = function() return { transaction_id = 'tx-1', phase = 'BLOCKING' } end,
+    valve_count = function() return 4 end,
+    get_routing_state = function() return 'ROUTING_VALID' end,
+  }
+  router._state.current_request.started_ts = started - 35000
   local _, _, first = supply(router)
   local _, _, second = supply(router)
   assert_eq(#first, 1, 'eine haengende Lieferung muss gemeldet werden')
   assert_eq(#second, 0, 'aber nicht in jedem Zyklus erneut')
+  assert_true(tostring(first[1]):find('Ventile bekannt: 4', 1, true) ~= nil,
+    'und sie muss sagen, was der Ventil-Router selbst sieht: ' .. tostring(first[1]))
+end
+
+-- ══ 15. Eine verwaiste Lieferung legt den Knoten nicht dauerhaft lahm ══
+--
+-- Aus dem Betrieb: "Reaktor 14 seit 33s in Phase BLOCKING". BLOCKING hat
+-- im Ventil-Router eine Frist von 15s -- die Phase konnte also gar nicht
+-- mehr aktuell sein. Sie stammte aus der Vorbelegung beim Start und wurde
+-- nur in get_summary() nachgezogen.
+--
+-- Dahinter steckt ein echter Defekt: _run_supply() steigt bei gesetztem
+-- current_request GANZ OBEN aus. Kam der Abschluss-Rueckruf des Routers
+-- nie an, blieb der Knoten fuer immer stehen und lieferte nie wieder --
+-- ohne dass irgendetwas kaputt gewesen waere.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router._state.bridge = { name = 'meBridge_0', wrapped = {} }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  -- Der Router fuehrt KEINE Transaktion mehr.
+  router._state.rs_router = {
+    get_active_transaction = function() return nil end,
+    valve_count = function() return 4 end,
+    get_routing_state = function() return 'ROUTING_VALID' end,
+  }
+  router._state.current_request =
+    { label = 'Reaktor 14', phase = 'BLOCKING', started_ts = os.epoch('utc') - 60000 }
+
+  local _, _, printed = supply(router)
+  assert_true(router._state.current_request == nil,
+    'die verwaiste Lieferung muss freigegeben werden, sonst liefert der Knoten nie wieder')
+  local block = router:get_summary().supply_block
+  assert_eq(block.code, 'LIEFERUNG_VERWAIST')
+  assert_true(#printed > 0, 'und das gehoert angesagt, nicht stillschweigend repariert')
+
+  -- Und der naechste Zyklus laeuft wieder normal durch.
+  router._state.reactors = {}
+  supply(router)
+  assert_eq(router:get_summary().supply_block.code, 'NIEMAND_FORDERT_AN')
+end
+
+-- Eine echte, noch laufende Transaktion wird NIE freigegeben -- auch nicht
+-- nach langer Zeit. Sonst koennte der Knoten eine zweite Lieferung starten,
+-- waehrend die erste noch Ventile offen haelt.
+
+do
+  local router = new_router({ enabled = true, reactors = {} })
+  router._state.bridge = { name = 'meBridge_0', wrapped = {} }
+  router._state.export_chest = { name = 'chest_0', wrapped = {} }
+  router._state.rs_router = {
+    get_active_transaction = function() return { transaction_id = 'tx-9', phase = 'HOLDING' } end,
+    valve_count = function() return 4 end,
+    get_routing_state = function() return 'ROUTING_VALID' end,
+  }
+  router._state.current_request =
+    { label = 'Reaktor 14', phase = 'BLOCKING', started_ts = os.epoch('utc') - 120000 }
+
+  supply(router)
+  assert_true(router._state.current_request ~= nil,
+    'solange der Router wirklich faehrt, wird nichts freigegeben')
+  local block = router:get_summary().supply_block
+  assert_eq(block.code, 'LIEFERUNG_LAEUFT')
+  assert_true(tostring(block.detail):find('HOLDING', 1, true) ~= nil,
+    'und die Phase kommt live vom Router, nicht aus der Vorbelegung: ' .. tostring(block.detail))
 end
 
 -- ══ 9. Der stillste Ausfall: Erfolg gemeldet, null Stueck bewegt ═══════

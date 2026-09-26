@@ -556,6 +556,12 @@ end
 -- Lieferung sperrt (der Router faehrt immer nur EINE).
 local STUCK_DELIVERY_MS = 30000
 
+-- Ab hier gilt eine Lieferung ohne laufende Router-Transaktion als
+-- verwaist. Deutlich groesser als die Phasen-Deadline des Ventil-Routers
+-- (15s) plus dessen Abschlussphasen, damit eine echte, langsam
+-- voranschreitende Transaktion nie faelschlich freigegeben wird.
+local ORPHAN_DELIVERY_MS = 45000
+
 -- opts.key   -- stabiler Schluessel fuer die Entprellung, wenn der Text selbst
 --               sich staendig aendert (Sekundenzaehler, Phasenwechsel). Ohne
 --               ihn galt jede neue Sekunde als neuer Grund und floss Zeile fuer
@@ -642,15 +648,47 @@ function M:_run_supply(cycle_log)
   if self._state.current_request then
     local req = self._state.current_request
     local elapsed_ms = os.epoch("utc") - (req.started_ts or 0)
+
+    -- Den Ventil-Router SELBST fragen, statt die zuletzt gemerkte Phase zu
+    -- zeigen. req.phase wird nur in get_summary() nachgezogen und war beim
+    -- Start auf "BLOCKING" vorbelegt -- eine laengst beendete oder eine
+    -- voranschreitende Transaktion sah dadurch gleich aus. Genau diese
+    -- Anzeige hat die Fehlersuche im Betrieb in die Irre gefuehrt.
+    local rs = self._state.rs_router
+    local live_tx = rs and type(rs.get_active_transaction) == "function"
+      and rs:get_active_transaction() or nil
+    if live_tx and live_tx.phase then req.phase = live_tx.phase end
+
+    -- Eine Lieferung ohne laufende Transaktion ist verwaist: der Router ist
+    -- fertig (oder hat nie begonnen), nur der Abschluss-Rueckruf kam nie an.
+    -- Ohne diese Freigabe bliebe der Knoten dauerhaft haengen -- jeder
+    -- weitere Zyklus stiege oben aus, und es wuerde nie wieder geliefert.
+    if not live_tx and elapsed_ms >= ORPHAN_DELIVERY_MS then
+      local orphan = req
+      self._state.current_request = nil
+      note_block(self, "LIEFERUNG_VERWAIST", string.format(
+        "%s haengt seit %.0fs, der Ventil-Router fuehrt aber keine Transaktion mehr"
+          .. " -- die Lieferung wird freigegeben und im naechsten Zyklus neu versucht",
+        tostring(orphan.label), elapsed_ms / 1000))
+      return 0, 0
+    end
+
     local stuck = elapsed_ms >= STUCK_DELIVERY_MS
     -- Der Text nennt Sekunden und Phase und aendert sich daher in JEDEM
     -- Zyklus. Als Entprellungs-Schluessel taugt er nicht: er machte aus der
     -- normalen Lieferung einen Dauerregen gleichlautender Warnungen. Der
     -- Schluessel haengt deshalb an der Lieferung selbst, nicht an ihrem Text.
     local key = "LIEFERUNG_LAEUFT|" .. tostring(req.started_ts) .. (stuck and "|haengt" or "")
+    local valve_note = ""
+    if rs then
+      local valves = type(rs.valve_count) == "function" and rs:valve_count() or nil
+      local routing = type(rs.get_routing_state) == "function" and rs:get_routing_state() or nil
+      valve_note = string.format(" [Ventile bekannt: %s, Routing: %s]",
+        valves ~= nil and tostring(valves) or "?", tostring(routing or "?"))
+    end
     note_block(self, "LIEFERUNG_LAEUFT", string.format(
-      "%s seit %.0fs in Phase %s -- der Router faehrt immer nur EINE Lieferung",
-      tostring(req.label), elapsed_ms / 1000, tostring(req.phase)),
+      "%s seit %.0fs in Phase %s%s -- der Router faehrt immer nur EINE Lieferung",
+      tostring(req.label), elapsed_ms / 1000, tostring(req.phase), valve_note),
       { key = key, quiet = not stuck })
     return 0, 0
   end
