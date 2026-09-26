@@ -234,4 +234,77 @@ do
     'eine erkannte Turbine wird nicht bei jedem Takt neu abgefragt')
 end
 
+-- ══ Auch das SCHREIBEN muss gedeckt sein, nicht nur das Lesen ═════════
+--
+-- Aus dem Betrieb: "der Flow-Regler funktioniert im doppelten Aufbau
+-- nicht, im einzelnen schon" -- bei lesbarer Drehzahl, im Einlernen
+-- (MASTER also ausgeschlossen) und nicht voller Matrix.
+--
+-- Der Lesepfad vertrug seit v739 zwei Namensvarianten
+-- (getFluidFlowRateMax / getFluidFlowRate), der Schreibpfad rief dagegen
+-- einen fest verdrahteten Namen, UNGEPRUEFT. Kennt die Turbine ihn
+-- nicht, scheitert jeder Schreibversuch -- und der Fehler ging ueber
+-- log_once() in den Log-Collector, nie auf den Bildschirm. Von aussen
+-- sieht das aus wie "der Regler tut nichts": Drehzahl lesbar, Regler
+-- rechnet richtig, am Geraet kommt nichts an.
+
+do
+  local turbine = require('adapters.turbine')
+  turbine.forget_capabilities()
+
+  local written = {}
+  _G.peripheral = {
+    isPresent = function() return true end,
+    getType = function() return 'BigReactors-Turbine' end,
+    -- Diese Turbine kennt NUR die zweite Namensvariante.
+    getMethods = function()
+      return { 'getActive', 'setActive', 'getRotorSpeed',
+               'getFluidFlowRate', 'setFluidFlowRate', 'setInductorEngaged' }
+    end,
+    call = function(_, method, value)
+      written[#written + 1] = { method = method, value = value }
+      if method == 'getRotorSpeed' then return 450 end
+      if method == 'getFluidFlowRate' then return 300 end
+      return true
+    end,
+  }
+
+  local ok, err = turbine.set_flow('T-variante', 1200, 'RT')
+  assert_true(ok and not err, 'der Durchfluss muss gestellt werden: ' .. tostring(err))
+  local used
+  for _, w in ipairs(written) do
+    if w.method == 'setFluidFlowRate' then used = w end
+  end
+  assert_true(used ~= nil,
+    'die vorhandene Namensvariante muss benutzt werden, nicht eine fest verdrahtete')
+  assert_eq(used.value, 1200)
+end
+
+-- Kennt sie GAR keine Stellmethode, wird das am Rechner selbst gesagt --
+-- nicht nur im Log-Collector, wo es niemand sieht.
+
+do
+  local turbine = require('adapters.turbine')
+  turbine.forget_capabilities()
+
+  _G.peripheral = {
+    isPresent = function() return true end,
+    getType = function() return 'BigReactors-Turbine' end,
+    getMethods = function() return { 'getActive', 'getRotorSpeed', 'getFluidFlowRate' } end,
+    call = function() return nil end,
+  }
+
+  local printed = {}
+  local real_print = print
+  _G.print = function(msg) printed[#printed + 1] = tostring(msg) end
+  local ok, err = turbine.set_flow('T-stumm', 1200, 'RT')
+  _G.print = real_print
+
+  assert_true(not ok, 'ohne Stellmethode kann nichts gestellt werden')
+  assert_true(tostring(err):find('no method', 1, true) ~= nil, tostring(err))
+  local said = table.concat(printed, ' | ')
+  assert_true(said:find('laesst sich nicht stellen', 1, true) ~= nil,
+    'und der Betreiber muss es am Rechner sehen: ' .. said)
+end
+
 print('turbine_adapter_capability_probe_test.lua: ok')

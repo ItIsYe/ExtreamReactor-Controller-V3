@@ -77,6 +77,22 @@ local capability_cache = {}
 local RPM_METHODS  = { "getRotorSpeed", "getRotorRPM" }
 local FLOW_METHODS = { "getFluidFlowRateMax", "getFluidFlowRate" }
 
+-- Auch das SCHREIBEN wird ermittelt, nicht angenommen.
+--
+-- Der Lesepfad ist seit v739 durch has_method() gedeckt und vertraegt
+-- zwei Namensvarianten -- der Schreibpfad rief dagegen einen fest
+-- verdrahteten Namen, ungeprueft. Kennt die Turbine ihn nicht, scheitert
+-- JEDER Schreibversuch, und der Fehler ging ueber log_once() in den
+-- Log-Collector, nie auf den Bildschirm. Von aussen sieht das aus wie
+-- "der Flow-Regler tut nichts": Drehzahl lesbar, Regler rechnet richtig,
+-- am Geraet kommt nichts an.
+--
+-- adapters/reactor.lua hat es immer richtig gemacht. Dieselbe Regel gilt
+-- ab jetzt auch fuer die Turbine, in beide Richtungen.
+local SET_FLOW_METHODS = { "setFluidFlowRateMax", "setFluidFlowRate" }
+local SET_COIL_METHODS = { "setInductorEngaged" }
+local SET_ACTIVE_METHODS = { "setActive" }
+
 local function first_available(set, candidates)
   for _, method in ipairs(candidates) do
     if has_method(set, method) then return method end
@@ -103,6 +119,9 @@ local function capabilities(name, log_prefix)
     methods = methods, set = set,
     rpm_method = first_available(set, RPM_METHODS),
     flow_method = first_available(set, FLOW_METHODS),
+    set_flow_method = first_available(set, SET_FLOW_METHODS),
+    set_coil_method = first_available(set, SET_COIL_METHODS),
+    set_active_method = first_available(set, SET_ACTIVE_METHODS),
   }
   if not entry.rpm_method then
     log_once(log_prefix, tostring(name) .. ":no-rpm-method",
@@ -192,31 +211,53 @@ function turbine.inspect(name, log_prefix)
   }
 end
 
-function turbine.set_active(name, enabled, log_prefix)
+
+-- Ein Stellbefehl, der dauerhaft nicht angenommen wird, ist der Grund
+-- dafuer, dass "der Regler nichts tut" -- und er gehoert deshalb auf den
+-- Rechner selbst. utils.log()/log_once() routen zum Log-Collector; das
+-- ist keine Anzeige.
+local shouted = {}
+local function shout(key, msg)
+  if shouted[key] then return end
+  shouted[key] = true
+  pcall(print, "[RT] " .. msg)
+end
+
+local function write_with(name, candidates, label, value, log_prefix)
   if not name then return nil, "missing peripheral" end
-  local ok, err = utils.safe_peripheral_call(name, "setActive", enabled and true or false)
+  local caps = capabilities(name, log_prefix)
+  if not caps then return nil, "capabilities unknown" end
+  local method = first_available(caps.set, candidates)
+  if not method then
+    local msg = string.format(
+      "Turbine %s kennt keine der bekannten %s-Methoden (%s) -- sie laesst sich nicht stellen,"
+        .. " der Regler rechnet ins Leere",
+      tostring(name), label, table.concat(candidates, ", "))
+    log_once(log_prefix, tostring(name) .. ":no-" .. label, msg)
+    shout(tostring(name) .. ":no-" .. label, msg)
+    return nil, "no method for " .. label
+  end
+  local ok, err = utils.safe_peripheral_call(name, method, value)
   if err then
-    log_once(log_prefix, tostring(name) .. ":setActive", "Turbine active failed for " .. tostring(name) .. ": " .. tostring(err))
+    log_once(log_prefix, tostring(name) .. ":" .. method,
+      "Turbine " .. label .. " failed for " .. tostring(name) .. ": " .. tostring(err))
+    shout(tostring(name) .. ":" .. method .. ":err", string.format(
+      "Turbine %s: %s ABGELEHNT (%s) -- %s", tostring(name), label, method, tostring(err)))
   end
   return ok, err
 end
 
 function turbine.set_flow(name, value, log_prefix)
-  if not name or value == nil then return nil, "missing data" end
-  local ok, err = utils.safe_peripheral_call(name, "setFluidFlowRateMax", value)
-  if err then
-    log_once(log_prefix, tostring(name) .. ":setFluidFlowRateMax", "Turbine flow failed for " .. tostring(name) .. ": " .. tostring(err))
-  end
-  return ok, err
+  if value == nil then return nil, "missing data" end
+  return write_with(name, SET_FLOW_METHODS, "flow", value, log_prefix)
 end
 
 function turbine.set_coils(name, enabled, log_prefix)
-  if not name then return nil, "missing peripheral" end
-  local ok, err = utils.safe_peripheral_call(name, "setInductorEngaged", enabled and true or false)
-  if err then
-    log_once(log_prefix, tostring(name) .. ":setInductorEngaged", "Turbine coil failed for " .. tostring(name) .. ": " .. tostring(err))
-  end
-  return ok, err
+  return write_with(name, SET_COIL_METHODS, "coil", enabled and true or false, log_prefix)
+end
+
+function turbine.set_active(name, enabled, log_prefix)
+  return write_with(name, SET_ACTIVE_METHODS, "active", enabled and true or false, log_prefix)
 end
 
 return turbine

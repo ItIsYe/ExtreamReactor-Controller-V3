@@ -160,6 +160,57 @@ end
 --   ctx.config.turbines / ctx.config.reactors -- discovered peripheral names
 --   ctx.adapters.turbine / ctx.adapters.reactor -- adapters/turbine.lua, adapters/reactor.lua
 --   ctx.CONFIG.LOG_PREFIX
+-- Selbstpruefung auf einen Widerspruch, der im Betrieb wiederholt
+-- gemeldet wurde und den der Code nicht zulaesst.
+--
+-- Gemeldet: Kopfzeile LEARNING, Drehzahl lesbar, Matrix nicht voll -- und
+-- der Durchfluss steht auf der ganzen Flotte auf 0. Die Oberflaeche zeigt
+-- unter 100 mit einer Nachkommastelle, "0.0" heisst also wirklich null.
+--
+-- Im Einlernen setzt rt2_turbine.compute_target_rpm() aber fuer JEDE
+-- Turbine 900 RPM: max_active ist dort nicht gesetzt, die einzige
+-- Null-Verzweigung (slot_index > active_limit) kann nicht greifen. Ein
+-- Ziel von 0 ist im Einlernen damit ausgeschlossen -- und trotzdem war es
+-- da. Eine meiner Annahmen ueber den laufenden Knoten stimmt also nicht.
+--
+-- Statt weiter zu raten, meldet der Knoten den Widerspruch mit seinen
+-- EIGENEN Zahlen. Das kostet nichts, solange er nicht eintritt.
+local contradiction_said = nil
+
+local function check_learning_contradiction(ctx, result)
+  if result.state ~= rt2_state.states.LEARNING then
+    contradiction_said = nil
+    return
+  end
+  local parked, example = 0, nil
+  for _, t in ipairs(result.turbines or {}) do
+    if (tonumber(t.target_rpm) or 0) <= 0 then
+      parked = parked + 1
+      example = example or t
+    end
+  end
+  if parked == 0 then contradiction_said = nil; return end
+
+  local cap = result.capacity or {}
+  local key = string.format("%d|%s|%s", parked, tostring(result.max_active), tostring(cap.ready))
+  if contradiction_said == key then return end
+  contradiction_said = key
+
+  local msg = string.format(
+    "v2 WIDERSPRUCH: Zustand LEARNING, aber %d von %d Turbinen haben Ziel 0"
+      .. " -- das darf im Einlernen nicht vorkommen."
+      .. " max_active=%s, Kapazitaet bereit=%s, tragbar=%s, Flotte=%s."
+      .. " Beispiel %s: Ziel=%s Drehzahl=%s Durchfluss=%s Grund=%s",
+    parked, #(result.turbines or {}), tostring(result.max_active),
+    tostring(cap.ready), tostring(cap.sustainable_turbines), tostring(cap.total_turbines),
+    tostring(example and example.name), tostring(example and example.target_rpm),
+    tostring(example and example.rpm),
+    tostring(example and example.flow_decision and example.flow_decision.flow),
+    tostring(example and example.flow_decision and example.flow_decision.reason))
+  ctx.log("ERROR", msg)
+  pcall(print, "[RT] " .. msg)
+end
+
 function M.tick(ctx)
   if not engine then return nil end
   local now_ms = os.epoch and os.epoch("utc") or 0
@@ -243,6 +294,8 @@ function M.tick(ctx)
       adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
     end
   end
+
+  check_learning_contradiction(ctx, result)
 
   -- Einlernen sichtbar machen.
   local cap = result.capacity

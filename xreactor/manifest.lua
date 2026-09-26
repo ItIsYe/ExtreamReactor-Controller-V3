@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 763,
-  manifest_id = "manifest-v763",
+  manifest_version = 764,
+  manifest_id = "manifest-v764",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "2d6a9303", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "e7030755", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -121,7 +121,7 @@ return {
     },
     rt = {
     { path = "adapters/reactor.lua", size_bytes = 19285, hash = "b0e96d6b", required_for={"RT"} },
-    { path = "adapters/turbine.lua", size_bytes = 9047, hash = "f8e4ff26", required_for={"RT"} },
+    { path = "adapters/turbine.lua", size_bytes = 10892, hash = "560d4ce0", required_for={"RT"} },
     { path = "core/control_rails.lua", size_bytes = 8017, hash = "01c1a770", required_for={"RT"} },
     { path = "core/fluid.lua", size_bytes = 5017, hash = "9a5c0bea", required_for={"RT"} },
     { path = "core/turbine_regulator.lua", size_bytes = 13632, hash = "7001b6cc", required_for={"RT"} },
@@ -145,7 +145,7 @@ return {
     { path = "nodes/rt/rt2_adapter.lua", size_bytes = 5393, hash = "3ca93138", required_for={"RT"} },
     { path = "nodes/rt/rt2_capacity.lua", size_bytes = 14477, hash = "756319bd", required_for={"RT"} },
     { path = "nodes/rt/rt2_command_handler.lua", size_bytes = 5199, hash = "d8141714", required_for={"RT"} },
-    { path = "nodes/rt/rt2_engine.lua", size_bytes = 19369, hash = "51676e30", required_for={"RT"} },
+    { path = "nodes/rt/rt2_engine.lua", size_bytes = 21712, hash = "e18f7236", required_for={"RT"} },
     { path = "nodes/rt/rt2_master_link.lua", size_bytes = 1555, hash = "aa8589ad", required_for={"RT"} },
     { path = "nodes/rt/rt2_orchestrator.lua", size_bytes = 16314, hash = "b3a9dcb5", required_for={"RT"} },
     { path = "nodes/rt/rt2_projection.lua", size_bytes = 7019, hash = "502b3dad", required_for={"RT"} },
