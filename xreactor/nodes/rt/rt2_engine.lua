@@ -160,6 +160,62 @@ end
 --   ctx.config.turbines / ctx.config.reactors -- discovered peripheral names
 --   ctx.adapters.turbine / ctx.adapters.reactor -- adapters/turbine.lua, adapters/reactor.lua
 --   ctx.CONFIG.LOG_PREFIX
+-- Warum die Staebe stehen, wo sie stehen.
+--
+-- Im Betrieb gemeldet (2 Reaktoren, 50 Turbinen): beide Reaktoren auf
+-- RODS 100%, kein Dampf, der Knoten kam nie aus dem Einlernen. 100%
+-- Einfahrung ist im Regler aber EIN Ergebnis mit mehreren voellig
+-- verschiedenen Ursachen -- und keine davon war irgendwo ablesbar:
+--
+--   NO_STEAM_READING   kein Dampfmesswert -> es wird sicherheitshalber
+--                      voll eingefahren. Fuer einen passiv gekuehlten
+--                      Reaktor (kein Hot-Fluid) ist das eine Sackgasse:
+--                      ohne Messwert faehrt er nie wieder hoch.
+--   SAFETY_FULL_INSERT Ausloesung oder Knoten auf SAFE.
+--   DEADBAND/CONVERGING der Tank steht, wo er soll -- alles in Ordnung.
+--
+-- Dazu der umgekehrte Fall: Staebe am unteren Anschlag (70%) und der Tank
+-- bleibt trotzdem leer. Das ist laut rt2_reactor.lua ausdruecklich KEIN
+-- Reglerfehler, sondern die Anlage fordert mehr Dampf, als die bewusst
+-- gesetzte 70%-Grenze hergibt -- bei 50 Turbinen an 2 Reaktoren genau die
+-- Frage, die der Betreiber beantwortet haben will.
+local rod_reason_said = {}
+
+local function announce_rod_reason(ctx, name, decision, input)
+  local reading = input and input.reactor or nil
+  local fill = reading and tonumber(reading.fill_ratio) or nil
+  local key = tostring(decision.reason)
+  if decision.reason == "NO_STEAM_READING" then
+    key = "NO_STEAM_READING"
+  elseif decision.rods and decision.rods <= rt2_reactor.ROD_MIN
+      and fill and fill < (rt2_reactor.DEFAULT_TARGET_FILL - rt2_reactor.DEADBAND) then
+    key = "AT_POWER_CAP"
+  else
+    key = "OK"
+  end
+  if rod_reason_said[name] == key then return end
+  rod_reason_said[name] = key
+
+  local msg
+  if key == "NO_STEAM_READING" then
+    msg = string.format(
+      "v2 %s: kein Dampfmesswert -- die Staebe bleiben sicherheitshalber voll eingefahren (%d%%)."
+        .. " Ohne Messwert faehrt dieser Reaktor NIE hoch: entweder ist er passiv gekuehlt"
+        .. " (dann treibt er keine Turbinen) oder seine Dampfanschluesse fehlen.",
+      tostring(name), rt2_reactor.ROD_MAX)
+  elseif key == "AT_POWER_CAP" then
+    msg = string.format(
+      "v2 %s: Staebe am unteren Anschlag (%d%%) und der Dampftank bleibt bei %.0f%% -- die Flotte"
+        .. " fordert mehr Dampf, als die gesetzte %d%%-Grenze hergibt. Das ist eine Lastfrage,"
+        .. " kein Reglerfehler.",
+      tostring(name), rt2_reactor.ROD_MIN, fill * 100, rt2_reactor.ROD_MIN)
+  end
+  if msg then
+    ctx.log("WARN", msg)
+    pcall(print, "[RT] " .. msg)
+  end
+end
+
 function M.tick(ctx)
   if not engine then return nil end
   local now_ms = os.epoch and os.epoch("utc") or 0
@@ -241,6 +297,7 @@ function M.tick(ctx)
     local name = decision.name or reactor_names[index]
     if name then
       adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
+      announce_rod_reason(ctx, name, decision, reactor_inputs[index])
     end
   end
 
