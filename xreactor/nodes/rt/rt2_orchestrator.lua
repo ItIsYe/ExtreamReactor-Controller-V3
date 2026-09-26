@@ -262,8 +262,13 @@ function M.new(opts)
     -- Knotens. Ein ausgeloester Einzelreaktor aendert daran nichts.
     local count = #(input.turbines or {})
     local max_active
-    if state ~= rt2_state.states.LEARNING
-        and self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
+    if state == rt2_state.states.LEARNING then
+      -- Die waehrend des Einlernens freigegebene Stufe (rt2_capacity).
+      -- 0 heisst "ganze Flotte" -- so faengt jede Anlage an, und fuer
+      -- jede Anlage, die ihre Flotte traegt, aendert sich nichts.
+      local released = tonumber(self.capacity.released) or 0
+      if released > 0 then max_active = released end
+    elseif self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
       max_active = self.capacity.sustainable_turbines
     end
 

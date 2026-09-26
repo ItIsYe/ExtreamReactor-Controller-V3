@@ -127,8 +127,49 @@ do
   end
   assert_true(not state.ready, 'ohne eine einzige Turbine am Ziel gibt es nichts zu messen')
   assert_eq(state.reason, 'FLOW_SATURATED', 'volle Foerderung und trotzdem zu langsam')
-  assert_eq(state.required_at_target, 4)
   assert_eq(state.sustainable_turbines, 0)
+  -- Bei Saettigung nimmt der Suchlauf die Freigabe zurueck, bis eine Stufe
+  -- traegt. Hier traegt keine, also landet er bei einer einzelnen Turbine
+  -- und bleibt dort -- die Schwelle bezieht sich dann auf DIESE Stufe.
+  assert_eq(state.released, 1, 'erfolglose Stufen werden zurueckgenommen')
+  assert_eq(state.required_at_target, 1)
+end
+
+-- ── Der gemeldete Fall: eine Flotte, die sich selbst den Dampf wegnimmt ──
+--
+-- Aus dem Betrieb (node-101): 2 Reaktoren, 50 Turbinen. Mit einem Reaktor
+-- und 25 Turbinen laeuft dieselbe Anlage.
+--
+-- Der Grund steckte in rt2_turbine.lua's active_limit() als Kommentar:
+-- "Ohne ihn setzt jeder Zustand ausser MASTER alle Turbinen auf das volle
+-- Ziel, und eine dampfbegrenzte Anlage reisst sich dabei selbst den Dampf
+-- weg." Genau diese Staffelung war nie gebaut -- der Orchestrator setzte
+-- max_active waehrend LEARNING ausdruecklich auf nil.
+--
+-- Die Folge skaliert mit der Flottengroesse: 25 Turbinen erreichen die
+-- 80-%-Schwelle noch, 50 nicht mehr. Und weil das Einlernen nie fertig
+-- wird, wird auch nie eine tragbare Anzahl gelernt, mit der sich das
+-- aufloesen liesse. Eine Selbstsperre.
+
+do
+  -- Diese Anlage traegt 12 von 50. Alle 50 gleichzeitig -> keine erreicht
+  -- das Ziel, und ohne Staffelung wartet der Knoten fuer immer.
+  local state, now = rt2_capacity.new_state(), 1000
+  for _ = 1, 40 do
+    -- Solange mehr freigegeben ist, als die Anlage traegt, schafft es
+    -- KEINE einzige Turbine (sie teilen sich denselben Dampf).
+    local carries = ((state.released or 0) > 0 and state.released <= 12) and state.released or 0
+    state = rt2_capacity.update(state, plant(50, carries, 100), { now_ms = now })
+    if state.ready then break end
+    now = now + rt2_capacity.STAGE_TIMEOUT_MS
+  end
+
+  assert_true(state.ready,
+    'mit Staffelung findet der Suchlauf eine tragende Stufe -- ohne sie haengt er fuer immer')
+  assert_true(state.sustainable_turbines > 0 and state.sustainable_turbines <= 12,
+    'und lernt hoechstens, was die Anlage wirklich traegt: '
+      .. tostring(state.sustainable_turbines))
+  assert_true(state.max_output > 0, 'samt einem echten, geflossenen Wert')
 end
 
 -- ── Der Wert steht erst, wenn er sich nicht mehr verbessert ─────────────
