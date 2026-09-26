@@ -91,7 +91,20 @@ M.TOPOLOGY_DEBOUNCE_MS = 3000
 -- jede Anlage, die sie traegt). Traegt sie sie NICHT, die Freigabe
 -- halbieren und erneut versuchen, bis eine Stufe traegt. Damit misst das
 -- Einlernen genau das, was sustainable_turbines behauptet zu sein.
-M.STAGE_TIMEOUT_MS = 8000
+-- Eine Stufe muss BEWEISEN duerfen, dass sie traegt. Ein Rotor braucht vom
+-- Stillstand bis 900 RPM ein Vielfaches der alten 8 Sekunden -- in dieser
+-- Zeit steht er zwangslaeufig bei vollem Flow unter Zieldrehzahl und sah
+-- damit aus wie eine Turbine, der der Dampf fehlt. Die Staffel gab jede
+-- Stufe auf, bevor sie ueberhaupt eine Chance hatte, und lief bis ganz
+-- nach unten durch.
+M.STAGE_TIMEOUT_MS = 30000
+
+-- Und die eigentliche Verwechslung: "voller Flow und unter Ziel" heisst
+-- NICHT zwangslaeufig Dampfmangel -- es ist auch genau das Bild einer
+-- hochlaufenden Turbine. Der Unterschied ist die Drehzahl-Richtung:
+-- steigt sie, fliesst Dampf und verrichtet Arbeit. Erst eine Turbine, die
+-- bei vollem Flow NICHT mehr schneller wird, hungert wirklich.
+M.RISING_RPM_PER_S = 2
 
 -- Und wieder hinauf. Eine Stufe, die sauber traegt (keine einzige Turbine
 -- gesaettigt), ist KEIN Beweis, dass mehr nicht ginge -- sie beweist nur,
@@ -270,12 +283,16 @@ function M.update(previous, turbines, opts)
     -- Saettigung dagegen heisst: volle Foerderung und trotzdem zu langsam.
     -- Dann fehlt Dampf, und wie dieser Test es selbst formuliert, aendert
     -- Warten daran nichts. Erst das rechtfertigt den Rueckschritt.
-    if saturated > 0 then
+    -- Solange irgendeine Turbine noch Drehzahl AUFBAUT, ist die Stufe
+    -- nicht gescheitert -- sie ist noch am Anlaufen. Die Uhr fuer den
+    -- Rueckschritt laeuft dann gar nicht erst.
+    local rising = tonumber(opts.rising) or 0
+    if saturated > 0 and rising == 0 then
       if not state.stage_since_ms then state.stage_since_ms = now_ms end
     else
       state.stage_since_ms = nil
     end
-    if saturated > 0 and released > 1
+    if saturated > 0 and rising == 0 and released > 1
         and now_ms - (state.stage_since_ms or now_ms) >= M.STAGE_TIMEOUT_MS then
       state.released = math.max(1, math.floor(released / 2))
       state.stage_since_ms = now_ms

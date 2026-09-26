@@ -121,9 +121,12 @@ do
   -- messen, also wird auch nichts gelernt -- und das muss benannt werden,
   -- statt still zu haengen.
   local state, now = rt2_capacity.new_state(), 1000
+  -- Genug Zeit, damit jede Stufe ihre volle Frist bekommt: eine Stufe
+  -- wird erst nach STAGE_TIMEOUT_MS aufgegeben (ein Rotor braucht zum
+  -- Hochlaufen ein Vielfaches der frueheren acht Sekunden).
   for _ = 1, 10 do
     state = rt2_capacity.update(state, plant(5, 0), { now_ms = now })
-    now = now + rt2_capacity.STABLE_MS
+    now = now + rt2_capacity.STAGE_TIMEOUT_MS
   end
   assert_true(not state.ready, 'ohne eine einzige Turbine am Ziel gibt es nichts zu messen')
   assert_eq(state.reason, 'FLOW_SATURATED', 'volle Foerderung und trotzdem zu langsam')
@@ -414,6 +417,48 @@ do
   assert_true(state.sustainable_turbines > 1,
     'nach dem Neustart muss die Anlage wieder zeigen duerfen, dass sie mehr traegt: '
       .. tostring(state.sustainable_turbines))
+end
+
+-- ── Anlaufen ist KEIN Dampfmangel ───────────────────────────────────────
+--
+-- Der Betreiber hat die entscheidende Frage gestellt: beim einfachen
+-- Aufbau (1 Reaktor, 25 Turbinen) laeuft alles, beim doppelten nicht --
+-- gleicher Code, nur die Anzahl ist anders.
+--
+-- Die Antwort: beim einfachen Aufbau laeuft die Staffelung NIE an. 25
+-- Turbinen tragen die 80-%-Schwelle auf Anhieb. Bei 50 greift sie zum
+-- ersten Mal -- und sie verwechselte Anlaufen mit Dampfmangel.
+--
+-- "saturated" heisst "voller Flow UND unter Zieldrehzahl". Genau so sieht
+-- eine hochlaufende Turbine aus. Alle 50 liefen hoch, alle galten als
+-- gesaettigt, und nach acht Sekunden halbierte die Staffel -- wieder und
+-- wieder, bis hinunter zu 1. Sie ist nie an der Dampfmenge gescheitert,
+-- sondern an der eigenen Ungeduld.
+--
+-- Der Unterschied ist die Drehzahl-Richtung: steigt sie, fliesst Dampf
+-- und verrichtet Arbeit.
+
+do
+  local state, now = rt2_capacity.new_state(), 1000
+  state = rt2_capacity.update(state, plant(50, 0, 100), { now_ms = now })
+
+  -- Eine ganze Flotte bei vollem Flow unter Ziel -- aber sie WIRD
+  -- schneller. Selbst nach langer Zeit darf nichts zurueckgenommen werden.
+  for _ = 1, 20 do
+    now = now + rt2_capacity.STAGE_TIMEOUT_MS
+    state = rt2_capacity.update(state, plant(50, 0, 100), { now_ms = now, rising = 50 })
+  end
+  assert_eq(state.released, 0,
+    'solange die Rotoren noch Drehzahl aufbauen, ist die Stufe nicht gescheitert --'
+      .. ' sie ist am Anlaufen (Stufe jetzt: ' .. tostring(state.released) .. ')')
+
+  -- Erst wenn keine einzige mehr schneller wird, ist es echter Mangel.
+  for _ = 1, 3 do
+    now = now + rt2_capacity.STAGE_TIMEOUT_MS
+    state = rt2_capacity.update(state, plant(50, 0, 100), { now_ms = now, rising = 0 })
+  end
+  assert_true((state.released or 0) > 0 and state.released < 50,
+    'steht die Drehzahl dagegen still, wird zurueckgenommen: ' .. tostring(state.released))
 end
 
 print('rt2_capacity_test.lua: ok')
