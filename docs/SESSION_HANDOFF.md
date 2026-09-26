@@ -2,6 +2,49 @@
 
 **Stand: 2026-09-25 | beta | manifest-v737**
 
+## Rollback-Marken
+
+| Marke | Commit | Stand |
+|---|---|---|
+| `stable-beta-v761` | `f348d4ba` | **aktuell gueltig.** RT-Regler im Betrieb bestaetigt, FUEL liefert, Dampftank-Sollwert 70 % |
+| `stable-beta-v742` | `ac122a05` | vorherige Marke (RT bestaetigt mit 1 Reaktor / 25 Turbinen, FUEL noch defekt) |
+
+Eine Marke ist ein **Branch**, kein Tag: Tag-Pushes scheitern in dieser
+Umgebung reproduzierbar (`send-pack: unexpected disconnect`), Branches
+nicht.
+
+### Warum v761 die neue Marke ist
+
+Dazwischen liegt ein Umweg, der festgehalten gehoert:
+
+- **v743-v750 FUEL, geloest und bestaetigt.** Ursache war die
+  Aufrufkonvention der ME Bridge -- die Advanced-Peripherals-Doku nennt
+  `exportItemToPeripheral(item, container)`, das gilt aber nur bis 0.7;
+  die 1.21-Fassung nimmt sie nicht an. Verdeckt wurde das von sieben
+  Ausstiegen im Lieferpfad, die still oder nur in den Log-Collector
+  schrieben.
+- **v754-v757 RT, zurueckgenommen.** Ein gestaffeltes Einlernen sollte
+  verhindern, dass sich eine grosse Flotte selbst den Dampf wegnimmt. Es
+  brach dabei die Entkopplung: "Turbinen erreichen ihr Ziel nicht" ist
+  eine FOLGE von wenig Dampf, und daraufhin wurde die Turbinen-Freigabe
+  gedrosselt -- damit regelte der Tankstand die Turbinen. Ergebnis im
+  Betrieb: von 50 Turbinen lief eine. v755-v757 haben anschliessend nur
+  die Folgefehler geflickt, statt die Annahme zu pruefen.
+- **v759 vollstaendiger RT-Rollback**, `nodes/rt/` bitweise auf v742.
+- **v760** Der Rollback allein half nicht: die gelernten Dateien liegen
+  NEBEN dem Code auf dem Rechner und ueberleben ihn. Ein von der
+  fehlerhaften Fassung gespeichertes `sustainable_turbines = 1` wurde
+  anstandslos wieder eingelesen. Alle drei gelernten Dateien tragen jetzt
+  ihre Lernfassung (nicht die Release-Nummer -- sonst wuerfe jedes Update
+  das Gelernte weg).
+- **v761** Dampftank-Sollwert 50 % -> 70 % auf Betreibervorgabe.
+
+**Regel daraus:** eine Groesse aus dem Reaktorkreis darf die
+Turbinenregelung nicht beeinflussen. Festgehalten in
+`tests/rt2_turbine_flow_decoupled_from_tank_test.lua` -- derselbe Takt
+mit leerem und mit vollem Tank muss identische Turbinenentscheidungen
+liefern.
+
 ## Aktueller Zustand: stabil, alles auf `beta`
 
 Kein offener PR, keine offene Issue. `beta` ist der aktive Entwicklungszweig;
