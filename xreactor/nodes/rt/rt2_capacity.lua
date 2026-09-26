@@ -71,55 +71,6 @@ M.STABLE_MS = 6000  -- so lange darf sich der Hoechstwert nicht mehr verbessern
 -- Messung liefe von vorn los, wegen eines Wimpernschlags.
 M.TOPOLOGY_DEBOUNCE_MS = 3000
 
--- Staffelung waehrend des Einlernens.
---
--- rt2_turbine.lua's active_limit() sagt es seit jeher: "Ohne ihn setzt
--- jeder Zustand ausser MASTER alle Turbinen auf das volle Ziel, und eine
--- dampfbegrenzte Anlage reisst sich dabei selbst den Dampf weg: keine
--- Turbine erreicht die Zieldrehzahl, weil alle gleichzeitig daran ziehen."
--- Drei Kommentare beschreiben die Staffelung als vorhanden -- gebaut war
--- sie nie: dieses Modul kannte den Begriff nicht, und der Orchestrator
--- setzte max_active waehrend LEARNING ausdruecklich auf nil.
---
--- Die Folge skaliert mit der Flottengroesse und erklaert, warum ein
--- kleiner Aufbau laeuft und ein grosser nicht: 25 Turbinen an einem
--- Reaktor erreichen die 80-%-Schwelle noch, 50 nicht mehr. Und weil das
--- Einlernen nie fertig wird, wird auch nie eine tragbare Anzahl gelernt,
--- mit der sich das Problem aufloesen liesse -- eine Selbstsperre.
---
--- Deshalb: erst die ganze Flotte freigeben (unveraendertes Verhalten fuer
--- jede Anlage, die sie traegt). Traegt sie sie NICHT, die Freigabe
--- halbieren und erneut versuchen, bis eine Stufe traegt. Damit misst das
--- Einlernen genau das, was sustainable_turbines behauptet zu sein.
--- Eine Stufe muss BEWEISEN duerfen, dass sie traegt. Ein Rotor braucht vom
--- Stillstand bis 900 RPM ein Vielfaches der alten 8 Sekunden -- in dieser
--- Zeit steht er zwangslaeufig bei vollem Flow unter Zieldrehzahl und sah
--- damit aus wie eine Turbine, der der Dampf fehlt. Die Staffel gab jede
--- Stufe auf, bevor sie ueberhaupt eine Chance hatte, und lief bis ganz
--- nach unten durch.
-M.STAGE_TIMEOUT_MS = 30000
-
--- Und die eigentliche Verwechslung: "voller Flow und unter Ziel" heisst
--- NICHT zwangslaeufig Dampfmangel -- es ist auch genau das Bild einer
--- hochlaufenden Turbine. Der Unterschied ist die Drehzahl-Richtung:
--- steigt sie, fliesst Dampf und verrichtet Arbeit. Erst eine Turbine, die
--- bei vollem Flow NICHT mehr schneller wird, hungert wirklich.
-M.RISING_RPM_PER_S = 2
-
--- Und wieder hinauf. Eine Stufe, die sauber traegt (keine einzige Turbine
--- gesaettigt), ist KEIN Beweis, dass mehr nicht ginge -- sie beweist nur,
--- dass so viel geht. Ohne diesen Weg zurueck waere jede einmal
--- zurueckgenommene Freigabe eine Decke fuer immer.
---
--- Genau so im Betrieb gesehen (node-101, direkt nach dem Einbau der
--- Staffelung): CAP READY, 50 Turbinen aktiv -- und genau EINE lief. In
--- der Dampfknappheit war 1 gelernt worden, und danach durfte die Anlage
--- nie wieder zeigen, dass sie mehr traegt: bei einer Freigabe von 1 kann
--- nie mehr als 1 gleichzeitig am Ziel stehen, der Hoechstwert kann sich
--- also nie verbessern. Eine Selbstsperre, nur eine Ebene hoeher als die
--- vorige.
-M.RECLIMB_MS = 15000
-
 local function copy(t)
   local out = {}
   for k, v in pairs(t or {}) do out[k] = v end
@@ -151,11 +102,6 @@ function M.new_state()
     -- Eine noch nicht bestaetigte Aenderung der Turbinenzahl.
     pending_total = nil,
     pending_since_ms = nil,
-    -- Wieviele Turbinen waehrend des Einlernens ueberhaupt ziehen duerfen.
-    -- 0/nil heisst "alle" -- so faengt jede Anlage an.
-    released = 0,
-    stage_since_ms = nil,
-    climb_since_ms = nil,
   }
 end
 
@@ -238,11 +184,6 @@ function M.update(previous, turbines, opts)
     state.sustainable_turbines = 0
     state.last_improved_ms = now_ms
     state.total_turbines = total
-    -- Ein Umbau macht jede gemessene Stufe wertlos: von vorn mit der
-    -- ganzen Flotte.
-    state.released = 0
-    state.stage_since_ms = nil
-    state.climb_since_ms = nil
     state.reason = "TOPOLOGY_CHANGED"
     return state
   end
@@ -250,12 +191,7 @@ function M.update(previous, turbines, opts)
 
   local output, at_target, _, saturated = measure(turbines)
   state.at_target, state.saturated = at_target, saturated
-  -- Die Schwelle gilt fuer die FREIGEGEBENE Stufe, nicht fuer die ganze
-  -- Flotte -- sonst koennte eine zurueckgenommene Stufe die Schwelle
-  -- niemals erreichen und die Staffelung liefe ins Leere.
-  local released = (tonumber(state.released) or 0) > 0
-    and math.min(state.released, total) or total
-  state.required_at_target = math.max(1, math.ceil(released * M.MIN_FRACTION))
+  state.required_at_target = math.max(1, math.ceil(total * M.MIN_FRACTION))
 
   -- Zu wenige Turbinen im Zielbereich: dieser Takt taugt nicht als
   -- Messwert. Ein bereits gelernter Hoechstwert bleibt davon unberuehrt --
@@ -271,71 +207,8 @@ function M.update(previous, turbines, opts)
       state.reason = "MEASURED"
       return state
     end
-
-    -- Die aktuelle Stufe traegt nicht -- aber NUR Saettigung beweist das.
-    --
-    -- Eine Turbine, die noch Flow-Reserve hat, laeuft schlicht noch hoch;
-    -- ihr die Freigabe zu nehmen waere ein Fehler (und war es: der
-    -- Lebenszyklus-Test hat genau das gefangen, eine Anlage, die ihre
-    -- ganze Flotte traegt, wurde auf 12 heruntergestaffelt, bevor sie
-    -- ueberhaupt auf Drehzahl war).
-    --
-    -- Saettigung dagegen heisst: volle Foerderung und trotzdem zu langsam.
-    -- Dann fehlt Dampf, und wie dieser Test es selbst formuliert, aendert
-    -- Warten daran nichts. Erst das rechtfertigt den Rueckschritt.
-    -- Solange irgendeine Turbine noch Drehzahl AUFBAUT, ist die Stufe
-    -- nicht gescheitert -- sie ist noch am Anlaufen. Die Uhr fuer den
-    -- Rueckschritt laeuft dann gar nicht erst.
-    local rising = tonumber(opts.rising) or 0
-    if saturated > 0 and rising == 0 then
-      if not state.stage_since_ms then state.stage_since_ms = now_ms end
-    else
-      state.stage_since_ms = nil
-    end
-    if saturated > 0 and rising == 0 and released > 1
-        and now_ms - (state.stage_since_ms or now_ms) >= M.STAGE_TIMEOUT_MS then
-      state.released = math.max(1, math.floor(released / 2))
-      state.stage_since_ms = now_ms
-      state.climb_since_ms = nil
-      -- Die Anlage traegt nachweislich weniger als gedacht: der gemessene
-      -- Wert darf das nicht weiter behaupten, sonst verteilt MASTER
-      -- weiterhin auf Turbinen, die nie ans Ziel kommen.
-      if (state.sustainable_turbines or 0) > state.released then
-        state.sustainable_turbines = state.released
-      end
-      state.reason = "STAGE_DOWN"
-      return state
-    end
-
     state.reason = (saturated > 0) and "FLOW_SATURATED" or "BELOW_FRACTION"
     return state
-  end
-
-  -- Die Stufe traegt: die Uhr fuer den Rueckschritt laeuft neu.
-  state.stage_since_ms = nil
-  state.released = released
-
-  -- ... und die fuer den Weg zurueck nach oben laeuft an. Nur solange
-  -- KEINE Turbine gesaettigt ist: Saettigung hiesse, der Dampf ist schon
-  -- jetzt knapp, dann waere mehr Freigabe das Gegenteil einer Verbesserung.
-  if saturated == 0 and released < total then
-    if not state.climb_since_ms then state.climb_since_ms = now_ms end
-    if now_ms - state.climb_since_ms >= M.RECLIMB_MS then
-      state.released = math.min(total, released + math.max(1, math.floor(total * 0.1)))
-      -- Auch die gemessene Zahl mitziehen: sie ist es, die im Betrieb
-      -- deckelt (rt2_orchestrator). Bliebe sie stehen, duerfte die groessere
-      -- Freigabe sich nie zeigen -- es koennten nie mehr Turbinen
-      -- gleichzeitig ans Ziel kommen, der Hoechstwert koennte sich nie
-      -- verbessern, und die Decke bliebe fuer immer.
-      if (state.sustainable_turbines or 0) < state.released then
-        state.sustainable_turbines = state.released
-      end
-      state.climb_since_ms = now_ms
-      state.reason = "STAGE_UP"
-      return state
-    end
-  else
-    state.climb_since_ms = nil
   end
 
   if output > (state.best_output or 0) then
@@ -422,16 +295,6 @@ function M.load(opts)
   state.max_output = data.max_output
   state.total_turbines = data.turbine_count
   state.sustainable_turbines = math.min(sustainable, data.turbine_count or sustainable)
-  -- Die Stufe MIT wiederherstellen, nicht nur die Zahl.
-  --
-  -- Ohne sie bezieht sich die 80-%-Schwelle nach einem Neustart wieder auf
-  -- die GANZE Flotte, waehrend im Betrieb nur `sustainable` Turbinen
-  -- laufen duerfen. Bei 1 von 50 heisst das: 1 am Ziel, 40 noetig -- der
-  -- Takt gilt als untauglich, die Pruefung kehrt sofort als "STABLE"
-  -- zurueck, und der Weg nach oben (RECLIMB_MS) wird nie erreicht. Eine in
-  -- der Knappheit gelernte 1 waere damit ueber jeden Neustart hinweg
-  -- endgueltig.
-  state.released = state.sustainable_turbines
   state.best_output = data.max_output / (1 - M.SAFETY_MARGIN)
   state.reason = "LOADED_FROM_CACHE"
   return state

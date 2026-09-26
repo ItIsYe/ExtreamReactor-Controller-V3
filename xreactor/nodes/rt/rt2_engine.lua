@@ -398,9 +398,8 @@ function M.tick(ctx)
   -- Einlernen sichtbar machen.
   local cap = result.capacity
   local waiting = (cap.max_output or 0) <= 0
-  local diag = string.format("%s|%d|%s|%s|%s", tostring(cap.reason),
-    math.floor((cap.max_output or 0) / 1000), tostring(cap.ready), tostring(waiting),
-    tostring(cap.released or 0))
+  local diag = string.format("%s|%d|%s|%s", tostring(cap.reason),
+    math.floor((cap.max_output or 0) / 1000), tostring(cap.ready), tostring(waiting))
   do
     local msg
     if cap.reason == "MEASURING" then
@@ -413,18 +412,13 @@ function M.tick(ctx)
         msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig am Ziel",
           (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
       end
-    elseif cap.reason == "STAGE_DOWN" then
-      msg = string.format(
-        "v2 Einlernen: die Flotte nimmt sich selbst den Dampf weg -- Freigabe auf %d von %d"
-        .. " Turbinen zurueckgenommen und neu versucht.",
-        cap.released or 0, cap.total_turbines or 0)
     elseif cap.reason == "FLOW_SATURATED" then
       msg = string.format(
         "v2 Einlernen: %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM"
-        .. " -- im Zielbereich %d von %d, noetig %d (freigegeben: %s).",
+        .. " -- im Zielbereich %d von %d, noetig %d. Das ist eine DAMPFfrage: die Turbinen"
+        .. " werden deswegen NICHT gedrosselt, der Reaktor faehrt seine Staebe aus.",
         cap.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
-        cap.at_target or 0, cap.total_turbines or 0, cap.required_at_target or 0,
-        (cap.released or 0) > 0 and tostring(cap.released) or "alle")
+        cap.at_target or 0, cap.total_turbines or 0, cap.required_at_target or 0)
     elseif cap.reason == "BELOW_FRACTION" and waiting then
       msg = string.format(
         "v2 Einlernen wartet: %d von %d Turbinen im Zielbereich (%d RPM +/- %d), noetig sind %d",

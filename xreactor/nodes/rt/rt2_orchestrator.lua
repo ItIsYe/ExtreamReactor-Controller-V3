@@ -216,28 +216,9 @@ function M.new(opts)
     -- als Ganzes auf SAFE und stellt auch die Turbinen ab.
     local all_tripped = #self.reactors > 0 and tripped == #self.reactors
 
-    -- Wieviele Turbinen bauen gerade noch Drehzahl auf? Der Messzustand
-    -- aus dem VORIGEN Takt liegt hier noch unberuehrt vor (die Spur wird
-    -- erst weiter unten in der Turbinenschleife fortgeschrieben), also
-    -- laesst sich die Richtung hier sauber gegen den aktuellen Messwert
-    -- bestimmen.
-    --
-    -- rt2_capacity braucht das, um Anlaufen nicht mit Dampfmangel zu
-    -- verwechseln: beides zeigt vollen Flow unter Zieldrehzahl.
-    local rising = 0
-    for _, t in ipairs(input.turbines or {}) do
-      local trace = t.name and self.turbine_rpm_trace[t.name] or nil
-      local rpm_now = tonumber(t.rpm)
-      if trace and trace.ms and rpm_now and now_ms and now_ms > trace.ms then
-        local rate = (rpm_now - trace.rpm) / ((now_ms - trace.ms) / 1000)
-        if rate > rt2_capacity.RISING_RPM_PER_S then rising = rising + 1 end
-      end
-    end
-
     local current_state = self.machine.current()
     if current_state ~= rt2_state.states.SAFE then
-      self.capacity = rt2_capacity.update(self.capacity, input.turbines,
-        { now_ms = now_ms, rising = rising })
+      self.capacity = rt2_capacity.update(self.capacity, input.turbines, { now_ms = now_ms })
     end
 
     local state = self.machine.tick({
@@ -281,18 +262,8 @@ function M.new(opts)
     -- Knotens. Ein ausgeloester Einzelreaktor aendert daran nichts.
     local count = #(input.turbines or {})
     local max_active
-    if state == rt2_state.states.LEARNING then
-      -- Die waehrend des Einlernens freigegebene Stufe (rt2_capacity).
-      -- 0 heisst "ganze Flotte" -- so faengt jede Anlage an, und fuer
-      -- jede Anlage, die ihre Flotte traegt, aendert sich nichts.
-      local released = tonumber(self.capacity.released) or 0
-      if released > 0 then max_active = released end
-    elseif self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
-      -- Im Betrieb deckelt die gemessene Zahl -- nicht mehr anfahren, als
-      -- je gleichzeitig geliefert haben. Dass diese Zahl bei nachlassender
-      -- Knappheit wieder WACHSEN kann, regelt rt2_capacity selbst
-      -- (RECLIMB_MS); sonst bliebe eine in der Knappheit gelernte 1 fuer
-      -- immer die Decke.
+    if state ~= rt2_state.states.LEARNING
+        and self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
       max_active = self.capacity.sustainable_turbines
     end
 
