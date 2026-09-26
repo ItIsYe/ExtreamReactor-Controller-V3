@@ -117,11 +117,12 @@ do
   local said = table.concat(printed, ' | ')
   assert_true(said:find('R%-A') ~= nil,
     'der Reaktor ohne Dampfmesswert muss beim Namen genannt werden: ' .. said)
-  assert_true(said:find('kein Dampfmesswert', 1, true) ~= nil, said)
-  assert_true(said:find('NIE hoch', 1, true) ~= nil,
-    'und dass es eine Sackgasse ist, nicht bloss ein Wartezustand: ' .. said)
+  assert_true(said:find('GAR KEIN Dampfmesswert', 1, true) ~= nil, said)
+  assert_true(said:find('0 ist ein gueltiger Messwert', 1, true) ~= nil,
+    'und die Meldung muss klarstellen, dass eine echte 0 etwas anderes ist: ' .. said)
+  assert_true(said:find('faehrt dieser Reaktor nicht hoch', 1, true) ~= nil, said)
   -- Der gesunde Reaktor wird nicht mitgemeldet.
-  assert_true(said:find('R%-B[^|]*kein Dampfmesswert') == nil,
+  assert_true(said:find('R%-B[^|]*GAR KEIN Dampfmesswert') == nil,
     'ein Reaktor mit Messwert darf nicht mitgemeldet werden: ' .. said)
 end
 
@@ -169,6 +170,78 @@ do
     'der Anschlag muss gemeldet werden: ' .. said)
   assert_true(said:find('Lastfrage', 1, true) ~= nil,
     'und als Lastfrage benannt, nicht als Reglerfehler: ' .. said)
+end
+
+-- ══ 4. Ein ABGELEHNTER Stabbefehl war voellig unsichtbar ══════════════
+--
+-- Der Betreiber hat die vorige Vermutung widerlegt: beide Reaktoren sind
+-- aktiv gekuehlt und haben Dampfanschluesse. Ein Fuellstand von 0 ist
+-- dann ein echter Messwert -- ein Geraet, das lange aus war, steht eben
+-- auf 0. Der Regler MUSS daraufhin die Staebe ausfahren.
+--
+-- Tat er auch: rt2_adapter.apply_reactor() gibt sein Ergebnis samt
+-- Fehlertext zurueck -- rt2_engine.tick() hat es weggeworfen. Scheitert
+-- der Schreibbefehl dauerhaft, rechnet der Regler jeden Takt sauber eine
+-- neue Stellung aus, die Hardware nimmt sie nie an, der Messwert bleibt
+-- stehen, und der Knoten sagt kein Wort. Von aussen nicht zu
+-- unterscheiden von "der Regler tut nichts".
+
+do
+  engine.init({ config = { reactors = { 'R-A', 'R-B' }, turbines = { 'T1' } },
+    log = function() end })
+  -- Leerer Tank: der Regler will die Staebe ausfahren ...
+  local readings = {
+    ['R-A'] = { control_rod_level = 100, active = true, temperature = 90, steam_fill_ratio = 0.0 },
+    ['R-B'] = { control_rod_level = 100, active = true, temperature = 90, steam_fill_ratio = 0.0 },
+  }
+  local ctx, printed = make_ctx(readings)
+  local wanted = {}
+  -- ... die Hardware lehnt jeden Schreibbefehl ab.
+  ctx.adapters.reactor.apply_rod_level = function(name, level)
+    wanted[#wanted + 1] = { name = name, level = level }
+    return nil, 'partial rod write 0/4: returned false'
+  end
+  run(ctx, printed, 3)
+
+  assert_true(#wanted > 0, 'der Regler muss ueberhaupt etwas stellen wollen')
+  local moved = false
+  for _, w in ipairs(wanted) do if (w.level or 100) < 100 then moved = true end end
+  assert_true(moved,
+    'bei leerem Tank muss er die Staebe AUSFAHREN wollen -- sonst ist der Regler selbst schuld')
+
+  local said = table.concat(printed, ' | ')
+  assert_true(said:find('ABGELEHNT', 1, true) ~= nil,
+    'und ein abgelehnter Stabbefehl darf nicht spurlos bleiben: ' .. said)
+  assert_true(said:find('partial rod write', 1, true) ~= nil,
+    'der Wortlaut der Hardware gehoert in die Meldung: ' .. said)
+  assert_true(said:find('bleiben stehen', 1, true) ~= nil,
+    'samt der Folge -- das ist der Unterschied zu "der Regler tut nichts": ' .. said)
+end
+
+-- ══ 5. Bei 50 Turbinen keine 50 Zeilen ════════════════════════════════
+
+do
+  engine.init({ config = { reactors = { 'R-A' }, turbines = { 'T1' } }, log = function() end })
+  local readings = {
+    ['R-A'] = { control_rod_level = 90, active = true, temperature = 90, steam_fill_ratio = 0.5 },
+  }
+  local ctx, printed = make_ctx(readings)
+  ctx.config.reactors = { 'R-A' }
+  ctx.config.turbines = {}
+  for i = 1, 50 do ctx.config.turbines[i] = 'T' .. i end
+  ctx.adapters.turbine.set_coils = function() return nil, 'no such method setCoilEngaged' end
+  run(ctx, printed, 2)
+
+  local lines = 0
+  for _, line in ipairs(printed) do
+    if tostring(line):find('nehmen keine Befehle an', 1, true) then lines = lines + 1 end
+  end
+  assert_true(lines == 1,
+    'genau EINE gesammelte Zeile, nicht eine je Turbine (' .. lines .. ')')
+  local said = table.concat(printed, ' | ')
+  assert_true(said:find('no such method setCoilEngaged', 1, true) ~= nil,
+    'mit dem Wortlaut der Hardware und einem Beispielgeraet: ' .. said)
+  assert_true(said:find('50 Turbine', 1, true) ~= nil, 'und der Anzahl: ' .. said)
 end
 
 print('rt2_rod_reason_visibility_test.lua: ok')
