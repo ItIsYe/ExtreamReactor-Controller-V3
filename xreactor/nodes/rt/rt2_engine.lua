@@ -178,35 +178,75 @@ end
 local contradiction_said = nil
 
 local function check_learning_contradiction(ctx, result)
-  if result.state ~= rt2_state.states.LEARNING then
+  local turbines = result.turbines or {}
+  local total = #turbines
+
+  -- Zwei Lagen, die im Betrieb als "der Flow-Regler tut nichts" ankommen:
+  --
+  --   abgestellt  Ziel 0 -- die Turbine SOLL stehen. Im Einlernen darf das
+  --               gar nicht vorkommen (dort bekommt jede Turbine 900), im
+  --               Betrieb ist es die Leistungsaufteilung.
+  --   stumm       Ziel > 0, aber der Regler rechnet Durchfluss 0. DAS ist
+  --               der eigentliche Fehlerfall -- eine Turbine, die laufen
+  --               soll und trotzdem keinen Dampf bekommt.
+  --
+  -- Die RT-Logs halten Turbinen-Stellbefehle nicht fest; im Moment des
+  -- Ausfalls stand deshalb nirgends etwas. Genau diese Luecke schliesst
+  -- das hier, und nur fuer den Fehlerfall.
+  local parked, silent, example_parked, example_silent = 0, 0, nil, nil
+  for _, t in ipairs(turbines) do
+    local target = tonumber(t.target_rpm) or 0
+    local flow = t.flow_decision and tonumber(t.flow_decision.flow) or nil
+    if target <= 0 then
+      parked = parked + 1
+      example_parked = example_parked or t
+    elseif flow ~= nil and flow <= 0 then
+      silent = silent + 1
+      example_silent = example_silent or t
+    end
+  end
+
+  local learning = result.state == rt2_state.states.LEARNING
+  -- Abgestellte Turbinen sind nur IM EINLERNEN ein Widerspruch.
+  local report_parked = learning and parked > 0
+  if not report_parked and silent == 0 then
     contradiction_said = nil
     return
   end
-  local parked, example = 0, nil
-  for _, t in ipairs(result.turbines or {}) do
-    if (tonumber(t.target_rpm) or 0) <= 0 then
-      parked = parked + 1
-      example = example or t
-    end
-  end
-  if parked == 0 then contradiction_said = nil; return end
 
   local cap = result.capacity or {}
-  local key = string.format("%d|%s|%s", parked, tostring(result.max_active), tostring(cap.ready))
+  local key = string.format("%s|%d|%d|%s|%s", tostring(result.state), parked, silent,
+    tostring(result.max_active), tostring(cap.ready))
   if contradiction_said == key then return end
   contradiction_said = key
 
+  local function describe(t)
+    if not t then return "-" end
+    return string.format("%s: Ziel=%s Drehzahl=%s Durchfluss=%s Grund=%s",
+      tostring(t.name), tostring(t.target_rpm), tostring(t.rpm),
+      tostring(t.flow_decision and t.flow_decision.flow),
+      tostring(t.flow_decision and t.flow_decision.reason))
+  end
+
+  local head
+  if report_parked and silent > 0 then
+    head = string.format("%d von %d Turbinen abgestellt (im EINLERNEN unmoeglich)"
+      .. " und %d weitere ohne Durchfluss trotz Ziel", parked, total, silent)
+  elseif report_parked then
+    head = string.format("%d von %d Turbinen haben Ziel 0 -- das darf im Einlernen"
+      .. " nicht vorkommen", parked, total)
+  else
+    head = string.format("%d von %d Turbinen sollen laufen, bekommen aber Durchfluss 0",
+      silent, total)
+  end
+
   local msg = string.format(
-    "v2 WIDERSPRUCH: Zustand LEARNING, aber %d von %d Turbinen haben Ziel 0"
-      .. " -- das darf im Einlernen nicht vorkommen."
-      .. " max_active=%s, Kapazitaet bereit=%s, tragbar=%s, Flotte=%s."
-      .. " Beispiel %s: Ziel=%s Drehzahl=%s Durchfluss=%s Grund=%s",
-    parked, #(result.turbines or {}), tostring(result.max_active),
-    tostring(cap.ready), tostring(cap.sustainable_turbines), tostring(cap.total_turbines),
-    tostring(example and example.name), tostring(example and example.target_rpm),
-    tostring(example and example.rpm),
-    tostring(example and example.flow_decision and example.flow_decision.flow),
-    tostring(example and example.flow_decision and example.flow_decision.reason))
+    "v2 TURBINEN-BEFUND: %s. Zustand=%s, max_active=%s, Vorgabe=%s%%,"
+      .. " Kapazitaet bereit=%s, tragbar=%s, Flotte=%s. Abgestellt %s | Ohne Durchfluss %s",
+    head, tostring(result.state), tostring(result.max_active),
+    tostring(result.master_percent), tostring(cap.ready),
+    tostring(cap.sustainable_turbines), tostring(cap.total_turbines),
+    describe(example_parked), describe(example_silent))
   ctx.log("ERROR", msg)
   pcall(print, "[RT] " .. msg)
 end
