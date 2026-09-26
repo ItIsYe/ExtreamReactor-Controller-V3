@@ -77,6 +77,30 @@ local function copy(t)
   return out
 end
 
+-- Marke der LERNFASSUNG, nicht der Release-Nummer.
+--
+-- Eine gelernte Datei ueberlebt jeden Rollback des Codes -- sie liegt ja
+-- daneben auf dem Rechner. Genau daran ist im Betrieb ein vollstaendiger
+-- RT-Rollback gescheitert: eine fehlerhafte Fassung hatte
+-- sustainable_turbines=1 gelernt und gespeichert, der zurueckgerollte
+-- Code las den Wert anstandslos wieder ein (die Turbinenzahl stimmte ja
+-- noch) und regelte weiter dagegen. Aus 50 Turbinen lief genau eine, und
+-- neu gelernt wurde nie, weil eine am Ziel die Schwelle nie erreicht.
+--
+-- Der Wert war nicht von einem guten zu unterscheiden: die Datei sagte
+-- nicht, WER sie geschrieben hat.
+--
+-- Bewusst NICHT die Release-Nummer: dann wuerfe jedes Update das Gelernte
+-- weg, und das Einlernen kostet echte Betriebszeit. Diese Zahl wird nur
+-- erhoeht, wenn sich am Lernverfahren selbst etwas aendert -- dann sind
+-- alte Werte tatsaechlich nicht mehr vergleichbar.
+--
+-- Fassung 2 = nach dem gestaffelten Einlernen (v754-v757) und dessen
+-- Ruecknahme. Jede Datei ohne diese Marke stammt aus der Zeit davor und
+-- wird einmalig verworfen -- damit heilt sich auch ein Knoten, auf dem
+-- noch ein vergifteter Wert liegt, von allein.
+M.LEARNING_VERSION = 2
+
 function M.new_state()
   return {
     ready = false,
@@ -258,6 +282,7 @@ function M.save(state, opts)
   if type(opts.path) ~= "string" or opts.path == "" then return false, "no path" end
   if type(opts.write_config) ~= "function" then return false, "no writer" end
   return opts.write_config(opts.path, {
+    learning_version = M.LEARNING_VERSION,
     ready = true,
     max_output = tonumber(state.max_output) or 0,
     turbine_count = tonumber(state.total_turbines) or 0,
@@ -275,6 +300,9 @@ function M.load(opts)
   if type(data) ~= "table" or data.ready ~= true
       or type(data.max_output) ~= "number" or data.max_output <= 0 then
     return nil
+  end
+  if tonumber(data.learning_version) ~= M.LEARNING_VERSION then
+    return nil, "aus einer anderen Lernfassung -- wird neu eingelernt"
   end
   if type(opts.turbine_count) == "number"
       and type(data.turbine_count) == "number"

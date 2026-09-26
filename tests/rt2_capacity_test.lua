@@ -248,10 +248,49 @@ do
   -- hochgerechnete Kapazitaet und keine tragbare Anzahl. Der Wert ist auf
   -- einer dampfbegrenzten Anlage um ein Vielfaches zu hoch, also wird er
   -- verworfen statt uebernommen.
-  files['/alt'] = { ready = true, max_output = 25000, turbine_count = 25 }
+  files['/alt'] = { learning_version = rt2_capacity.LEARNING_VERSION,
+    ready = true, max_output = 25000, turbine_count = 25 }
   local old, why = rt2_capacity.load({ path = '/alt', read_config = read_config, turbine_count = 25 })
   assert_true(old == nil, 'ein alter Cache ohne gemessene Turbinenzahl darf nicht uebernommen werden')
   assert_true(tostring(why):find('alter Cache'), 'und der Grund muss genannt werden: ' .. tostring(why))
+
+  -- Und der Fall, an dem im Betrieb ein vollstaendiger RT-Rollback
+  -- gescheitert ist: eine gelernte Datei ueberlebt den Rollback des Codes,
+  -- denn sie liegt daneben auf dem Rechner. Eine fehlerhafte Fassung hatte
+  -- sustainable_turbines=1 gelernt und gespeichert; der zurueckgerollte
+  -- Code las den Wert anstandslos wieder ein -- die Turbinenzahl stimmte
+  -- ja noch -- und regelte weiter dagegen. Von 50 Turbinen lief eine.
+  --
+  -- Die Datei sagte nicht, WER sie geschrieben hat. Jetzt tut sie es.
+  files['/fremd'] = { learning_version = rt2_capacity.LEARNING_VERSION + 1,
+    ready = true, max_output = 25000, turbine_count = 25, sustainable_turbines = 1 }
+  local foreign, foreign_why = rt2_capacity.load(
+    { path = '/fremd', read_config = read_config, turbine_count = 25 })
+  assert_true(foreign == nil,
+    'ein Wert aus einer anderen Lernfassung darf einen Rollback nicht ueberleben')
+  assert_true(tostring(foreign_why):find('Lernfassung'),
+    'und der Grund gehoert dazu: ' .. tostring(foreign_why))
+
+  -- Eine Datei ganz OHNE Marke stammt aus der Zeit davor -- also auch aus
+  -- der fehlerhaften Fassung. Sie wird einmalig verworfen, womit sich ein
+  -- vergifteter Knoten von allein heilt.
+  files['/ohne'] = { ready = true, max_output = 25000, turbine_count = 25,
+    sustainable_turbines = 1 }
+  assert_true(rt2_capacity.load(
+    { path = '/ohne', read_config = read_config, turbine_count = 25 }) == nil,
+    'eine Datei ohne Marke wird verworfen')
+
+  -- Was der laufende Stand selbst schreibt, wird natuerlich wieder gelesen.
+  local written
+  rt2_capacity.save({ ready = true, max_output = 1000, total_turbines = 25,
+    sustainable_turbines = 20 },
+    { path = '/neu', write_config = function(_, data) written = data; return true end })
+  assert_eq(written.learning_version, rt2_capacity.LEARNING_VERSION,
+    'die Marke wird mitgeschrieben')
+  files['/neu'] = written
+  local back = rt2_capacity.load({ path = '/neu', read_config = read_config, turbine_count = 25 })
+  assert_true(back ~= nil and back.sustainable_turbines == 20,
+    'und ein eigener Wert kommt unveraendert zurueck')
 end
 
 print('rt2_capacity_test.lua: ok')

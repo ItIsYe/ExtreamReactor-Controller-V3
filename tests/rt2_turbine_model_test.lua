@@ -116,16 +116,28 @@ do
   assert_near(loaded.turbine_1.intercept, -12, 1e-9)
 
   -- Eine von Hand editierte Datei darf den Regler nicht aufweiten.
-  local tampered = { units = { turbine_1 = { modelled = true, slope = 999,
+  local tampered = { learning_version = model.LEARNING_VERSION, units = { turbine_1 = { modelled = true, slope = 999,
     min_adjust_interval_ms = 5 } } }
   local rejected = model.load_units({ path = '/p', read_config = function() return tampered end })
   assert_true(rejected.turbine_1 == nil, 'eine unplausible Steigung darf nicht geladen werden')
 
-  local slow = { units = { turbine_1 = { modelled = true, slope = 0.6,
+  local slow = { learning_version = model.LEARNING_VERSION, units = { turbine_1 = { modelled = true, slope = 0.6,
     min_adjust_interval_ms = 999999 } } }
   local clamped = model.load_units({ path = '/p', read_config = function() return slow end })
   assert_eq(clamped.turbine_1.min_adjust_interval_ms, model.INTERVAL_MAX_MS,
     'ein ueberzogenes Stellintervall wird auf die Obergrenze geklemmt')
+
+  -- Kennlinien aus einer anderen Lernfassung ueberleben einen Rollback des
+  -- Codes nicht -- sie wurden unter anderen Regeln gemessen.
+  local foreign = { learning_version = model.LEARNING_VERSION + 1,
+    units = { turbine_1 = { modelled = true, slope = 0.6, intercept = -12,
+      min_adjust_interval_ms = 800, samples = 12, flow_spread = 300 } } }
+  assert_true(next(model.load_units({ path = '/p', read_config = function() return foreign end })) == nil,
+    'eine fremde Lernfassung wird verworfen')
+  local unmarked = { units = { turbine_1 = { modelled = true, slope = 0.6, intercept = -12,
+      min_adjust_interval_ms = 800, samples = 12, flow_spread = 300 } } }
+  assert_true(next(model.load_units({ path = '/p', read_config = function() return unmarked end })) == nil,
+    'und eine Datei ohne Marke ebenso')
 end
 
 -- ══ 4. Der eigentliche Punkt: der Regler kommt zur Ruhe ══════════════════
