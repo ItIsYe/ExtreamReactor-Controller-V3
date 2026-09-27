@@ -21,22 +21,18 @@ return {
   version = CURRENT_VERSION,
   role = "RT-NODE",
   node_id = DEFAULT_NODE_ID,
-  -- "v1" (default) = the existing state_handlers/module_lifecycle/
-  -- turbine_control/reactor_control engine. "v2" = the rewritten
-  -- rt2_*.lua engine (single unified state machine, mode-independent
-  -- steam-tank reactor control, AUS-slot overspeed fix). Per-node
-  -- opt-in for canary rollout -- set explicitly in /xreactor_config/
-  -- rt.lua on ONE node first, compare, then widen. Der Installer legt
-  -- diese Datei an (installer/init.lua), sie muss nur editiert werden.
+  -- Es gibt keinen "engine"-Schalter mehr. Bis v768 waehlte dieses Feld
+  -- zwischen v1 (state_handlers/module_lifecycle/turbine_control/
+  -- reactor_control) und v2 (rt2_*.lua) -- und "v1" war der DEFAULT, jede
+  -- frisch angelegte rt.lua lief also im alten Regler. v1 ist entfernt;
+  -- rt2_*.lua ist der Regler der RT-Node. Ein noch in einer alten rt.lua
+  -- stehendes engine-Feld wird beim naechsten Schreiben entfernt (siehe
+  -- config_normalizer.lua) und hat vorher keine Wirkung.
   --
-  -- KORREKTUR: hier stand, v2 unterstuetze nur EINEN Reaktor je Knoten
-  -- und main.lua falle sonst auf v1 zurueck. Das galt bis zum Umbau auf
-  -- rt2_unit.lua und ist seitdem falsch -- es gibt weder die Begrenzung
-  -- noch den Rueckfall. Mehrere Reaktoren speisen dasselbe Dampfnetz und
-  -- regeln unabhaengig aus IHREM eigenen Tank (siehe RT_ENGINE_V2.md,
-  -- Abschnitt "Mehrere Reaktoren"). Die Turbinenzahl ist ebenfalls nicht
-  -- begrenzt (nachgemessen bis 100).
-  engine = "v1",
+  -- Mehrere Reaktoren je Knoten sind unterstuetzt: sie speisen dasselbe
+  -- Dampfnetz und regeln unabhaengig aus IHREM eigenen Tank (siehe
+  -- RT_ENGINE_V2.md, Abschnitt "Mehrere Reaktoren"). Die Turbinenzahl ist
+  -- ebenfalls nicht begrenzt (nachgemessen bis 100).
   debug_logging = true,
   reset_log_on_start = true,
   log_dir = "/disk/xreactor_logs",
@@ -104,8 +100,8 @@ return {
     -- regulator_min_rods / regulator_max_rods: ENTFERNT.
     -- Kanonische Rod-Grenzen stehen jetzt ausschließlich in rails.reactor_rods.min/.max.
     -- 0.10s entspricht der verbindlichen 10-Hz-Vorgabe fuer die
-    -- Fuel-Rod-Regelung; Stabilitaet kommt ueber EMA/Deadband/Hysterese/
-    -- Ramp-Limits in core/control_rails.lua, nicht ueber ein langsames
+    -- Fuel-Rod-Regelung; Stabilitaet kommt ueber Deadband/Proportionalband/
+    -- Schrittbegrenzung in rt2_reactor.lua, nicht ueber ein langsames
     -- aeusseres Intervall. Gilt nur fuer Erstinstallationen und
     -- fehlende/ungueltige Werte -- bestehende persistierte Configs
     -- behalten ihren Wert bis manuell angepasst.

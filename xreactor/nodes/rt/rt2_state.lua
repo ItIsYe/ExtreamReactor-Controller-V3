@@ -40,12 +40,12 @@ for _, name in pairs(M.states) do VALID_STATES[name] = true end
 
 -- Pure decision function: given the current state and the world's inputs,
 -- what should the next state be? No I/O, no side effects -- this is what
--- makes every transition in this module testable with plain tables, the
--- same way core/control_rails.lua's decisions are tested.
+-- makes every transition in this module testable with plain tables -- the
+-- same contract every rt2_*-Modul einhaelt.
 --
 -- inputs:
 --   hardware_ready    -- discovery has found at least one reactor+turbine
---   capacity_ready    -- capacity_learning.ready == true
+--   capacity_ready    -- rt2_capacity's ready == true
 --   master_connected  -- comms peer-liveness for the MASTER role
 --   safety_tripped    -- true while ANY active safety condition holds
 --                         (temperature limit, coolant low, etc.)

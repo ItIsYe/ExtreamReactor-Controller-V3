@@ -60,11 +60,7 @@ local function build_ctx(overrides)
     build_health_payload = function() return { status = 'OK' } end,
     comms = { network = { id = 'node-101' }, get_diagnostics = function() return { peers = {}, metrics = {} } end },
     constants = { roles = { MASTER = 'master' } },
-    -- v1's Lernzustand, so wie er unter engine=v2 aussieht: leer. Genau
-    -- das hat der Schirm bisher angezeigt.
-    capacity_learning = {},
     targets = {},
-    node_state_machine = { state = function() return 'RUNNING' end },
     current_state = 'AUTONOM',
   }
   for k, v in pairs(overrides or {}) do ctx[k] = v end
@@ -81,13 +77,17 @@ local function render(ctx)
   return snapshot, rendered_model
 end
 
--- ── 1. Ohne Vorgabe bleibt es beim alten (v1-)Verhalten ──────────────────
+-- ── 1. Ohne Vorgabe erfindet der Schirm nichts ───────────────────────────
+--
+-- Es gibt keine zweite Quelle mehr, aus der er ersatzweise lesen koennte
+-- (v1s Lernzustand und Zustandsautomat sind entfernt). Bekommt er keine
+-- Vorgabe, zeigt er den leeren Zustand -- nicht einen erfundenen.
 
 do
   local _, model = render(build_ctx())
-  assert_eq(model.capacity_ready, false, 'ohne Vorgabe zaehlt weiter v1s Lernzustand')
-  assert_eq(model.capacity_max, 0, 'und dessen (leere) Kapazitaet')
-  assert_eq(model.node_state, 'RUNNING', 'und v1s Zustandsautomat')
+  assert_eq(model.capacity_ready, false, 'ohne Vorgabe ist nichts gelernt')
+  assert_eq(model.capacity_max, 0, 'und die Kapazitaet bleibt 0')
+  assert_eq(model.node_state, 'AUTONOM', 'der Knotenzustand faellt auf den Betriebsmodus zurueck')
 end
 
 -- ── 2. Mit Vorgabe zeigt der Schirm, was die Engine wirklich weiss ───
@@ -115,8 +115,8 @@ do
   assert_eq(model.capacity_ready, true, 'sonst steht weiter LEARNING im Kopf der Seite')
   assert_eq(model.capacity_max, MEASURED, 'sonst zeigt die CAPACITY-Kachel 0.0')
   assert_eq(model.node_state, 'AUTONOM',
-    'der Zustand kommt von der Engine, nicht vom unter v2 eingefrorenen node_state_machine')
-  assert_eq(model.target_percent, 84, 'und die Leistungsvorgabe aus der Engine statt v1s leerem ctx.targets')
+    'der Zustand kommt von der Engine')
+  assert_eq(model.target_percent, 84, 'und die Leistungsvorgabe aus der Engine')
   assert_eq(model.target_power, 700000000)
 end
 
@@ -137,9 +137,13 @@ do
   assert_true(stop ~= nil, 'Ende von update_monitor() nicht gefunden')
   local body = src:sub(start, stop)
 
-  assert_true(body:find('engine_v2', 1, true) ~= nil,
-    'update_monitor() muss den v2-Fall ueberhaupt kennen -- sonst zeigt der RT-Schirm v1-Daten,'
-      .. ' waehrend v2 regelt (Live-Test node-101)')
+  -- Seit v769 gibt es keinen zweiten Regler mehr, an dem vorbei etwas
+  -- angezeigt werden koennte: die Uebersetzung laeuft unbedingt. Geprueft
+  -- wird darum, dass sie ueberhaupt stattfindet -- der Fehler war nie ein
+  -- falscher Zweig, sondern ein fehlender Aufruf.
+  assert_true(body:find('rt2_engine.status_fields()', 1, true) ~= nil,
+    'update_monitor() muss den Zustand der regelnden Engine lesen -- sonst zeigt'
+      .. ' der RT-Schirm etwas anderes als den Regler (Live-Test node-101)')
   assert_true(body:find('capacity_override', 1, true) ~= nil,
     'update_monitor() muss monitor_ui den Lernzustand der regelnden Engine mitgeben')
   assert_true(body:find('monitor_ctx.node_state', 1, true) ~= nil,

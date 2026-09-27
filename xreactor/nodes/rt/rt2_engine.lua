@@ -1,16 +1,17 @@
--- RT rewrite, step 9 (cutover glue): the ONLY module main.lua talks to
--- for the "v2" engine path. Owns the single rt2_orchestrator instance for
--- this RT process and bridges it to main.lua's existing ctx (peripheral
--- adapters, config, logging) via rt2_adapter.
+-- Der Regler der RT-Node -- das einzige Modul, mit dem main.lua fuer
+-- Regelung und Kommandos redet. Haelt die eine rt2_orchestrator-Instanz
+-- dieses RT-Prozesses und bindet sie ueber rt2_adapter an main.lua's ctx
+-- (Peripherie-Adapter, Konfiguration, Logging).
 --
--- main.lua's discovery/comms/monitor/status-publishing machinery is
--- UNCHANGED for v2 -- only the control decision + hardware write step
--- (this module's M.tick()) and command handling (M.handle_command())
--- are redirected here when config.engine == "v2".
+-- Seit v769 gibt es keinen zweiten Regler mehr: der frueher parallel
+-- vorhandene v1-Pfad (state_handlers/module_lifecycle/turbine_control/
+-- reactor_control) ist entfernt, und mit ihm der config.engine-Schalter,
+-- dessen Default ausgerechnet "v1" war. main.lua's Discovery-, Comms-,
+-- Monitor- und Status-Maschinerie bleibt davon unberuehrt -- sie liest
+-- Hardware und zeigt an, sie entscheidet nichts.
 --
--- Single-reactor limitation is enforced by main.lua before this module
--- is ever initialized (see main.lua's engine-selection guard) -- this
--- module itself only ever looks at devices.reactors[1].
+-- Mehrere Reaktoren je Knoten sind unterstuetzt (rt2_unit.lua): jeder
+-- regelt seine Staebe aus SEINEM eigenen Dampftank.
 
 local orchestrator = require("nodes.rt.rt2_orchestrator")
 local adapter = require("nodes.rt.rt2_adapter")
@@ -26,10 +27,10 @@ local utils = require("core.utils")
 
 local M = {}
 
--- Deliberately a SEPARATE file from CONFIG.CAPACITY_CACHE_PATH (v1's
--- cache): the persisted shape differs (count-keyed, no per-turbine
--- identity signature -- see rt2_capacity.lua's header on why) and the
--- two engines must never read each other's cache.
+-- Eigene Cache-Datei, historisch getrennt von der des abgeloesten v1-
+-- Reglers: die gespeicherte Form unterscheidet sich (count-keyed, keine
+-- Pro-Turbinen-Signatur -- siehe rt2_capacity.lua's Header dazu). v1s
+-- Datei wird nicht mehr gelesen und nicht mehr geschrieben.
 M.CACHE_PATH = "/xreactor_config/rt2_capacity_cache.lua"
 -- The measured reactor plant profile (see rt2_tuning.lua). Separate file
 -- from the capacity cache: it is derived from entirely different readings

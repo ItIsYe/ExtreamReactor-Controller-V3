@@ -432,27 +432,23 @@ if role.label == "RT" then
       "-- Neuinstallation und jedes Auto-Update. Der Installer legt sie\n",
       "-- einmal an und fasst eine vorhandene nie wieder an.\n",
       "--\n",
-      "-- engine -- welche Regel-Engine diesen Knoten regelt:\n",
-      "--     \"v1\"  die bisherige (Vorgabe)\n",
-      "--     \"v2\"  die neue (rt2_*.lua)\n",
+      "-- Der Knoten hat nur einen Regler (rt2_*.lua). Das frueher hier\n",
+      "-- stehende Feld engine ist entfallen -- es waehlte zwischen dem\n",
+      "-- alten und dem neuen Regler, und seine Vorgabe war der alte.\n",
       "--\n",
-      "-- Genau so schreiben: klein, in Anfuehrungszeichen. Alles andere\n",
-      "-- (\"V2\", v2, 2) wird beim Start stillschweigend auf \"v1\"\n",
-      "-- zurueckgestellt. Nach einer Aenderung den Rechner neu starten;\n",
-      "-- beim Start steht dann am Bildschirm:\n",
-      "--     [RT] engine=v2 AKTIV -- 1 Reaktor(en), 25 Turbinen\n",
+      "-- Beim ersten Start fuellt der Knoten diese Datei aus seinen\n",
+      "-- Vorgabewerten auf und schreibt sie dabei neu -- diese Kommentare\n",
+      "-- gehen dabei verloren. Eigene Eintraege bleiben erhalten.\n",
       "--\n",
-      "-- Alle uebrigen Einstellungen fuellt der Knoten beim ersten Start\n",
-      "-- aus seinen Vorgabewerten auf und schreibt die Datei dabei neu --\n",
-      "-- diese Kommentare gehen dabei verloren, der Eintrag engine bleibt.\n",
+      "-- Am Bildschirm steht beim Start:\n",
+      "--     [RT] REGLER AKTIV -- 1 Reaktor(en), 25 Turbinen\n",
       "return {\n",
-      "  engine = \"v1\",\n",
       "}\n",
     }))
     if not ok_rt then
       error("rt.lua konnte nicht geschrieben werden: " .. tostring(err_rt), 0)
     end
-    p("RT-Config angelegt: " .. rt_cfg .. " (engine = \"v1\"; fuer v2 dort aendern)")
+    p("RT-Config angelegt: " .. rt_cfg)
   else
     p("RT-Config vorhanden: " .. rt_cfg .. " -- unveraendert")
   end

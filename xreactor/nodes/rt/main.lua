@@ -1,13 +1,21 @@
 -- nodes/rt/main.lua  (RT-Node Rewrite — SCADA-Architektur)
 --
--- Orchestrierungsschicht: Boot, Services, Event-Loop.
--- Fachlogik lebt in separaten Modulen:
---   reactor_control.lua   — Steam-Margin-Regler, Rod-Steuerung
---   turbine_control.lua   — Flow, Induktor, Overspeed, Rotation
---   capacity_learning.lua — kontinuierliche Kapazitätsmessung
---   status_snapshot.lua   — Status-Payload für Master
+-- Orchestrierungsschicht: Boot, Services, Event-Loop. Sie regelt nichts.
+--
+-- Die gesamte Regelung liegt hinter EINEM Aufruf -- rt2_engine.tick() --
+-- und nur dort. Der frueher parallel existierende v1-Regler (Steam-Margin-
+-- Regler, Turbinen-Rampe, Modul-Lebenszyklus, Startup-Warteschlange,
+-- Knoten-Zustandsmaschine, eigenes Capacity-Learning) ist vollstaendig
+-- entfernt: er war nicht mehr erreichbar, konnte die Regelung aber ueber
+-- gemeinsamen Zustand stoeren, und zwei Wahrheiten ueber denselben
+-- Reaktor sind eine zu viel.
+--
+-- Was hier noch liegt:
+--   rt2_engine.lua        — der Regler (lesen, entscheiden, schreiben)
+--   reactor_control.lua   — Reaktor-Hardwarezugriff (Rods, Dampf, Quiesce)
+--   turbine_control.lua   — Turbinen-Hardwarezugriff (Drehzahl, Flow, Quiesce)
+--   status_snapshot.lua   — Status-Payload fuer Master
 --   monitor_ui.lua        — lokaler Monitor-Renderer
---   command_handler.lua   — REMOTE_UPDATE, SET_SETPOINTS, ...
 
 -- ── Konstanten ───────────────────────────────────────────────────────────────
 
@@ -16,26 +24,20 @@ local CONFIG = {
   LOG_PREFIX         = "RT",
   NODE_ID_PATH       = "/xreactor_config/node_id.txt",
   CONFIG_PATH        = nil,          -- wird von role_descriptor befüllt
-  CAPACITY_CACHE_PATH = "/xreactor_config/capacity_cache.lua",
   -- 0.1s so the scheduler cycle (which drives the reactor/turbine control
   -- tick) meets the required 10Hz cadence; other periodic services gate on
   -- their own interval and are unaffected.
   RECEIVE_TIMEOUT    = 0.1,
-  -- Rod-Grenzen
+  -- Rod-Grenzen des HARDWARE-Zugriffs (nicht des Reglers: rt2_reactor.lua
+  -- hat mit ROD_MIN = 70 seine eigene, bewusst engere Leistungsgrenze).
   ROD_MIN            = 0,
   ROD_MAX            = 100,
   INITIAL_ROD_LEVEL  = 100,
-  MIN_APPLY_INTERVAL = 0.25,
-  -- Turbinen
+  -- Flow-Grenzen fuer clamp_turbine_flow() und die Config-Validierung.
+  -- Die Regelgrenzen liegen in rt2_turbine.lua (MIN_FLOW/MAX_FLOW dort).
   TARGET_RPM         = 900,
-  COIL_ENGAGE_RPM    = 900,
-  COIL_DISENGAGE_RPM = 850,
   MIN_FLOW           = 0,
   MAX_FLOW           = 32000,
-  START_FLOW         = 100,
-  MIN_ACTIVE_RPM     = 10,
-  RPM_TOLERANCE      = 15,
-  TURBINE_MODE_RAMP  = "RAMP",
 }
 
 -- ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -50,7 +52,6 @@ local constants       = require("shared.constants")
 local protocol        = require("core.protocol")
 local utils           = require("core.utils")
 local health          = require("core.health")
-local rails           = require("core.control_rails")
 local safety          = require("core.safety")
 local fluid           = require("core.fluid")
 local registry_lib    = require("core.registry")
@@ -60,32 +61,20 @@ local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
 local ui_service      = require("services.ui_service")
 local support_runtime = require("nodes.support.runtime")
-local role_logic      = require("nodes.support.role_logic")
 local binding         = require("nodes.rt.binding")
 local config_normalizer = require("nodes.rt.config_normalizer")
-local capacity_cache  = require("nodes.rt.capacity_cache")
 local monitor_ui      = require("nodes.rt.monitor_ui")
-local command_handler_lib = require("nodes.rt.command_handler")
-local state_handlers  = require("nodes.rt.state_handlers")
-local module_lifecycle = require("nodes.rt.module_lifecycle")
-local startup_diagnostics = require("nodes.rt.startup_diagnostics")
 local status_snapshot_lib = require("nodes.rt.status_snapshot")
 local discovery_runtime   = require("nodes.rt.discovery_runtime")
 local health_payload      = require("nodes.rt.health_payload")
-local flow_apply_helpers  = require("nodes.rt.flow_apply_helpers")
-local reactor_steam_guard = require("nodes.rt.reactor_steam_guard")
-local turbine_regulator   = require("core.turbine_regulator")
-local machine             = require("core.state_machine")
--- Rewritten control engine (config.engine=="v2", opt-in per node -- see
--- config.lua's "engine" field). Kept import-only here; whether it's
--- actually initialized/ticked depends entirely on that config flag, see
--- init()/control_tick()/build_status_payload() below.
+-- DER Regler der RT-Node. Kein Schalter mehr, keine Alternative: init()
+-- initialisiert ihn, control_tick() tickt ihn, build_status_payload() und
+-- update_monitor() lesen aus ihm.
 local rt2_engine          = require("nodes.rt.rt2_engine")
 
--- Neue Fachmodule
+-- Hardware-Zugriff (keine Regelung, siehe die Modulkoepfe dort)
 local reactor_control   = require("nodes.rt.reactor_control")
 local turbine_control   = require("nodes.rt.turbine_control")
-local capacity_learning = require("nodes.rt.capacity_learning")
 
 local adapters = {
   reactor = require("adapters.reactor"),
@@ -135,16 +124,15 @@ local node_id = support_runtime.init_logging({
 -- Alles was sich zur Laufzeit ändert, bündelt sich hier — explizit, kein
 -- globaler Zugriff. Wird als ctx an alle Fachmodule weitergegeben.
 
+-- Nur noch das, was der Hardware-Zugriff (nodes/rt/reactor_control.lua,
+-- nodes/rt/turbine_control.lua) ueber Takte hinweg braucht. Die Regelung
+-- selbst haelt ihren Zustand ausschliesslich in rt2_engine.lua -- v1s
+-- Regel-State (Rails-EMA, Steam-Guard, Rod-Richtung/-Historie) ist mit v1
+-- entfallen.
 local state = {
-  -- Reaktor-Regelung
   last_applied_rods       = nil,
   last_rod_apply_ts       = 0,
-  last_rod_change_ts      = 0,
-  last_rod_direction      = nil,
-  last_reactor_demand     = 0,
   steam_tank_name         = nil,
-  reactor_rails_state     = rails.new_state(),
-  reactor_steam_guard_state = {},
 }
 local ctx  -- wird in init() vollständig befüllt
 
@@ -171,10 +159,10 @@ local devices = {
 }
 -- Separate from `devices`: devices.reactors/.turbines hold the registry
 -- ENTRY LIST ({id,name,kind,bound,...}, iterated with ipairs by
--- monitor_ui.lua, state_handlers.lua and discovery_runtime.build_modules()),
+-- monitor_ui.lua and discovery_runtime.build_modules()),
 -- while peripheral_cache.reactors/.turbines hold the wrapped CC:Tweaked
 -- peripheral objects keyed by NAME (looked up by reactor_control.lua/
--- turbine_control.lua/module_lifecycle.lua). These must stay two distinct
+-- turbine_control.lua). These must stay two distinct
 -- tables -- aliasing them let discovery_runtime.M.cache()'s peripheral-map
 -- write silently overwrite devices.reactors/.turbines with a name-keyed map,
 -- so every ipairs() consumer above saw zero entries and modules_registry
@@ -197,12 +185,11 @@ local RT_BUILD_INFO = (function()
 end)()
 
 local comms, services, slow_services
-local node_state_machine
+-- Betriebsmodus-Anzeige (INIT/AUTONOM/MASTER/SAFE). Die echte Regelung
+-- kennt diesen Wert nicht -- sie lebt vollstaendig in rt2_engine.lua; hier
+-- steht er nur fuer Telemetrie und den lokalen Schirm, und rt2_engine's
+-- status_fields() ueberschreibt ihn, sobald es einen Modus meldet.
 local current_state_value = "INIT"
-local states_table
--- Set once in init() from config.engine ("v2" AND at most one reactor
--- discovered). See rt2_engine.lua's module header for what "v2" replaces.
-local engine_v2 = false
 
 local STATE = {
   INIT   = "INIT", AUTONOM = "AUTONOM",
@@ -212,24 +199,12 @@ local STATE = {
 local warned = {}
 local last_command, last_command_ts
 local last_status_snapshot
-local capacity_learning_state  -- persistenter Learning-State
--- true waehrend der Reaktor NUR fuer eine einmalige autonome Kapazitaets-
--- messung (kein Master verbunden) hochgefahren wurde -- siehe monitor_master
--- weiter unten und state_handlers.request_capacity_learning_startup_if_needed().
-local capacity_learning_autonom_active = false
-
--- Persistent module-startup state (which module is booting, queue,
--- watchdog) backing start_module()/process_startup()/
--- request_startup_if_needed().
+-- Geraete-Verzeichnis fuer Telemetrie/UI (discovery_runtime.build_modules()).
+-- Es traegt keinen Lebenszyklus mehr: v1s Startup-Warteschlange, Ramp-
+-- Zustaende und der Startup-Watchdog sind mit v1 entfallen. rt2_engine.lua
+-- faehrt Reaktoren und Turbinen ohne Startup-Sequenz hoch -- es regelt vom
+-- ersten Takt an aus dem Dampf-Fuellstand.
 local modules_registry = {}
-local active_startup_id = nil
-local startup_queue_list = {}
-local startup_started_ms_value = nil
-local startup_watchdog_tripped_value = false
--- Forward declaration: make_lifecycle_ctx() is defined in init() (needs
--- comms/ctx/node_state_machine as upvalues) but must be reachable from
--- build_command_ctx(), which is defined before init().
-local make_lifecycle_ctx
 
 -- ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
@@ -246,173 +221,50 @@ end
 
 local safe_wrapped_call = support_runtime.safe_wrapped_call
 
-local function current_state() return current_state_value end
-
-local function is_master_connected()
-  return role_logic.is_master_connected({
-    comms = comms, master_role = constants.roles.MASTER,
-    last_seen_ts = master_seen_ts,
-    heartbeat_interval = config.heartbeat_interval
-  })
-end
-
-local function master_peer_state()
-  return role_logic.master_peer_state(comms, constants.roles.MASTER)
-end
-
--- ── Capacity Cache ───────────────────────────────────────────────────────────
-
--- Fix (2026-09-18, Log-Analyse disk6.zip): load_capacity_cache() baute die
--- Boot-Zeit-Signatur bisher aus config.turbines -- reinen Namen-Strings
--- ({name=name}, kein .id). capacity_learning.M.update() (Laufzeit, ueber
--- status_snapshot.lua) berechnet dieselbe Signatur dagegen aus den
--- Registry-Bindings, deren Eintraege IMMER ein .id-Feld tragen (der
--- gehashte Geraete-Key aus core/registry.lua) -- M.topology_signature()
--- bevorzugt turbine.id vor turbine.name. Boot- und Laufzeit-Signatur
--- verglichen also strukturell zwei verschiedene Dinge (Name vs. Hash-ID)
--- und stimmten NIE ueberein -- der Cache wurde dadurch bei JEDEM Neustart
--- verworfen ("Capacity cache rejected: hardware topology changed"), auch
--- wenn real gar keine Topologie-Aenderung vorlag. Folge: nach jedem
--- Reboot fehlte capacity_learning fuer die volle Relearn-Dauer, MASTER
--- meldete waehrenddessen "Profile ... base power is unavailable; target
--- unchanged at 0.00". Fix: dieselben Registry-Eintraege (devices.turbines,
--- von discover() bereits vor diesem Aufruf befuellt) fuer die Boot-
--- Signatur verwenden wie M.update() zur Laufzeit -- id und name mitgeben.
-local function load_capacity_cache()
-  local topology = {}
-  for _, turbine in ipairs(devices.turbines or {}) do
-    topology[#topology + 1] = { id = turbine.id, name = turbine.name }
-  end
-  return capacity_cache.load({
-    path = CONFIG.CAPACITY_CACHE_PATH,
-    turbine_count = #(devices.turbines or {}),
-    topology_signature = capacity_learning.topology_signature(topology),
-    log = log
-  })
-end
-
-local function save_capacity_cache(learning)
-  return capacity_cache.save(learning, {
-    path = CONFIG.CAPACITY_CACHE_PATH,
-    turbine_count = #(devices.turbines or {})
-  })
-end
+-- Die Master-Verbindung wird nicht mehr hier bewertet: rt2_master_link.lua
+-- fuehrt sie, gespeist aus note_master_seen() (siehe comms on_message in
+-- init()). Die frueher hier stehenden Helfer is_master_connected() und
+-- master_peer_state() waren v1s zweite Meinung darueber -- genau die Art
+-- doppelter Wahrheit, die dieser Umbau beseitigt.
 
 -- ── ctx-Builder ───────────────────────────────────────────────────────────────
 -- Baut das ctx-Objekt, das alle Fachmodule bekommen.
 -- Statt vieler lokaler Closures hat jede Funktion jetzt eine explizite
 -- Abhängigkeitsliste am Kopf (ctx.*).
 
+-- Der ctx traegt nur noch, was der Hardware-Zugriff braucht: Peripherie,
+-- Capability-Cache, Konfiguration, Logging. Die Regelung bekommt ihn nicht
+-- mehr -- rt2_engine.lua liest die Hardware ueber nodes/rt/rt2_adapter.lua
+-- und haelt seinen Zustand selbst.
 local function build_ctx()
   return {
-    -- State-Felder (direkt, nicht geschachtelt)
     last_applied_rods         = state.last_applied_rods,
     last_rod_apply_ts         = state.last_rod_apply_ts,
-    last_rod_change_ts        = state.last_rod_change_ts,
-    last_rod_direction        = state.last_rod_direction,
-    last_reactor_demand       = state.last_reactor_demand,
     steam_tank_name           = state.steam_tank_name,
-    reactor_rails_state       = state.reactor_rails_state,
-    reactor_steam_guard_state = state.reactor_steam_guard_state,
-    -- Runtime-State (von runtime_ctx)
     peripherals               = peripheral_cache,
-    -- Read-only reference so reactor_control.lua can reuse module_lifecycle's
-    -- already-fresh-this-tick module.coolant_safety_diag instead of calling
-    -- ctx.fluid.read_coolant_sample() a second time per reactor per tick --
-    -- module_lifecycle.update_module_states() always runs first in
-    -- control_tick() (safety-first ordering), so by the time
-    -- reactor_control.updateReactorControl() reads this, it's guaranteed
-    -- fresh for the current tick. See reactor_control.lua's
-    -- cached_coolant_ratio().
     modules                   = modules_registry,
-    reactor_ctrl              = {},   -- wird in init_reactor_ctrl befüllt
-    turbine_ctrl_store        = {},   -- wird in init_turbine_ctrl befüllt
-    autonom_state             = {
-      reactors = {}, turbines = {},
-      pending_rod_direction = nil,
-      partial_turbine_index = 1,
-      partial_turbine_last_rotate = 0,
-    },
-    autonom_control_logged    = false,
+    reactor_ctrl              = {},   -- wird in init_reactor_ctrl befuellt
+    turbine_ctrl_store        = {},   -- wird in init_turbine_ctrl befuellt
     capability_cache          = { reactors = {}, turbines = {} },
-    last_reactor_tick         = 0,
-    last_reactor_debug_log    = 0,
-    capacity_learning         = nil,
     -- Config
     config  = config,
     CONFIG  = CONFIG,
     -- Module
     adapters          = adapters,
     safety            = safety,
-    rails             = rails,
     fluid             = fluid,
     utils             = utils,
-    reactor_steam_guard = reactor_steam_guard,
-    turbine_regulator = turbine_regulator,
-    flow_apply_helpers = flow_apply_helpers,
     binding           = binding,
     runtime_config    = runtime_config,
-    -- Zugriff auf andere Fachmodule
     reactor_control   = reactor_control,
-    -- Zustands-Accessoren
-    targets           = nil,  -- wird in init() gesetzt
-    current_state     = current_state,
-    STATE             = STATE,
     -- Funktionen
     log               = log,
     warn_once         = warn_once,
     safe_wrapped_call = safe_wrapped_call,
-    load_capacity_cache = load_capacity_cache,
     get_turbine_ctrl  = function(name)
       return turbine_control.get_turbine_ctrl(ctx, name)
     end,
-    warned            = {},   -- Dedup-Map für warn_once
-    -- reactor_control.lua's SAFE-recovery path calls ctx.setState(...) --
-    -- this context needs the field.
-    --
-    -- P0 Safety-Fix (2026-09-18, unabhaengig verifizierter externer Codeanalyse-
-    -- Befund): setState() reichte next_state bisher UNGESCHUETZT an
-    -- node_state_machine:transition() weiter. Alle vier tatsaechlichen
-    -- Aufrufer (reactor_control.lua: ctx.STATE.MASTER; module_lifecycle.lua
-    -- x2: ctx.STATE.SAFE) uebergeben aber ausschliesslich Werte aus dem
-    -- BETRIEBSMODUS-Namensraum (ctx.STATE: INIT/AUTONOM/MASTER/SAFE) -- ein
-    -- komplett anderes System als node_state_machine's Lifecycle-Zustaende
-    -- (OFF/STARTUP/RUNNING/LIMITED/AUTONOM/MANUAL/EMERGENCY, siehe shared/
-    -- constants.lua). Weder "MASTER" noch "SAFE" existieren dort als gueltiger
-    -- Zustand -- core/state_machine.lua's transition() wirft dafuer
-    -- ungeschuetzt error("invalid state: ..."). Da control_tick() nur von
-    -- aussen (service_manager's pcall) abgefangen wird, crashte das JEDEN
-    -- einzelnen control_tick() sofort an dieser Stelle:
-    --   - reactor_control.lua's SAFE-Auto-Recovery (Temperatur wieder unter
-    --     dem Hysterese-Schwellwert) konnte den Betriebsmodus dadurch nie
-    --     tatsaechlich zurueck auf MASTER setzen -- der Knoten blieb
-    --     PERMANENT im SAFE-Betriebsmodus haengen, ganz ohne dass der
-    --     Operator das jemals in einem Log als expliziten Fehler sehen
-    --     wuerde (nur wiederholte "Service tick failed (control)"-Retries).
-    --   - Noch schwerer: module_lifecycle.lua ruft ctx.setState(SAFE, ...)
-    --     ZUERST auf, dann erst (in derselben if-current_state~=SAFE-
-    --     Bedingung, direkt danach) node_state_machine:transition(EMERGENCY)
-    --     -- die eigentliche SCRAM-Sicherheitsreaktion. Der Crash bei
-    --     setState() verhinderte, dass dieser zweite, tatsaechlich gueltige
-    --     Transition-Aufruf je erreicht wurde -- ein realer Temperatur-/
-    --     Kuehlmittel-Trip haette so NIE zu einem SCRAM gefuehrt, sondern
-    --     nur zu endlosen crashenden Regel-Ticks.
-    -- Fix: setState() setzt einfach nur current_state_value (das Betriebsmodus-
-    -- Feld, das ctx.current_state() liest) -- exakt was alle vier Aufrufer
-    -- tatsaechlich brauchen. node_state_machine-Uebergaenge laufen bereits
-    -- an anderer Stelle ueber eigene, direkte, korrekte Aufrufe (z.B.
-    -- module_lifecycle.lua's ctx.node_state_machine:transition(EMERGENCY)
-    -- direkt daneben) und muessen hier nicht mehr dupliziert werden.
-    setState = function(next_state, reason)
-      log("INFO", "State-Uebergang: " .. tostring(next_state) .. (reason and (" (" .. tostring(reason) .. ")") or ""))
-      current_state_value = next_state
-    end,
-    -- reactor_control.lua's SAFE-Exit braucht Zugriff auf node_state_machine
-    -- (fuer den EMERGENCY->RUNNING-Gegenzug, siehe dort), das build_ctx()
-    -- bisher gar nicht bereitstellte. Getter statt direktem Feld: build_ctx()
-    -- laeuft in init() VOR configure_state_machine(), ein direktes Feld
-    -- wuerde also permanent nil einfrieren.
-    get_node_state_machine = function() return node_state_machine end,
+    warned            = {},   -- Dedup-Map fuer warn_once
   }
 end
 
@@ -420,38 +272,14 @@ end
 -- ctx ist keine Live-Referenz auf state — nach jedem Tick schreiben wir
 -- die mutierten Felder zurück.
 
+-- ctx ist keine Live-Referenz auf state -- nach jedem Hardware-Zugriff
+-- schreiben wir die mutierten Felder zurueck. Das Capacity-Learning ist
+-- hier ersatzlos entfallen: rt2_capacity.lua fuehrt sein eigenes Lernen und
+-- rt2_engine.lua schreibt dessen Cache selbst (rt2_capacity_cache.lua).
 local function writeback_ctx()
-  state.last_applied_rods         = ctx.last_applied_rods
-  state.last_rod_apply_ts         = ctx.last_rod_apply_ts
-  state.last_rod_change_ts        = ctx.last_rod_change_ts
-  state.last_rod_direction        = ctx.last_rod_direction
-  state.last_reactor_demand       = ctx.last_reactor_demand
-  state.steam_tank_name           = ctx.steam_tank_name
-  state.reactor_rails_state       = ctx.reactor_rails_state
-  state.reactor_steam_guard_state = ctx.reactor_steam_guard_state
-
-  -- Capacity-Learning zurückschreiben
-  if ctx.capacity_learning and ctx.capacity_learning.ready == true then
-    local prev_max = capacity_learning_state
-      and capacity_learning_state.max_output or 0
-    local topology_changed = not capacity_learning_state
-      or ctx.capacity_learning.topology_signature ~= capacity_learning_state.topology_signature
-    if ctx.capacity_learning.dirty == true
-        or topology_changed
-        or ctx.capacity_learning.max_output > prev_max then
-      local saved, save_err = save_capacity_cache(ctx.capacity_learning)
-      if saved then
-        ctx.capacity_learning.dirty = false
-        log("INFO", string.format("Capacity cached: max_output=%.2f",
-          ctx.capacity_learning.max_output))
-      else
-        log("WARN", "Capacity cache write failed: " .. tostring(save_err))
-      end
-    end
-    capacity_learning_state = ctx.capacity_learning
-  elseif ctx.capacity_learning then
-    capacity_learning_state = ctx.capacity_learning
-  end
+  state.last_applied_rods = ctx.last_applied_rods
+  state.last_rod_apply_ts = ctx.last_rod_apply_ts
+  state.steam_tank_name   = ctx.steam_tank_name
 end
 
 -- ── Discovery ────────────────────────────────────────────────────────────────
@@ -576,35 +404,35 @@ local function build_rt_health_payload()
     configured_reactors = runtime_config.configured_reactors,
     configured_turbines = runtime_config.configured_turbines,
     health = health, warn_once = warn_once,
-    -- Was hardcoded false, so MASTER could never see the required
-    -- degraded state (CONTROL_DEGRADED) after a startup watchdog timeout.
-    startup_watchdog_tripped = startup_watchdog_tripped_value,
+    -- v1s Startup-Watchdog gibt es nicht mehr: rt2_engine.lua kennt keine
+    -- Startup-Sequenz, die ueberwacht werden muesste. Ein hartes false ist
+    -- hier also keine fehlende Meldung, sondern der zutreffende Wert.
+    startup_watchdog_tripped = false,
     rt_health = rt_health,
     configured_caps = runtime_config.configured_caps,
   })
 end
 
+-- Die Hardware-Aufnahme (Brennstoff, Temperatur, Drehzahl, Zustand der
+-- Bindungen) kommt weiter aus status_snapshot.lua -- sie liest Geraete, sie
+-- regelt nichts. Alles, was eine ENTSCHEIDUNG ist (Modus, Knotenzustand,
+-- Kapazitaet), kommt aus rt2_engine.lua: es gibt nur noch diese eine Quelle.
 local function build_status_payload(status_level)
+  local v2 = rt2_engine.status_fields()
   local ctx_snap = {
     status_level         = status_level or constants.status_levels.OK,
-    node_state_machine   = node_state_machine,
-    current_state        = current_state_value,
+    current_state        = v2.mode or current_state_value,
     targets              = ctx.targets,
     build_health_payload = build_rt_health_payload,
     devices              = devices,
     registry             = registry,
-    -- Were hardcoded {}/nil/{}, so MASTER never received real module
-    -- progress (ramp_state, STARTING/STABLE) via telemetry.
     modules              = modules_registry,
-    active_startup       = active_startup_id,
-    startup_queue        = startup_queue_list,
     turbine_adapter      = adapters.turbine,
     reactor_adapter      = adapters.reactor,
     log_prefix           = CONFIG.LOG_PREFIX,
-    capacity_learning    = ctx and ctx.capacity_learning or capacity_learning_state,
     log                  = log,
     config               = config,
-    -- Felder für status_snapshot.build_turbine_snapshots / build_reactor_snapshots
+    -- Felder fuer status_snapshot.build_turbine_snapshots / build_reactor_snapshots
     get_available_steam  = function() return reactor_control.get_available_steam(ctx) end,
     get_device_caps      = function(k,n) return turbine_control.get_device_caps(ctx,k,n) end,
     read_turbine_rpm     = function(t,c) return turbine_control.read_turbine_rpm(ctx,t,c) end,
@@ -614,59 +442,16 @@ local function build_status_payload(status_level)
     status_snapshot      = status_snapshot_lib,
   }
   local payload = status_snapshot_lib.build_status_payload(ctx_snap)
-  if engine_v2 then
-    -- v2 bypasses ctx.capacity_learning/current_state_value entirely --
-    -- override only the fields that actually come from those (mode,
-    -- capacity), leaving v1's real turbine/reactor hardware snapshots
-    -- (fuel amount, health, etc. -- still genuinely read this tick) as-is.
-    local v2 = rt2_engine.status_fields()
-    payload.mode = v2.mode
-    payload.control_mode = v2.mode
-    -- node_state_machine is intentionally never driven under v2 (its
-    -- transitions fire v1's on_enter control work -- see rt2_projection.lua),
-    -- so payload.state would otherwise report the frozen boot value forever.
-    if v2.node_state then payload.state = v2.node_state end
-    if v2.capacity_ready ~= nil then payload.capacity_ready = v2.capacity_ready end
-    if v2.capacity_max then payload.capacity_max = v2.capacity_max end
-    if v2.capacity_at_target then payload.capacity_stable_turbines = v2.capacity_at_target end
-    if v2.capacity_total_turbines then payload.capacity_total_turbines = v2.capacity_total_turbines end
-    if v2.capacity_reason then payload.capacity_source = v2.capacity_reason end
-    return payload
-  end
-  -- Learning-State zurückschreiben
-  if ctx then ctx.capacity_learning = ctx_snap.capacity_learning end
+  payload.mode = v2.mode
+  payload.control_mode = v2.mode
+  if v2.node_state then payload.state = v2.node_state end
+  if v2.capacity_ready ~= nil then payload.capacity_ready = v2.capacity_ready end
+  if v2.capacity_max then payload.capacity_max = v2.capacity_max end
+  if v2.capacity_at_target then payload.capacity_stable_turbines = v2.capacity_at_target end
+  if v2.capacity_total_turbines then payload.capacity_total_turbines = v2.capacity_total_turbines end
+  if v2.capacity_reason then payload.capacity_source = v2.capacity_reason end
   writeback_ctx()
   return payload
-end
-
--- Feeds startup_diagnostics.handle_startup_timeout()'s EMERGENCY-vs-WARNING
--- decision (max_temp/avg_rpm), which status_snapshot.build_status_payload()
--- doesn't provide -- scans bound peripherals directly instead.
-local function update_status_snapshot()
-  local max_temp = nil
-  for _, entry in ipairs(registry:get_bound_devices("reactor")) do
-    local info = adapters.reactor.inspect(entry.name, CONFIG.LOG_PREFIX)
-    local temp = info and info.temperature
-    if type(temp) == "number" and (not max_temp or temp > max_temp) then
-      max_temp = temp
-    end
-  end
-  local turbines = {}
-  local rpm_sum, rpm_count = 0, 0
-  for _, entry in ipairs(registry:get_bound_devices("turbine")) do
-    local info = adapters.turbine.inspect(entry.name, CONFIG.LOG_PREFIX)
-    local rpm = info and info.rpm
-    if type(rpm) == "number" then
-      rpm_sum = rpm_sum + rpm
-      rpm_count = rpm_count + 1
-    end
-    table.insert(turbines, { name = entry.name, rpm = rpm })
-  end
-  return {
-    max_temp = max_temp,
-    avg_rpm  = rpm_count > 0 and (rpm_sum / rpm_count) or nil,
-    turbines = turbines,
-  }
 end
 
 local function broadcast_status(status_level)
@@ -686,8 +471,6 @@ local function update_monitor()
     current_state = current_state_value,
     configured_reactors = runtime_config.configured_reactors,
     configured_turbines = runtime_config.configured_turbines,
-    -- get_target_rpm() lives in turbine_control, not reactor_control.
-    get_target_rpm = function() return turbine_control.get_target_rpm(ctx) end,
     binding = binding,
     build_health_payload = build_rt_health_payload,
     read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
@@ -698,56 +481,47 @@ local function update_monitor()
     get_device_caps = function(k, n) return turbine_control.get_device_caps(ctx, k, n) end,
     get_available_steam = function() return reactor_control.get_available_steam(ctx) end,
     last_status_snapshot = last_status_snapshot,
-    capacity_learning    = ctx and ctx.capacity_learning or capacity_learning_state,
     constants            = constants,
     targets              = ctx and ctx.targets or {},
     -- monitor_ui.lua reads model.target_power directly, not model.targets.power.
     target_power         = ctx and ctx.targets and ctx.targets.power or 0,
     target_percent       = ctx and ctx.targets and ctx.targets.power_percent or 0,
-    node_state_machine   = node_state_machine,
     registry             = registry,
     last_command_ts      = last_command_ts,
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
     manifest_id          = RT_BUILD_INFO.manifest_id,
     release_id           = RT_BUILD_INFO.release_id,
   }
-  if engine_v2 then
-    -- Dieselbe Uebersetzung wie in build_status_payload() -- sie fehlte
-    -- hier, und deshalb zeigte der RT-eigene Schirm durchgehend v1's
-    -- Daten: "KAPAZITAET WIRD GELERNT", CAPACITY 0.0, SOLL 0.0,
-    -- MASTER % 0.0 -- auch dann noch, als im Terminal daneben schon
-    -- "v2 Einlernen FERTIG: ... RF/t aus 25 Turbinen" stand (Live-Test
-    -- node-101). Gemeldet wurde das zu Recht als Widerspruch: es war
-    -- einer, nur zwischen zwei Anzeigen derselben Node, nicht in der
-    -- Regelung.
-    local v2 = rt2_engine.status_fields()
-    monitor_ctx.capacity_override = {
-      ready         = v2.capacity_ready == true,
-      max_output    = v2.capacity_max or 0,
-      at_target     = v2.capacity_at_target or 0,
-      total_turbines = v2.capacity_total_turbines or 0,
-      reason        = v2.capacity_reason or v2.capacity_source or "UNKNOWN",
-    }
-    monitor_ctx.node_state    = v2.node_state
-    monitor_ctx.current_state = v2.mode
-    -- ctx.targets fuellt unter v2 niemand mehr (handle_command_v2 ersetzt
-    -- v1's command_handler); die Vorgabe lebt im Orchestrator.
-    local v2_targets = {}
-    for k, val in pairs(ctx and ctx.targets or {}) do v2_targets[k] = val end
-    v2_targets.power_percent = v2.master_percent or v2_targets.power_percent
-    v2_targets.power         = v2.power_target or v2_targets.power
-    -- Zieldrehzahl fuer die Anzeige: die hoechste, die dieser Takt
-    -- irgendeiner Turbine gesetzt hat (Puffer-/Aus-Slots liegen darunter).
-    local max_target_rpm = 0
-    for _, t in ipairs(v2.turbines or {}) do
-      local r = tonumber(t.target_rpm) or 0
-      if r > max_target_rpm then max_target_rpm = r end
-    end
-    if max_target_rpm > 0 then v2_targets.rpm = max_target_rpm end
-    monitor_ctx.targets       = v2_targets
-    monitor_ctx.target_power   = v2_targets.power
-    monitor_ctx.target_percent = v2_targets.power_percent
+  -- Genau dieselbe Uebersetzung wie in build_status_payload(): der lokale
+  -- Schirm und die Telemetrie an MASTER zeigen denselben Regler, also
+  -- duerfen sie nicht aus verschiedenen Quellen lesen.
+  local v2 = rt2_engine.status_fields()
+  monitor_ctx.capacity_override = {
+    ready         = v2.capacity_ready == true,
+    max_output    = v2.capacity_max or 0,
+    at_target     = v2.capacity_at_target or 0,
+    total_turbines = v2.capacity_total_turbines or 0,
+    reason        = v2.capacity_reason or v2.capacity_source or "UNKNOWN",
+  }
+  monitor_ctx.node_state    = v2.node_state
+  monitor_ctx.current_state = v2.mode
+  -- ctx.targets fuellt niemand mehr (handle_command_rt2 ist der einzige
+  -- Command-Handler); die Vorgabe lebt im Orchestrator.
+  local v2_targets = {}
+  for k, val in pairs(ctx and ctx.targets or {}) do v2_targets[k] = val end
+  v2_targets.power_percent = v2.master_percent or v2_targets.power_percent
+  v2_targets.power         = v2.power_target or v2_targets.power
+  -- Zieldrehzahl fuer die Anzeige: die hoechste, die dieser Takt
+  -- irgendeiner Turbine gesetzt hat (Puffer-/Aus-Slots liegen darunter).
+  local max_target_rpm = 0
+  for _, t in ipairs(v2.turbines or {}) do
+    local r = tonumber(t.target_rpm) or 0
+    if r > max_target_rpm then max_target_rpm = r end
   end
+  if max_target_rpm > 0 then v2_targets.rpm = max_target_rpm end
+  monitor_ctx.targets       = v2_targets
+  monitor_ctx.target_power   = v2_targets.power
+  monitor_ctx.target_percent = v2_targets.power_percent
   last_status_snapshot = monitor_ui.update(mon, monitor_ctx)
 end
 
@@ -756,9 +530,13 @@ end
 local rt_update_quiescing = false
 local rt_quiesce_hold_logged = false
 
+-- Der einzige Regel-Einstiegspunkt der Node. Frueher standen hier v1s
+-- Lebenszyklus und eine Zustandsmaschine, deren
+-- on_tick-Handler die Regelung aufriefen; beides ist entfallen. rt2_engine
+-- .tick() macht alles: lesen, entscheiden, schreiben, speichern.
 local function control_tick()
   -- A dedicated safe-state writer owns the hardware from the first update
-  -- quiesce attempt onward. Normal regulation/startup must not race it.
+  -- quiesce attempt onward. Normal regulation must not race it.
   -- Diese Sperre war bis v768 eine Einbahnstrasse ohne Rueckweg: wurde ein
   -- Quiesce-Request storniert, statt in einen Reboot zu laufen, regelte die
   -- Node nie wieder -- unsichtbar, weil Anzeige und Drehzahl-Messung
@@ -774,130 +552,14 @@ local function control_tick()
     end
     return
   end
-  if engine_v2 then
-    rt2_engine.tick(ctx)
-    return
-  end
-  -- Safety-first order: update_module_states() (detects/reacts to danger
-  -- states across ALL modules, e.g. TEMP/WATER limits -> ERROR/SAFE/
-  -- EMERGENCY) runs BEFORE process_startup() (advances only the currently
-  -- starting module) and BEFORE the node-state-machine tick -- control
-  -- must never act on an already-stale safety state from this same tick.
-  module_lifecycle.update_module_states(make_lifecycle_ctx())
-  module_lifecycle.process_startup(make_lifecycle_ctx())
-  -- Architektur-Fix (2026-09-18, unabhaengig verifizierter externer
-  -- Codeanalyse-Befund): node_state_machine:tick() wurde bisher NIRGENDS
-  -- aufgerufen (verifiziert per grep + git log -S ueber die komplette
-  -- Historie) -- reactor_control.updateReactorControl()/turbine_control.
-  -- updateControl() liefen bisher direkt und unbedingt hier, unabhaengig
-  -- vom node_state_machine-Zustand. state_handlers.lua's on_tick-Handler
-  -- (STARTUP/RUNNING/LIMITED/AUTONOM rufen adjust_reactors()/adjust_
-  -- turbines() bereits selbst auf; OFF/EMERGENCY/MANUAL bewusst nicht --
-  -- siehe dort) waren dadurch komplett totes Delegations-Ziel: Watchdog,
-  -- Startup-Queue-Verarbeitung, monitor_master() (Master-Verlust-Erkennung,
-  -- Kapazitaetslern-Kickstart) und vor allem die EMERGENCY-Semantik (nach
-  -- SCRAM keine Regelung mehr, bis explizit zurueckgesetzt) griffen nie.
-  -- node_state_machine:tick() ruft jetzt genau EINEN der on_tick-Handler
-  -- auf (je nach aktuellem Zustand) -- diese sind die einzige Quelle fuer
-  -- adjust_reactors()/adjust_turbines() ab jetzt (siehe rt_state_handler_
-  -- context_wiring_test.lua, das genau das schon immer verlangte). Node
-  -- wird bei jedem Boot in configure_state_machine() sofort OFF->RUNNING
-  -- geschaltet, ein EMERGENCY-Trip hat seit dem parallelen Fix in
-  -- reactor_control.lua einen Weg zurueck nach RUNNING (SAFE-Auto-Recovery).
-  if node_state_machine then
-    node_state_machine:tick()
-  end
-  -- Learning-Update (als Teil des Status-Snapshots, läuft via build_status_payload)
-  writeback_ctx()
+  rt2_engine.tick(ctx)
 end
 
 -- ── Command-Handler ───────────────────────────────────────────────────────────
 
 local handle_command
 
-local function build_command_ctx()
-  return {
-    protocol = protocol, constants = constants, STATE = STATE,
-    TARGET_RPM = CONFIG.TARGET_RPM,
-    targets = ctx and ctx.targets or {},
-    -- build_command_ctx() runs (init() line ~948) BEFORE configure_state_
-    -- machine() assigns the node_state_machine upvalue (init() line ~1012)
-    -- -- a direct `node_state_machine = node_state_machine` field here would
-    -- snapshot a permanent nil into this ctx table forever. Only a closure
-    -- sees the value configure_state_machine() assigns later.
-    get_node_state_machine = function() return node_state_machine end,
-    apply_mode = function(mode)
-      state_handlers.apply_mode({
-        STATE = STATE, config = config, log = log,
-        constants = constants,
-        is_master_connected = is_master_connected,
-        get_current_state = current_state,
-        set_current_state = function(v) current_state_value = v end,
-        get_node_state_machine = function() return node_state_machine end,
-        -- Only reachable via SET_MODE("SAFE"), never observed in practice
-        -- (MASTER always uses SET_SETPOINTS' desired_node_state=EMERGENCY
-        -- for that), but state_handlers.apply_mode()'s SAFE branch calls
-        -- these unconditionally -- wire them so that path can't crash on
-        -- a missing function either, matching configure_state_machine()'s
-        -- state_ctx below.
-        apply_safe_controls = function()
-          module_lifecycle.apply_safe_controls(make_lifecycle_ctx())
-        end,
-        set_reactors_active = function(active, reason)
-          module_lifecycle.set_reactors_active(make_lifecycle_ctx(), active, reason)
-        end,
-        set_turbines_active = function(active, reason)
-          module_lifecycle.set_turbines_active(make_lifecycle_ctx(), active, reason)
-        end,
-      }, mode)
-    end,
-    -- MASTER-ausgeloeste STARTUP_STAGE/REQUEST_STARTUP_MODULE-Kommandos brauchen
-    -- echte Closures hier, sonst laufen sie stillschweigend ins Leere.
-    request_startup_if_needed = function(reason)
-      local lctx = make_lifecycle_ctx()
-      lctx.get_node_state_machine = function() return node_state_machine end
-      return state_handlers.request_startup_if_needed(lctx, reason)
-    end,
-    start_module = function(module_id, module_type, ramp_profile)
-      return module_lifecycle.start_module(make_lifecycle_ctx(), module_id, module_type, ramp_profile)
-    end,
-    add_alarm = function(_, severity, msg) comms:send_alert(severity, msg) end,
-    note_master_seen = function() master_seen_ts = os.epoch("utc") end,
-    get_network_id = function()
-      return comms and comms.network and comms.network.id or config.node_id
-    end,
-    get_current_state = current_state,
-    get_states = function() return states_table or {} end,
-    set_last_command    = function(v) last_command = v end,
-    set_last_command_ts = function(v) last_command_ts = v end,
-    get_capacity_learning = function()
-      return ctx and ctx.capacity_learning or capacity_learning_state
-    end,
-    -- Per Command aenderbar und persistent gespeichert; gibt das echte
-    -- Persistenzresultat zurueck (statt es zu verwerfen), damit der Aufrufer
-    -- ein ehrliches `persisted`-Feld ins ACK_APPLIED-Ergebnis aufnehmen kann.
-    set_reactor_fill_target = function(value)
-      config.rails = config.rails or {}
-      config.rails.reactor_fill_target = value
-      local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
-      if not ok_write then
-        log("WARN", ("SET_REACTOR_FILL_TARGET: Persistierung fehlgeschlagen (%s) -- Wert gilt nur bis zum naechsten Neustart"):format(tostring(werr)))
-      else
-        log("INFO", ("Reactor fill target changed to %.0f%%"):format(value * 100))
-      end
-      return ok_write == true
-    end,
-    log = log,
-    capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state,
-  }
-end
-
--- v2 command entry point (config.engine=="v2"): same protocol validation
--- as command_handler_lib's dispatcher (is_for_node/proto compatibility),
--- then delegates straight to rt2_engine.handle_command() -- see that
--- module and rt2_command_handler.lua's header for why there is no
--- SET_MODE handling to duplicate here.
-local function handle_command_v2(message)
+local function handle_command_rt2(message)
   local network_id = comms and comms.network and comms.network.id or config.node_id
   if not protocol.is_for_node(message, network_id) then
     return
@@ -926,224 +588,6 @@ end
 
 -- ── Init ─────────────────────────────────────────────────────────────────────
 
-local function configure_lifecycle_context()
-  make_lifecycle_ctx = function()
-    return {
-      -- State
-      STATE             = STATE,
-      log               = log,
-      warn_once         = warn_once,
-      config            = config,
-      constants         = constants,
-      comms             = comms,
-      modules           = modules_registry,
-      peripherals       = peripheral_cache,
-      configured_reactors = runtime_config.configured_reactors,
-      configured_turbines = runtime_config.configured_turbines,
-      binding           = require("nodes.rt.binding"),
-      -- State-Machine
-      get_current_state    = current_state,
-      current_state        = current_state,
-      node_state_machine   = node_state_machine,
-      setState             = function(s) current_state_value = s end,
-      -- Targets
-      targets           = ctx and ctx.targets or {},
-      -- Turbinen/Reaktor-Funktionen (aus den neuen Modulen)
-      get_turbine_ctrl  = function(name) return turbine_control.get_turbine_ctrl(ctx, name) end,
-      get_device_caps   = function(k,n) return turbine_control.get_device_caps(ctx, k, n) end,
-      get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
-      clamp_turbine_flow = function(r) return turbine_control.clamp_turbine_flow(ctx, r) end,
-      setTurbineFlow    = function(t,c,r) return turbine_control.setTurbineFlow and
-                           turbine_control.setTurbineFlow(ctx,t,c,r) end,
-      setTurbineActive  = function(t,c,a) return turbine_control.setTurbineActive(ctx,t,c,a) end,
-      update_inductor_for_rpm = function(n,t,c,r,tr)
-        return turbine_control.update_inductor_for_rpm(ctx,n,t,c,r,tr) end,
-      update_turbine_flow_state = function(r,tr,ctrl)
-        return turbine_control.update_turbine_flow_state(ctx,r,tr,ctrl) end,
-      ensure_reactor_ctrl = function(n) return reactor_control.ensure_reactor_ctrl(ctx,n) end,
-      get_effective_regulator_rod_caps = function()
-        return reactor_control.get_effective_regulator_rod_caps(ctx) end,
-      applyReactorRods  = function(t,o,s) return reactor_control.applyReactorRods(ctx,t,o,s) end,
-      setReactorActive  = function(r,c,a) return reactor_control.setReactorActive(ctx,r,c,a) end,
-      read_current_rods = function() return reactor_control.read_current_rods(ctx) end,
-      evaluate_reactor_coolant = function(r,s)
-        return reactor_control.evaluate_reactor_coolant(ctx,r,s) end,
-      ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
-      -- Echte Closures auf die modul-globalen Startup-State-Variablen, damit
-      -- start_module()/process_startup() Zustand lesen/schreiben koennen.
-      get_active_startup           = function() return active_startup_id end,
-      set_active_startup           = function(id) active_startup_id = id end,
-      get_startup_queue            = function() return startup_queue_list end,
-      set_startup_queue            = function(q) startup_queue_list = q or {} end,
-      get_startup_started_ms       = function() return startup_started_ms_value end,
-      set_startup_started_ms       = function(ms) startup_started_ms_value = ms end,
-      get_startup_watchdog_tripped = function() return startup_watchdog_tripped_value end,
-      set_startup_watchdog_tripped = function(v) startup_watchdog_tripped_value = v end,
-      add_alarm    = function(_, sev, msg) if comms then comms:send_alert(sev, msg) end end,
-      -- CC:Tweaked CONFIG-Werte
-      START_FLOW   = CONFIG.START_FLOW   or 100,
-      RPM_TOL      = CONFIG.RPM_TOLERANCE or 15,
-      -- Konsistent mit turbine_control.lua's eigener Konvention: reiner String,
-      -- module_lifecycle.lua liest ctx.TURBINE_MODE_RAMP (nicht als Tabelle).
-      TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
-      -- Explizit in Sekunden benannt und einmalig in Millisekunden umgerechnet,
-      -- da process_startup() mit os.epoch("utc")-Millisekunden rechnet.
-      ramp_duration_ms = function(_ramp_profile)
-        local STARTUP_RAMP_DURATION_S = 30
-        return STARTUP_RAMP_DURATION_S * 1000
-      end,
-      warn_unsupported = function(name, reason)
-        warn_once("unsupported:" .. tostring(name),
-          "Device unsupported: " .. tostring(name) .. " (" .. tostring(reason or "") .. ")")
-      end,
-    }
-  end
-end
-
-local function configure_state_machine()
-  local state_ctx = {
-    -- Basis
-    STATE             = STATE,
-    config            = config,
-    constants         = constants,
-    log               = log,
-    comms             = comms,
-    devices           = devices,
-    modules           = modules_registry,
-    targets           = ctx and ctx.targets or {},
-    TARGET_RPM        = CONFIG.TARGET_RPM,
-    -- Zustands-Accessoren
-    get_current_state      = current_state,
-    set_current_state      = function(v) current_state_value = v end,
-    get_node_state_machine = function() return node_state_machine end,
-    allowed_transitions    = nil,
-    -- Regelungs-Callbacks
-    adjust_turbines   = function() turbine_control.updateControl(ctx) end,
-    adjust_reactors   = function() reactor_control.updateReactorControl(ctx) end,
-    get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
-    ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
-    clamp_autonom_targets = function()
-      if ctx and ctx.targets then
-        local t = ctx.targets
-        t.power = 0
-        t.steam = 0
-        t.rpm   = turbine_control.get_target_rpm(ctx)
-      end
-    end,
-    -- Master-Monitoring
-    monitor_master = function()
-      if not is_master_connected() then
-        if current_state() == STATE.MASTER then
-          log("WARN", "Master disconnected — switching to AUTONOM")
-          current_state_value = STATE.AUTONOM
-        end
-      end
-      -- Ohne SET_SETPOINTS vom Master wird start_module() (und damit
-      -- setActive(true)) nie aufgerufen -- der Reaktor bleibt bei 100%
-      -- Staeben/0% Leistung stehen und capacity_learning.lua kann nie eine
-      -- echte Messung sammeln. Das gilt sowohl OHNE Master (AUTONOM) als
-      -- auch MIT verbundenem Master, der einfach noch nichts angefordert
-      -- hat (MASTER) -- daher hier UNBEDINGT aufgerufen, nicht nur im
-      -- not-connected-Zweig oben. Faehrt den Reaktor NUR fuer die einmalige
-      -- Kapazitaetsmessung hoch; SAFE bleibt aussen vor (state_handlers
-      -- lehnt das intern ab).
-      local lctx = make_lifecycle_ctx()
-      lctx.get_node_state_machine = function() return node_state_machine end
-      lctx.capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state
-      if state_handlers.request_capacity_learning_startup_if_needed(lctx, "CAPACITY_LEARNING") then
-        capacity_learning_autonom_active = true
-      end
-      if capacity_learning_autonom_active
-          and lctx.capacity_learning and lctx.capacity_learning.ready == true then
-        if is_master_connected() then
-          log("INFO", "Capacity learning complete — handing control to MASTER")
-        else
-          log("INFO", "Capacity learning complete — idling reactor until MASTER connects")
-          module_lifecycle.scram(make_lifecycle_ctx())
-        end
-        capacity_learning_autonom_active = false
-      end
-    end,
-    -- Alarm
-    add_alarm = function(_, sev, msg)
-      if comms then comms:send_alert(sev, msg) end
-    end,
-    -- Echte Closures auf die modul-globalen Startup-State-Variablen -- ohne sie
-    -- bleibt der STARTUP-State funktionslos (start_module() taete nichts).
-    get_active_startup           = function() return active_startup_id end,
-    set_active_startup           = function(id) active_startup_id = id end,
-    get_startup_queue            = function() return startup_queue_list end,
-    set_startup_queue            = function(q) startup_queue_list = q or {} end,
-    get_startup_started_ms       = function() return startup_started_ms_value end,
-    set_startup_started_ms       = function(ms) startup_started_ms_value = ms end,
-    get_startup_watchdog_tripped = function() return startup_watchdog_tripped_value end,
-    set_startup_watchdog_tripped = function(v) startup_watchdog_tripped_value = v end,
-    reset_startup_watchdog       = function()
-      startup_watchdog_tripped_value = false
-      startup_started_ms_value = nil
-    end,
-    -- handle_startup_timeout() erwartet direkte Felder (nicht Getter/Setter)
-    -- fuer startup_watchdog_tripped/startup_started_ms, siehe startup_
-    -- diagnostics.lua -- baut deshalb einen eigenen kleinen Snapshot-Context
-    -- statt make_lifecycle_ctx()/state_ctx direkt wiederzuverwenden. node_
-    -- state_machine ist eine Tabellen-Referenz (mutiert von state_machine.lua
-    -- direkt) -- kein manueller Rueckschreib-Sync fuer die state()/transition()-
-    -- Aufrufe darin noetig, nur fuer den tripped-Flag (einfacher Boolean-Wert,
-    -- kein Referenztyp).
-    handle_startup_timeout = function()
-      local diag_ctx = {
-        startup_watchdog_tripped = startup_watchdog_tripped_value,
-        startup_started_ms       = startup_started_ms_value,
-        comms                    = comms,
-        config                   = config,
-        devices                  = devices,
-        registry                 = registry,
-        log                      = log,
-        update_status_snapshot   = update_status_snapshot,
-        constants                = constants,
-        broadcast_status         = broadcast_status,
-        node_state_machine       = node_state_machine,
-        set_active_startup       = function(id) active_startup_id = id end,
-        set_startup_queue        = function(q) startup_queue_list = q or {} end,
-      }
-      local tripped = startup_diagnostics.handle_startup_timeout(diag_ctx)
-      if tripped then
-        startup_watchdog_tripped_value = true
-      end
-    end,
-    start_module = function(module_id, module_type, ramp_profile)
-      return module_lifecycle.start_module(make_lifecycle_ctx(), module_id, module_type, ramp_profile)
-    end,
-    -- Lifecycle-Funktionen (delegieren an module_lifecycle mit vollem Context)
-    scram = function()
-      module_lifecycle.scram(make_lifecycle_ctx())
-    end,
-    apply_safe_controls = function()
-      module_lifecycle.apply_safe_controls(make_lifecycle_ctx())
-    end,
-    set_reactors_active = function(active, reason)
-      local lctx = make_lifecycle_ctx()
-      module_lifecycle.set_reactors_active(lctx, active, reason)
-    end,
-    set_turbines_active = function(active, reason)
-      local lctx = make_lifecycle_ctx()
-      module_lifecycle.set_turbines_active(lctx, active, reason)
-    end,
-  }
-  -- Explicit guard + log confirms the safety-critical master-failover
-  -- check is wired before state_handlers.build()'s own generic assert_fn.
-  state_ctx.is_master_connected = is_master_connected
-  if type(state_ctx.is_master_connected) ~= "function" then
-    error("rt state context missing required function: is_master_connected", 0)
-  end
-  log("INFO", "State context ready (is_master_connected=true)")
-  states_table = state_handlers.build(state_ctx)
-  node_state_machine = machine.new(states_table, constants.node_states.OFF)
-
-  -- Initiale Mode: AUTONOM
-  current_state_value = STATE.AUTONOM
-  node_state_machine:transition(constants.node_states.RUNNING)
-end
 local function init()
   log("INFO", "RT-Node starting (SCADA rewrite)")
 
@@ -1159,48 +603,37 @@ local function init()
   log("INFO", string.format("Discovery: reactors=%d turbines=%d",
     #devices.reactors, #devices.turbines))
 
-  -- v2-Engine-Auswahl (siehe config.lua's "engine"-Feld): nur mit genau
-  -- Mehrere Reaktoren an einem Knoten sind unterstuetzt: sie speisen
-  -- dasselbe Dampfnetz, und jeder regelt seine Staebe unabhaengig aus
-  -- SEINEM eigenen Dampftank (rt2_unit.lua). Sie stimmen sich nicht ab
-  -- und brauchen es auch nicht -- zieht die Flotte mehr, fallen alle
-  -- Taenke, alle fahren die Staebe aus.
-  if config.engine == "v2" then
-    do
-      engine_v2 = true
-      rt2_engine.init({ turbine_count = #devices.turbines, config = config, log = log })
-      log("INFO", string.format("engine=v2 active (%d Reaktor(en), %d Turbinen)",
-        #devices.reactors, #devices.turbines))
-      -- utils.log() routet standardmaessig zum Log-Collector, nicht auf
-      -- den lokalen Bildschirm -- diese Zeile ist bewusst ein direktes
-      -- print(), damit am Computer selbst sofort sichtbar ist, dass v2
-      -- aktiv ist, ohne Router-UI oder Log-Collector zu brauchen.
-      pcall(print, string.format("[RT] engine=v2 AKTIV -- %d Reaktor(en), %d Turbinen",
-        #devices.reactors, #devices.turbines))
-    end
-  end
+  -- Die Regel-Engine. Es gibt nur noch diese eine; das frueher hier
+  -- ausgewertete config.engine-Feld ist entfallen. Mehrere Reaktoren an
+  -- einem Knoten sind
+  -- unterstuetzt: sie speisen dasselbe Dampfnetz, und jeder regelt seine
+  -- Staebe unabhaengig aus SEINEM eigenen Dampftank (rt2_unit.lua). Sie
+  -- stimmen sich nicht ab und brauchen es auch nicht -- zieht die Flotte
+  -- mehr, fallen alle Taenke, alle fahren die Staebe aus.
+  rt2_engine.init({ turbine_count = #devices.turbines, config = config, log = log })
+  log("INFO", string.format("Regler aktiv (%d Reaktor(en), %d Turbinen)",
+    #devices.reactors, #devices.turbines))
+  -- utils.log() routet standardmaessig zum Log-Collector, nicht auf den
+  -- lokalen Bildschirm -- diese Zeile ist bewusst ein direktes print(),
+  -- damit am Computer selbst sofort sichtbar ist, dass der Regler laeuft,
+  -- ohne Router-UI oder Log-Collector zu brauchen.
+  pcall(print, string.format("[RT] REGLER AKTIV -- %d Reaktor(en), %d Turbinen",
+    #devices.reactors, #devices.turbines))
 
-  -- Reaktor/Turbinen-State initialisieren
+  -- Hardware-Zugriffs-State initialisieren (Capability-Cache, Rod-/Flow-
+  -- Buchfuehrung fuer den Update-Quiesce -- keine Regelung)
   reactor_control.init_reactor_ctrl(ctx)
   turbine_control.init_turbine_ctrl(ctx)
 
-  -- Capacity-Cache laden
-  local cached = load_capacity_cache()
-  if cached then
-    ctx.capacity_learning = cached
-    capacity_learning_state = cached
-    log("INFO", string.format("Capacity loaded from cache: max_output=%.2f",
-      cached.max_output))
-  end
-
-  -- Initiale Rod-Stellung
+  -- Initiale Rod-Stellung: voll eingefahren. Der Regler faehrt sie von da
+  -- aus herunter, sobald der Dampftank Bedarf zeigt.
   reactor_control.apply_initial_reactor_rods(ctx)
 
   -- Services
   services = service_manager.new({ log_prefix = "RT" })
   slow_services = service_manager.new({ log_prefix = "RT-BG" })
 
-  handle_command = engine_v2 and handle_command_v2 or command_handler_lib.new(build_command_ctx())
+  handle_command = handle_command_rt2
 
   comms = comms_service.new({
     config = config, log_prefix = "RT",
@@ -1213,7 +646,7 @@ local function init()
       if message.role == constants.roles.MASTER then
         local was_connected = master_seen_ts ~= nil
         master_seen_ts = os.epoch("utc")
-        if engine_v2 then rt2_engine.note_master_seen(master_seen_ts) end
+        rt2_engine.note_master_seen(master_seen_ts)
         if message.type == constants.message_types.STATUS
             and message.payload and message.payload.alerts then
           master_alerts = message.payload.alerts
@@ -1248,7 +681,7 @@ local function init()
     status_interval  = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
     heartbeat_state  = function()
-      return { state = node_state_machine and node_state_machine.state() or "INIT" }
+      return { state = rt2_engine.status_fields().node_state or "INIT" }
     end,
     build_payload = function()
       return build_status_payload(constants.status_levels.OK)
@@ -1263,9 +696,6 @@ local function init()
 
   services:init()
   slow_services:init()
-
-  configure_lifecycle_context()
-  configure_state_machine()
 
   -- Monitor initialisieren
   local mon_entry = adapters.monitor.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
@@ -1341,26 +771,7 @@ local last_quiesce_warning = 0
 
 local function update_quiesce_safe()
   rt_update_quiescing = true
-  active_startup_id = nil
-  startup_queue_list = {}
-  startup_started_ms_value = nil
-  startup_watchdog_tripped_value = false
   current_state_value = STATE.SAFE
-  if node_state_machine then pcall(node_state_machine.transition, node_state_machine, STATE.SAFE) end
-
-  if ctx and ctx.targets then
-    ctx.targets.power = 0
-    ctx.targets.power_percent = 0
-    ctx.targets.steam = 0
-    ctx.targets.enable_reactors = false
-    ctx.targets.enable_turbines = false
-  end
-  for _, module in pairs(modules_registry) do
-    if type(module) == "table" and module.state == "STARTING" then
-      module.state = "OFF"
-      module.progress = 0
-    end
-  end
 
   local reactors_ok = select(1, reactor_control.apply_update_quiesce(ctx))
   local turbines_ok = select(1, turbine_control.apply_update_quiesce(ctx))
@@ -1385,19 +796,16 @@ end
 -- laeuft (installer/auto_update.lua's recover_unexpected() tut genau das im
 -- Zustand QUIESCE_REQUESTED -- ohne Reboot). Ohne diesen Rueckweg blieb die
 -- Node danach fuer immer stehen: control_tick() kehrte sofort zurueck, also
--- regelte weder v1 noch v2 noch, waehrend auf allen Turbinen Flow 0 stand
+-- regelte niemand mehr, waehrend auf allen Turbinen Flow 0 stand
 -- und die Coils eingehaengt waren -- der Zustand, den update_quiesce_safe()
 -- geschrieben hat, nicht einer, den ein Regler beschlossen haette. Nur ein
--- Reboot half. Der Reaktorzweig braucht keine Sonderbehandlung: rt2 regelt
--- die Staebe aus dem eigenen Dampftank, sobald es wieder tickt.
+-- Reboot half. Der Reaktorzweig braucht keine Sonderbehandlung: der Regler
+-- regelt die Staebe aus dem eigenen Dampftank, sobald er wieder tickt.
 local function update_quiesce_resume()
   if not rt_update_quiescing then return end
   rt_update_quiescing = false
   rt_quiesce_hold_logged = false
   current_state_value = STATE.AUTONOM
-  if node_state_machine then
-    pcall(node_state_machine.transition, node_state_machine, constants.node_states.RUNNING)
-  end
   log("WARN", "UPDATE_QUIESCE zurueckgenommen -- Regelung laeuft wieder an")
   pcall(print, "[RT] UPDATE_QUIESCE zurueckgenommen -- Regelung laeuft wieder")
 end
