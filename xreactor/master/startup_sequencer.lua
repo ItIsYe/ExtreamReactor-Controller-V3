@@ -4,6 +4,24 @@ local utils = require("core.utils")
 
 local sequencer = {}
 
+-- Rueckfallwert fuer config.scram_temperature, wenn niemand ihn setzt --
+-- und niemand setzt ihn: das Feld kommt im ganzen Projekt nur hier vor.
+--
+-- Hier stand 950. Das ist weniger als die Haelfte der Grenze, an der die
+-- RT-Node selbst ausloest (nodes/rt/config.lua: safety.max_temperature =
+-- 2000, mit Hysterese und 3 Messwerten Entprellung) -- und eine aktiv
+-- gekuehlte Extreme-Reactors-Anlage faehrt im NORMALBETRIEB darueber.
+-- Aufgefallen ist es nie, weil should_emergency() den Wert aus
+-- payload.snapshot.max_temp liest und dort bis v776 nie eine Temperatur
+-- ankam (RT schickte versehentlich ein Modul statt einer Aufnahme). Mit
+-- der Behebung dieses Fehlers waere aus jedem Sequencer-Timeout ein
+-- EMERGENCY-Alarm geworden, bei voellig normaler Betriebstemperatur.
+--
+-- Der Wert gehoert deshalb dorthin, wo die Anlage ihn auch wirklich hat.
+-- master_scram_threshold_matches_rt_limit_test.lua haelt beide Zahlen
+-- zusammen, damit sie nicht wieder auseinanderlaufen.
+sequencer.DEFAULT_SCRAM_TEMPERATURE = 2000
+
 local states = {
   idle = "IDLE",
   waiting_ack = "WAITING_ACK",
@@ -102,8 +120,9 @@ local function should_emergency(node, config)
     return true
   end
   local snapshot = node.snapshot or {}
-  -- Fix 4: Temperatur-Schwelle aus config statt hardcodiert 950°C
-  local scram_temp = (config and config.scram_temperature) or 950
+  -- Temperatur-Schwelle aus config, sonst der Anlagenwert (siehe oben).
+  local scram_temp = (config and config.scram_temperature)
+    or sequencer.DEFAULT_SCRAM_TEMPERATURE
   if safety.should_scram({ temperature = snapshot.max_temp, max_temperature = scram_temp }) then
     return true
   end

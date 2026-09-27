@@ -174,6 +174,50 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## MASTERs Startup-Sequencer: Ursache gefunden (v777/v778)
+
+**Der Timeout.** Im Feld: `Timeout stage=WAITING_ACK elapsed=60.2s`,
+Warteschlange 51/52. Die Zuordnung der Quittung haengt an genau einem
+Feld: `message_handlers.lua` reicht `result.module_id` aus dem ACK an
+`startup_sequencer.lua`s `notify_ack()`, das es gegen
+`self.active.module_id` vergleicht. v1s `command_handler.lua` gab
+`module_id = module.id` mit — beim Umstieg auf den rt2-Regler ging das
+Feld verloren, `rt2_command_handler` kannte nur ok/effects. MASTER verglich
+also gegen `nil`, bei jedem Modul, bei jeder Node.
+
+Das war nicht folgenlos: `handle_timeout()` verwirft die **ganze**
+Warteschlange, schickt `MODE=LIMITED` (oder EMERGENCY) und meldet einen
+Alarm. Dass an der Anlage nichts zu sehen war, liegt nur daran, dass
+`MODE` im rt2-Handler bewusst ein No-Op ist.
+
+Behoben auf der **RT-Seite** (v777), damit MASTERs laufender Kommandopfad
+unangetastet bleibt: die Node echot die empfangene `module_id` zurueck.
+Ein Echo kann per Konstruktion nicht danebenliegen — verglichen wird gegen
+das, was MASTER selbst gesendet hat. Test
+`master_rt_startup_ack_correlation_test.lua` verdrahtet beide echten
+Seiten gegeneinander (kein Nachbau der Quittung — genau der hatte die
+Luecke ja nicht) und prueft auch die Gegenrichtung: eine fremde oder
+fehlende id darf einen Schritt NICHT abschliessen.
+
+**Der Beifang, und der war gefaehrlicher.** `should_emergency()` stuft
+einen Timeout als EMERGENCY statt LIMITED ein, wenn
+`snapshot.max_temp > config.scram_temperature`. Der Rueckfallwert war fest
+**950 °C** — und `scram_temperature` wird nirgends im Projekt gesetzt, der
+Rueckfall greift also immer. RTs eigene Trip-Grenze liegt bei **2000 °C**
+(mit Hysterese und 3 Messwerten Entprellung); eine aktiv gekuehlte Anlage
+faehrt im Normalbetrieb darueber. Aufgefallen ist das nie, weil
+`snapshot.max_temp` bis v776 nie ankam — **mein eigener Snapshot-Fix haette
+den Pfad scharf gemacht** und aus jedem Timeout einen EMERGENCY-Alarm bei
+normaler Betriebstemperatur.
+
+Auf Betreiberentscheidung auf 2000 angeglichen (v778), als benannte
+Konstante `sequencer.DEFAULT_SCRAM_TEMPERATURE`.
+`master_scram_threshold_matches_rt_limit_test.lua` haelt beide Zahlen
+zusammen und prueft die Folge: bei 1600 °C darf MASTER keinen Notfall
+sehen, bei 2050 °C schon. Die Richtung ist die sichere — MASTER wird
+weniger ausloesefreudig, nicht mehr. Verloren geht dabei nichts: RT trippt
+selbst bei 2000, und `MODE` ist auf der Node ohnehin ein No-Op.
+
 ## Verdrahtungs-Durchgang nach dem v1-Ausbau (v776)
 
 Betreiberauftrag: "Gehe noch mal alles durch, ob alles noch richtig
