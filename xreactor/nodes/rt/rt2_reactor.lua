@@ -43,6 +43,10 @@ M.ROD_MAX = 100
 -- Flotte kann ploetzlich mehr ziehen, ohne dass der Tank leerlaeuft,
 -- bevor die Staebe nachgekommen sind. Der Preis ist ein Reaktor, der im
 -- Mittel etwas weiter ausgefahren faehrt.
+-- FESTER WERT, bewusst: weder Konfiguration noch Kommando aendern ihn.
+-- Der Sollwert beschreibt die Anlage, nicht den Betriebspunkt -- den stellt
+-- MASTER ueber die Leistungsvorgabe, und die wirkt ueber die Turbinen auf
+-- den Tankstand, nicht ueber diesen Wert.
 M.DEFAULT_TARGET_FILL = 0.7
 M.DEADBAND = 0.06             -- +/-6 percentage points: no rod movement inside this
 
@@ -94,7 +98,11 @@ end
 
 -- input:
 --   fill_ratio     -- current internal steam tank fill, 0..1
---   target_fill    -- desired fill, 0..1 (defaults to DEFAULT_TARGET_FILL)
+--   target_fill    -- NUR fuer Tests: der Betrieb setzt das nie (siehe
+--                     rt2_unit.lua), dort gilt immer DEFAULT_TARGET_FILL.
+--                     Der Parameter existiert, damit das Regelgesetz gegen
+--                     mehrere Sollwerte pruefbar bleibt, ohne die Konstante
+--                     anzufassen -- er ist keine Betriebseinstellung.
 --   current_rods   -- current rod level, 0..100 (100 = fully inserted)
 --   safety_override -- true forces full insertion regardless of fill
 --                       (SAFE state, or any active safety trip)

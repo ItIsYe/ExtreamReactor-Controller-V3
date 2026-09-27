@@ -75,9 +75,12 @@ function M.new(opts)
       or rt2_reactor.MIN_ADJUST_INTERVAL_MS
     local adjust_due = (now_ms or 0) - self.last_rod_change_ms >= tuned_interval
 
+    -- Kein target_fill: der Sollwert des Dampftanks ist eine feste
+    -- Anlagenkonstante (rt2_reactor.DEFAULT_TARGET_FILL), kein Stellwert.
+    -- Hier stand frueher ein Durchreichen von input.reactor.target_fill --
+    -- gesetzt hat es nie jemand, es sah nur wie ein Knopf aus.
     local decision = rt2_reactor.compute_rod_level({
       fill_ratio = fill,
-      target_fill = input.reactor and input.reactor.target_fill or nil,
       current_rods = input.reactor and input.reactor.current_rods or nil,
       safety_override = override,
       previous_fill = adjust_due and self.last_rod_fill or nil,

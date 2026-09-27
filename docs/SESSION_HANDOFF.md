@@ -210,11 +210,18 @@ Hardwareaufnahme daneben bleibt unveraendert.
 * `ramp_state` im Statuspayload (trug unter v2 ohnehin nur `nil`; MASTER
   liest es nil-sicher und nutzt es nur als Aenderungs-Marker).
 * `SET_REACTOR_FILL_TARGET` — das Kommando lebte nur im v1-Handler und war
-  seit dem Umstieg auf v2 unerreichbar. Der Sollwert des Dampftanks steht
-  in `rt2_reactor.DEFAULT_TARGET_FILL` (0.7). **Offen:** er ist damit nur
-  im Code aenderbar, nicht mehr per Kommando oder Config —
-  `rt2_orchestrator` reicht `target_fill` nicht aus der Konfiguration
-  durch. Das war schon vorher so, faellt jetzt aber staerker auf.
+  seit dem Umstieg auf v2 unerreichbar. Entfaellt ersatzlos.
+
+**Der Dampftank-Sollwert ist ein fester Wert** (Betreiberentscheidung,
+nachgefragt und bestaetigt): `rt2_reactor.DEFAULT_TARGET_FILL = 0.7`, weder
+per Konfiguration noch per Kommando aenderbar. Er beschreibt die Anlage,
+nicht den Betriebspunkt — den stellt MASTER ueber die Leistungsvorgabe, und
+die wirkt ueber die Turbinen auf den Tankstand, nicht ueber diesen Wert.
+Das tote Durchreichen von `target_fill` in `rt2_unit.lua` ist entfernt: es
+hat nie jemand gesetzt und sah nur wie ein Knopf aus. Der Parameter in
+`rt2_reactor.compute_rod_level()` bleibt als Test-Naht, damit das
+Regelgesetz gegen mehrere Sollwerte pruefbar ist, ohne die Konstante
+anzufassen.
 
 **Neu abgesichert:** `tests/rt_boot_smoke_test.lua` bootet
 `nodes/rt/main.lua` wirklich — gegen gestubbte CC:Tweaked-Peripherie, mit
