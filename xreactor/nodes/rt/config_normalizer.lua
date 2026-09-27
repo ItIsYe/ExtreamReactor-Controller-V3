@@ -289,9 +289,13 @@ function M.validate_config(config_values, defaults, add_warning, utils)
   -- Veraltete Felder bereinigen
   autonom.min_rods = nil
   autonom.max_rods = nil
-  if config_values.engine ~= "v1" and config_values.engine ~= "v2" then
-    config_values.engine = defaults.engine or "v1"
-    add_warning("engine missing/invalid; defaulting to " .. tostring(config_values.engine))
+  -- Der engine-Schalter ist mit v769 entfallen (v1 ist entfernt, rt2_*.lua
+  -- ist der Regler). Ein Altbestand-Feld wird entfernt statt validiert --
+  -- stehen zu lassen waere schlimmer als loeschen: es sah wie eine Wahl aus
+  -- und war keine mehr, und sein alter Default war "v1".
+  if config_values.engine ~= nil then
+    config_values.engine = nil
+    add_warning("engine-Feld entfernt: es gibt nur noch einen Regler (rt2)")
   end
   if type(config_values.monitor_interval) ~= "number" or config_values.monitor_interval <= 0 then
     config_values.monitor_interval = defaults.monitor_interval

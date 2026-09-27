@@ -88,26 +88,21 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
   return list
 end
 
--- Capacity-Learning ausgelagert nach nodes/rt/capacity_learning.lua
-local capacity_learning_lib = require("nodes.rt.capacity_learning")
-
+-- Diese Datei nimmt HARDWARE auf -- sie entscheidet nichts. Die Kapazitaet
+-- stand hier bis v768 selbst im Payload, gemessen von v1s eigenem
+-- capacity_learning.lua. Das ist entfallen: rt2_capacity.lua ist die einzige
+-- Quelle, und main.lua legt dessen Werte nach diesem Aufruf ueber das
+-- Payload. Die Nullen hier sind bewusst Platzhalter, keine Messwerte --
+-- ueberschrieben wird jedes Feld, bevor das Payload die Node verlaesst.
+-- Die Alt-Feldnamen (capacity_stable_samples/-_turbines/-_required) bleiben,
+-- weil UI (monitor_ui.lua) und Master (ui_controller.lua) sie lesen.
 function M.build_status_payload(ctx)
   local health_payload = ctx.build_health_payload()
   local turbines, actual_output = M.build_turbine_snapshots(ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
   local reactors = M.build_reactor_snapshots(ctx.registry, ctx.reactor_adapter, ctx.modules, ctx.log_prefix)
-  local capacity = capacity_learning_lib.update(ctx, turbines)
-  local capacity_max = capacity and capacity.max_output or 0
-  -- Hinweis: capacity_stable_samples/capacity_stable_turbines/
-  -- capacity_required_stable_turbines sind Alt-Feldnamen aus der vorherigen
-  -- Lock-basierten Learning-Logik — UI (monitor_ui.lua) und Master
-  -- (ui_controller.lua) lesen sie noch für die Fortschritts-Anzeige. Die
-  -- neue, einfachere Learning-Logik kennt kein "Sample-Fenster" mehr,
-  -- daher hier sinnvoll auf die neuen Konzepte gemappt: stable_turbines =
-  -- Turbinen aktuell am 900-RPM-Ziel, stable_samples = 1 sobald ready
-  -- (kein Lock-Fortschritt mehr nötig, die UI zeigt einfach "fertig").
   return {
     status = ctx.status_level,
-    state = ctx.node_state_machine:state(),
+    state = ctx.current_state,
     mode = ctx.current_state,
     output = ctx.targets.power,
     target_output = ctx.targets.power,
@@ -115,14 +110,14 @@ function M.build_status_payload(ctx)
     power_target_percent = ctx.targets.power_percent,
     actual_output = actual_output,
     power_actual = actual_output,
-    capacity_max = capacity_max,
-    capacity_ready = capacity and capacity.ready == true or false,
-    capacity_source = capacity and capacity.reason or "UNKNOWN",
-    capacity_stable_samples = capacity and capacity.ready and 1 or 0,
-    capacity_stable_turbines = capacity and capacity.at_target or 0,
-    capacity_total_turbines = capacity and capacity.total_turbines or 0,
+    capacity_max = 0,
+    capacity_ready = false,
+    capacity_source = "UNKNOWN",
+    capacity_stable_samples = 0,
+    capacity_stable_turbines = 0,
+    capacity_total_turbines = 0,
     capacity_required_stable_turbines = 1,
-    capacity_sample_output = capacity_max,
+    capacity_sample_output = 0,
     turbine_rpm = ctx.targets.rpm,
     steam = ctx.targets.steam,
     capabilities = health_payload.capabilities,
@@ -139,7 +134,6 @@ function M.build_status_payload(ctx)
       diagnostics = ctx.registry:get_diagnostics()
     },
     control_mode = ctx.current_state,
-    ramp_state = { active_module = ctx.active_startup, queue = ctx.startup_queue }
   }
 end
 
@@ -157,7 +151,6 @@ function M.update_status_snapshot(ctx)
     get_device_caps = ctx.get_device_caps,
     get_available_steam = ctx.get_available_steam,
     last_status_snapshot = ctx.last_status_snapshot,
-    capacity_learning = ctx.capacity_learning
   })
 end
 

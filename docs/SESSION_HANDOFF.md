@@ -174,6 +174,58 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## v1 ist raus — die RT-Node hat genau einen Regler (v769)
+
+Betreibervorgabe: "Nimm die v1 komplett raus. V2 wird jetzt Standard fuer
+RT." Umgesetzt.
+
+**Entfernt** (ersatzlos, nicht deaktiviert): `state_handlers.lua`,
+`module_lifecycle.lua`, `command_handler.lua`, `startup_diagnostics.lua`,
+`capacity_learning.lua`, `capacity_cache.lua`, `flow_apply_helpers.lua`,
+`reactor_steam_guard.lua` sowie `core/turbine_regulator.lua`,
+`core/control_rails.lua` und `core/state_machine.lua` (nur v1 nutzte sie).
+Dazu 49 Testdateien, die ausschliesslich v1 beschrieben. Unterm Strich
+rund 8.700 Zeilen weniger.
+
+**Geblieben, aber entkernt**: `reactor_control.lua` (919 → 248 Zeilen) und
+`turbine_control.lua` (1032 → 263 Zeilen). Sie regeln nichts mehr. Was
+bleibt, ist Hardwarezugriff, den auch v2 braucht: Capability-Discovery,
+Drehzahl-/Durchfluss-/Dampfmessung fuer Statusaufnahme und Schirm, die
+initiale Rod-Stellung, und der Sicherheitszustand fuer den Update-Quiesce
+(der gehoert dem Updater, nicht dem Regler). Die Modulkoepfe sagen das.
+
+**Der `engine`-Schalter ist weg.** Sein Default war `"v1"` — jede frisch
+vom Installer angelegte `rt.lua` lief also im alten Regler. Ein noch
+vorhandenes Feld entfernt der `config_normalizer` beim naechsten Schreiben
+mit einer Warnung; die Installer-Vorlage nennt es nicht mehr.
+
+**Was das aendert:** `control_tick()` ist jetzt Quiesce-Sperre plus
+`rt2_engine.tick(ctx)` — sonst nichts. Kein Modul-Lebenszyklus, keine
+Startup-Warteschlange, kein Startup-Watchdog, keine Knoten-Zustands-
+maschine. Statuspayload und Schirm lesen ihre Entscheidungswerte (Modus,
+Knotenzustand, Kapazitaet) nur noch aus `rt2_engine.status_fields()`; die
+Hardwareaufnahme daneben bleibt unveraendert.
+
+**Bewusst mitgestrichen:**
+* `ramp_state` im Statuspayload (trug unter v2 ohnehin nur `nil`; MASTER
+  liest es nil-sicher und nutzt es nur als Aenderungs-Marker).
+* `SET_REACTOR_FILL_TARGET` — das Kommando lebte nur im v1-Handler und war
+  seit dem Umstieg auf v2 unerreichbar. Der Sollwert des Dampftanks steht
+  in `rt2_reactor.DEFAULT_TARGET_FILL` (0.7). **Offen:** er ist damit nur
+  im Code aenderbar, nicht mehr per Kommando oder Config —
+  `rt2_orchestrator` reicht `target_fill` nicht aus der Konfiguration
+  durch. Das war schon vorher so, faellt jetzt aber staerker auf.
+
+**Neu abgesichert:** `tests/rt_boot_smoke_test.lua` bootet
+`nodes/rt/main.lua` wirklich — gegen gestubbte CC:Tweaked-Peripherie, mit
+2 Reaktoren und 50 Turbinen und einer alten `rt.lua`, die noch
+`engine = "v1"` enthaelt. Geprueft wird: der Boot laeuft durch, kein
+v1-Modul ist danach geladen, die Anlage ist vollstaendig erkannt, und nach
+40 Regeltakten hat der Regler ALLE 50 Turbinen angesteuert (Flow > 0) --
+genau das Bild, das im Feld fehlte. main.lua ist ein Boot-Skript und nicht
+require()-bar; ohne diesen Test faellt ein nil-Zugriff in `init()` erst auf
+dem Computer auf, als abgestuerzte Node.
+
 ## Der stornierte Update-Quiesce — wie v1 doch in v2 eingreift (v768)
 
 Betreiberfrage: "Kann das auch eine Sache sein, dass v1 in v2 eingreift?

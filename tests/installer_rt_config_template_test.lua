@@ -1,18 +1,23 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Der Schalter zwischen den beiden Regel-Engines steht in
--- /xreactor_config/rt.lua. Die Datei gab es auf einem frischen Knoten
--- nicht: nodes/rt/config.lua traegt engine = "v1" nur als Vorgabe im
--- Code, und utils.load_config() SCHREIBT eine fehlende Datei nicht --
--- es liefert die Vorgaben zurueck. Wer v2 wollte, musste die Datei von
--- Hand anlegen und den Schluesselnamen kennen.
+-- Der Installer legt /xreactor_config/rt.lua an. utils.load_config()
+-- SCHREIBT eine fehlende Datei nicht -- es liefert nur die Vorgaben zurueck,
+-- ein frischer Knoten stand also ohne diese Datei da.
 --
--- Der Installer legt sie jetzt an. Diese Datei prueft die tatsaechlich
--- ausgelieferte Vorlage -- nicht eine Nachbildung davon -- und vor allem
--- die beiden Eigenschaften, an denen es wehtun wuerde:
+-- Bis v768 trug die Vorlage ein Feld engine, das zwischen zwei Reglern
+-- waehlte; seine Vorgabe war der alte. Beides ist entfallen -- es gibt nur
+-- noch einen Regler. Die Vorlage ist damit leer bis auf ihre Kommentare,
+-- und genau das soll sie sein: der Knoten fuellt sie beim ersten Start
+-- aus seinen Vorgaben auf.
+--
+-- Diese Datei prueft die tatsaechlich ausgelieferte Vorlage -- nicht eine
+-- Nachbildung davon -- und vor allem die Eigenschaften, an denen es
+-- wehtun wuerde:
 --   * eine VORHANDENE Datei wird nie ueberschrieben (sonst waere nach
---     jedem Update die Wahl des Betreibers weg),
---   * nur die Rolle RT bekommt sie.
+--     jedem Update die ganze Knoten-Config weg),
+--   * nur die Rolle RT bekommt sie,
+--   * sie ist gueltiges Lua und liefert eine Tabelle,
+--   * der Pfad ist der, den die Node wirklich liest.
 
 local function assert_eq(a, e, m)
   if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a), 2) end
@@ -68,38 +73,38 @@ do
   assert_true(loader ~= nil, 'die ausgelieferte rt.lua muss gueltiges Lua sein: ' .. tostring(err))
   local ok, cfg = pcall(loader)
   assert_true(ok and type(cfg) == 'table', 'und eine Tabelle zurueckgeben')
-  assert_eq(cfg.engine, 'v1', 'mit der konservativen Vorgabe -- v2 schaltet der Betreiber frei')
+  assert_eq(cfg.engine, nil,
+    'die Vorlage darf den entfallenen engine-Schalter nicht wieder mitbringen')
 end
 
--- ══ 3. Schluessel und Werte passen zu dem, was der Knoten liest ═════════
+-- ══ 3. Der entfallene Schalter kommt nicht zurueck ═════════════════════
 --
--- Eine Vorlage, die einen anderen Schluessel nennt als main.lua liest,
--- waere schlimmer als keine: sie sieht richtig aus und tut nichts.
+-- Eine Vorlage, die ein Feld nennt, das niemand mehr liest, waere schlimmer
+-- als keine: sie sieht wie eine Wahl aus und ist keine.
 
 do
   local defaults = require('nodes.rt.config')
-  assert_true(defaults.engine ~= nil,
-    'nodes/rt/config.lua muss den Schluessel engine kennen')
-  assert_eq(require('nodes.rt.config').engine, 'v1',
-    'und die Vorlage muss dieselbe Vorgabe tragen wie der Code')
+  assert_eq(defaults.engine, nil,
+    'nodes/rt/config.lua darf den engine-Schluessel nicht wieder fuehren')
+  assert_true(not template:find('engine', 1, true) or template:find('entfallen', 1, true) ~= nil,
+    'die Vorlage darf engine nur noch als entfallen erwaehnen, nicht setzen')
 
-  -- Beide Werte, die die Vorlage nennt, muessen vom Normalizer akzeptiert
-  -- werden -- sonst wuerde er sie still auf v1 zuruecksetzen.
+  -- Und der Normalizer raeumt ein Altbestand-Feld weg, statt es zu dulden.
   local normalizer = require('nodes.rt.config_normalizer')
   local real_utils = require('core.utils')
   local utils_stub = {
     normalize_node_id = function(v) return tostring(v or 'RT-1') end,
     deep_copy = real_utils.deep_copy,
   }
-  for _, value in ipairs({ 'v1', 'v2' }) do
-    local cfg = { engine = value }
-    normalizer.validate_config(cfg, defaults, function() end, utils_stub)
-    assert_eq(cfg.engine, value, 'der Normalizer muss ' .. value .. ' akzeptieren')
+  local warnings = {}
+  local cfg = { engine = 'v1' }
+  normalizer.validate_config(cfg, defaults, function(m) warnings[#warnings + 1] = m end, utils_stub)
+  assert_eq(cfg.engine, nil, 'ein altes engine-Feld muss entfernt werden')
+  local said_so = false
+  for _, w in ipairs(warnings) do
+    if tostring(w):find('engine', 1, true) then said_so = true end
   end
-
-  assert_true(template:find('engine', 1, true) ~= nil, 'die Vorlage muss engine nennen')
-  assert_true(template:find('"v2"', 1, true) ~= nil,
-    'und v2 als Moeglichkeit erwaehnen -- dafuer ist die Datei ja da')
+  assert_true(said_so, 'und der Betreiber muss erfahren, dass es entfernt wurde')
 end
 
 -- ══ 4. Der Pfad ist der, den die Node wirklich liest ════════════════════
@@ -111,4 +116,4 @@ do
       .. ' eine Datei an, die niemand anschaut')
 end
 
-print('installer_rt_engine_config_test.lua: ok')
+print('installer_rt_config_template_test.lua: ok')
