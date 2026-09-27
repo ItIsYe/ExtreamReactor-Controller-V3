@@ -23,6 +23,37 @@ local function split(row)
   return out
 end
 
+-- Spaltennamen aus M.HEADER ableiten, statt Indizes von Hand zu zaehlen.
+-- Die Indizes haben sich beim Erweitern des Formats schon zweimal
+-- verschoben, und jedes Mal war es ein Test, der auf die falsche Spalte
+-- zeigte -- nicht der Code. Nebenbei prueft das mit, dass der Kopf zur
+-- Wirklichkeit passt: steht eine Spalte nicht im Kopf, schlaegt der
+-- Zugriff hier fehl.
+local COLUMNS = {}
+do
+  for line in rt2_trace.HEADER:gmatch('[^\n]+') do
+    local kind, rest = line:match('^#%s*([TRUMD]),ms,(.*)$')
+    if kind then
+      local names = { 'kind', 'ms' }
+      -- Der Kopf darf umgebrochen sein; Leerzeichen und Kommentar-Rauten
+      -- fliegen raus.
+      for name in rest:gsub('%s', ''):gmatch('([^,]+)') do
+        names[#names + 1] = name
+      end
+      local map = {}
+      for index, name in ipairs(names) do map[name] = index end
+      COLUMNS[kind] = map
+    end
+  end
+end
+
+local function field(fields, kind, name)
+  local map = COLUMNS[kind] or error('unbekannte Zeilenart ' .. tostring(kind), 2)
+  local index = map[name] or error(
+    ('Spalte %s gibt es in %s-Zeilen nicht -- steht sie im HEADER?'):format(name, kind), 2)
+  return fields[index]
+end
+
 local function rows_of_kind(rows, kind)
   local out = {}
   for _, row in ipairs(rows) do
@@ -64,17 +95,17 @@ do
 
   local u = rows_of_kind(rows, 'U')[1]
   assert_true(u ~= nil, 'keine Turbinenzeile')
-  assert_eq(u[4], '', 'eine nicht lesbare Drehzahl muss LEER sein, nicht 0')
-  assert_eq(u[5], '', 'eine nicht lesbare Obergrenze muss LEER sein, nicht 0')
+  assert_eq(field(u, 'U', 'rpm'), '', 'eine nicht lesbare Drehzahl muss LEER sein, nicht 0')
+  assert_eq(field(u, 'U', 'flow_is'), '', 'eine nicht lesbare Obergrenze muss LEER sein, nicht 0')
 
   -- Und eine echte 0 muss als 0 erkennbar bleiben.
   local rows0 = rt2_trace.format_rows({
     ms = 2000, turbines = { turbine({ rpm = 0, flow_is = 0, flow_act = 0 }) },
   }, { full_sweep = true }, {})
   local u0 = rows_of_kind(rows0, 'U')[1]
-  assert_eq(u0[4], '0', 'eine gemessene 0 muss als 0 dastehen')
-  assert_eq(u0[5], '0', 'ebenso bei der Obergrenze')
-  assert_eq(u0[6], '0', 'und beim tatsaechlichen Durchsatz')
+  assert_eq(field(u0, 'U', 'rpm'), '0', 'eine gemessene 0 muss als 0 dastehen')
+  assert_eq(field(u0, 'U', 'flow_is'), '0', 'ebenso bei der Obergrenze')
+  assert_eq(field(u0, 'U', 'flow_act'), '0', 'und beim tatsaechlichen Durchsatz')
 end
 
 -- ── 2. Wiederholung wird unterdrueckt, Aenderung nicht ───────────────────
@@ -112,8 +143,8 @@ do
   rt2_trace.format_rows(broken, {}, memory2)
   local again = rows_of_kind(rt2_trace.format_rows(broken, {}, memory2), 'U')
   assert_eq(#again, 1, 'ein fehlgeschlagenes Schreiben muss in JEDEM Takt dastehen')
-  assert_eq(again[1][14], '0', 'write_ok=false muss als 0 dastehen')
-  assert_eq(again[1][15], 'NO_FLOW_API', 'und der Fehlertext mit')
+  assert_eq(field(again[1], 'U', 'write_ok'), '0', 'write_ok=false muss als 0 dastehen')
+  assert_eq(field(again[1], 'U', 'write_err'), 'NO_FLOW_API', 'und der Fehlertext mit')
 end
 
 -- ── 4. Die Sammelzeile zaehlt, was zaehlt ────────────────────────────────
@@ -137,16 +168,16 @@ do
 
   local t = rows_of_kind(rows, 'T')[1]
   assert_true(t ~= nil, 'keine Sammelzeile')
-  assert_eq(t[4], 'AUTONOM', 'Zustand')
-  assert_eq(t[11], '50', 'Turbinenzahl')
-  assert_eq(t[12], '49', 'davon mit Durchfluss 0 -- die Zahl, um die es geht')
-  assert_eq(t[13], '49', 'davon ungeschrieben (unchanged)')
-  assert_eq(t[14], '25', 'davon modellgefuehrt')
-  assert_eq(t[15], '1', 'verworfene Kennlinien')
+  assert_eq(field(t, 'T', 'state'), 'AUTONOM', 'Zustand')
+  assert_eq(field(t, 'T', 'n_turb'), '50', 'Turbinenzahl')
+  assert_eq(field(t, 'T', 'n_flow0'), '49', 'davon mit Durchfluss 0 -- die Zahl, um die es geht')
+  assert_eq(field(t, 'T', 'n_unchanged'), '49', 'davon ungeschrieben (unchanged)')
+  assert_eq(field(t, 'T', 'n_model'), '25', 'davon modellgefuehrt')
+  assert_eq(field(t, 'T', 'n_dropped'), '1', 'verworfene Kennlinien')
 
   -- Die Sturmbremse greift, und sie sagt es.
   assert_eq(#rows_of_kind(rows, 'U'), 12, 'die Obergrenze je Takt muss halten')
-  assert_eq(t[16], '38', 'und die unterdrueckten Zeilen muessen gezaehlt werden')
+  assert_eq(field(t, 'T', 'n_suppressed'), '38', 'und die unterdrueckten Zeilen muessen gezaehlt werden')
 
   -- Ein VOLLER Durchgang wird dagegen nicht gekappt: ihn zu kuerzen hiesse,
   -- ihn nicht zu machen -- die abgeschnittenen Turbinen waeren genau die,
@@ -155,7 +186,7 @@ do
     ms = 6000, turbines = turbines,
   }, { full_sweep = true, max_turbine_rows = 12 }, {})
   assert_eq(#rows_of_kind(sweep, 'U'), 50, 'ein voller Durchgang muss vollstaendig sein')
-  assert_eq(rows_of_kind(sweep, 'T')[1][16], '0',
+  assert_eq(field(rows_of_kind(sweep, 'T')[1], 'T', 'n_suppressed'), '0',
     'und dabei nichts als unterdrueckt melden')
 
   assert_eq(#rows_of_kind(rows, 'D'), 1, 'eine verworfene Kennlinie bekommt ihre eigene Zeile')
@@ -174,12 +205,12 @@ do
   }, {}, {})
   local r = rows_of_kind(rows, 'R')[1]
   assert_true(r ~= nil, 'keine Reaktorzeile')
-  assert_eq(r[3], 'Reactor_7')
-  assert_eq(r[4], '0.660', 'Fuellstand')
-  assert_eq(r[5], '85', 'Ist-Stellung')
-  assert_eq(r[6], '86', 'Soll-Stellung')
-  assert_eq(r[7], 'TANK_LOW_WITHDRAW', 'Grund')
-  assert_eq(r[10], '0', 'nicht ausgeloest')
+  assert_eq(field(r, 'R', 'name'), 'Reactor_7')
+  assert_eq(field(r, 'R', 'fill'), '0.660', 'Fuellstand')
+  assert_eq(field(r, 'R', 'rods_is'), '85', 'Ist-Stellung')
+  assert_eq(field(r, 'R', 'rods_cmd'), '86', 'Soll-Stellung')
+  assert_eq(field(r, 'R', 'reason'), 'TANK_LOW_WITHDRAW', 'Grund')
+  assert_eq(field(r, 'R', 'tripped'), '0', 'nicht ausgeloest')
 end
 
 -- ── 6. Kommas in einem Grund zerreissen die Spalten nicht ────────────────
@@ -189,11 +220,14 @@ do
     ms = 1, turbines = { turbine({ write_err = 'bad argument #1, string expected' }) },
   }, { full_sweep = true }, {})
   local u = rows_of_kind(rows, 'U')[1]
-  assert_eq(#u, 17, 'die Spaltenzahl muss stimmen, auch mit Komma im Fehlertext')
-  assert_true(u[15]:find('bad argument #1', 1, true) ~= nil
-    and u[15]:find('string expected', 1, true) ~= nil,
-    'der Text bleibt lesbar: ' .. tostring(u[15]))
-  assert_true(u[15]:find(',', 1, true) == nil,
+  local expected_cols = 0
+  for _ in pairs(COLUMNS.U) do expected_cols = expected_cols + 1 end
+  assert_eq(#u, expected_cols, 'die Spaltenzahl muss stimmen, auch mit Komma im Fehlertext')
+  local err_text = field(u, 'U', 'write_err')
+  assert_true(err_text:find('bad argument #1', 1, true) ~= nil
+    and err_text:find('string expected', 1, true) ~= nil,
+    'der Text bleibt lesbar: ' .. tostring(err_text))
+  assert_true(err_text:find(',', 1, true) == nil,
     'aber ohne Komma, sonst rutschen die Spalten')
 end
 
@@ -212,8 +246,8 @@ do
     turbines = { turbine({ flow_is = 1564, flow_act = 31 }) },
   }, { full_sweep = true }, {})
   local u = rows_of_kind(rows, 'U')[1]
-  assert_eq(u[5], '1564', 'Spalte 5 ist die Obergrenze')
-  assert_eq(u[6], '31', 'Spalte 6 ist der tatsaechliche Durchsatz -- sie muessen getrennt sein')
+  assert_eq(field(u, 'U', 'flow_is'), '1564', 'flow_is ist die Obergrenze')
+  assert_eq(field(u, 'U', 'flow_act'), '31', 'flow_act ist der tatsaechliche Durchsatz -- sie muessen getrennt sein')
 end
 
 -- ── 8. Der volle Durchgang nennt die gebundenen Methoden ─────────────────
@@ -229,17 +263,19 @@ do
       flow_actual_method = 'getFluidFlowRate',
       set_flow_method = 'setFluidFlowRateMax',
     }) },
-  }, { full_sweep = true }, {})
+  }, { full_sweep = true, methods = true }, {})
   local m = rows_of_kind(rows, 'M')[1]
   assert_true(m ~= nil, 'der volle Durchgang muss die Methoden nennen')
-  assert_eq(m[4], 'getFluidFlowRateMax', 'Lesemethode')
-  assert_eq(m[5], 'getFluidFlowRate', 'Messmethode')
-  assert_eq(m[6], 'setFluidFlowRateMax', 'Schreibmethode')
+  assert_eq(field(m, 'M', 'flow_method'), 'getFluidFlowRateMax', 'Lesemethode')
+  assert_eq(field(m, 'M', 'flow_actual_method'), 'getFluidFlowRate', 'Messmethode')
+  assert_eq(field(m, 'M', 'set_flow_method'), 'setFluidFlowRateMax', 'Schreibmethode')
 
-  -- Nur im vollen Durchgang, nicht in jedem Takt.
+  -- Nur wenn ausdruecklich angefordert: die Methoden aendern sich im
+  -- Betrieb nicht, sie brauchen keinen 5s-Takt.
   assert_eq(#rows_of_kind(rt2_trace.format_rows({
     ms = 8000, turbines = { turbine({ flow_method = 'getFluidFlowRateMax' }) },
-  }, {}, {}), 'M'), 0, 'Methodenzeilen gehoeren nicht in jeden Takt')
+  }, { full_sweep = true }, {}), 'M'), 0,
+    'Methodenzeilen gehoeren nur in den Methoden-Takt, nicht in jeden Durchgang')
 end
 
 print('rt2_trace_format_test.lua: ok')

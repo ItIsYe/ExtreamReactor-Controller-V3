@@ -32,19 +32,26 @@
 
 local M = {}
 
-M.VERSION = 2
+M.VERSION = 3
 
 -- Spaltenkoepfe, damit die Datei ohne diese Quelle lesbar ist.
 M.HEADER = table.concat({
   "# xreactor rt trace v" .. M.VERSION,
-  "# T=Takt  R=Reaktor  U=Turbine",
-  "# T,ms,tick,state,master_pct,max_active,cap_ready,cap_max,cap_sust,cap_at_target,"
-    .. "n_turb,n_flow0,n_unchanged,n_model,n_dropped,n_suppressed",
+  "# Zeilenarten: T=Takt  R=Reaktor  U=Turbine  M=Methoden  D=Kennlinie verworfen",
+  "#",
+  "# T,ms,tick,state,master_pct,power_target,max_active,rotation,cap_ready,cap_max,"
+    .. "cap_sust,cap_at_target,n_turb,n_flow0,n_unchanged,n_model,n_dropped,"
+    .. "n_suppressed,cmd_age_s,last_cmd",
   "# R,ms,name,fill,rods_is,rods_cmd,reason,temp,coolant,tripped,write_ok,write_err",
-  "# U,ms,name,rpm,flow_is,flow_act,target_rpm,flow_cmd,reason,unchanged,coil_is,"
-    .. "coil_cmd,model,write_ok,write_err,coil_ok,coil_err",
-  "# flow_is = OBERGRENZE (was gesetzt wurde), flow_act = TATSAECHLICHER Durchsatz",
-  "# M,ms,name,flow_method,flow_actual_method,set_flow_method  (einmal je Durchgang)",
+  "# U,ms,name,slot,target_rpm,rpm,rpm_rate,flow_is,flow_act,flow_cmd,last_cmd_flow,"
+    .. "reason,unchanged,since_change_s,model,slope,intercept,coil_is,coil_cmd,"
+    .. "active,energy,write_ok,write_err,coil_ok,coil_err",
+  "# M,ms,name,flow_method,flow_actual_method,set_flow_method",
+  "#",
+  "# flow_is  = OBERGRENZE (was setFluidFlowRateMax gesetzt hat)",
+  "# flow_act = TATSAECHLICHER Durchsatz (getFluidFlowRate)",
+  "# rpm_rate = RPM je Sekunde, aus zwei Messungen dieser Turbine",
+  "# slot     = Platz in der Reihenfolge; slot > max_active heisst abgewaehlt",
   "# leeres Feld = kein Messwert (nil), NICHT 0",
 }, "\n")
 
@@ -111,6 +118,8 @@ function M.format_rows(sample, opts, memory)
   memory = memory or {}
   memory.signatures = memory.signatures or {}
   local max_rows = tonumber(opts.max_turbine_rows) or 12
+  -- Voller Durchgang: JEDE Turbine, ungekappt. Dazwischen nur die
+  -- veraenderten -- vollstaendig im festen Takt, lueckenlos bei Aenderungen.
   local full_sweep = opts.full_sweep == true
 
   local rows = {}
@@ -149,10 +158,12 @@ function M.format_rows(sample, opts, memory)
   local cap = sample.capacity or {}
   rows[#rows + 1] = table.concat({
     "T", n(ms), n(sample.tick), s(sample.state), n(sample.master_pct),
-    n(sample.max_active), b(cap.ready), n(cap.max_output),
+    n(sample.power_target), n(sample.max_active), n(sample.rotation),
+    b(cap.ready), n(cap.max_output),
     n(cap.sustainable_turbines), n(cap.at_target),
     n(#turbines), n(flow0), n(unchanged_count), n(model_count),
     n(sample.dropped and #sample.dropped or 0), n(suppressed),
+    n(sample.cmd_age_s), s(sample.last_cmd),
   }, ",")
 
   for _, r in ipairs(sample.reactors or {}) do
@@ -166,13 +177,16 @@ function M.format_rows(sample, opts, memory)
   for index, t in ipairs(interesting) do
     if index > limit then break end
     rows[#rows + 1] = table.concat({
-      "U", n(ms), s(t.name), n(t.rpm), n(t.flow_is), n(t.flow_act), n(t.target_rpm),
-      n(t.flow_cmd), s(t.reason), b(t.unchanged), b(t.coil_is), b(t.coil_cmd),
-      b(t.model), b(t.write_ok), s(t.write_err), b(t.coil_ok), s(t.coil_err),
+      "U", n(ms), s(t.name), n(t.slot), n(t.target_rpm), n(t.rpm), n(t.rpm_rate),
+      n(t.flow_is), n(t.flow_act), n(t.flow_cmd), n(t.last_cmd_flow),
+      s(t.reason), b(t.unchanged), n(t.since_change_s),
+      b(t.model), n(t.slope), n(t.intercept),
+      b(t.coil_is), b(t.coil_cmd), b(t.active), n(t.energy),
+      b(t.write_ok), s(t.write_err), b(t.coil_ok), s(t.coil_err),
     }, ",")
   end
 
-  if full_sweep then method_rows(ms, turbines, rows) end
+  if opts.methods == true then method_rows(ms, turbines, rows) end
 
   for _, name in ipairs(sample.dropped or {}) do
     rows[#rows + 1] = table.concat({ "D", n(ms), s(name) }, ",")

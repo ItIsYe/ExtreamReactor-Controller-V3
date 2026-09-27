@@ -262,6 +262,10 @@ local function build_ctx()
     log               = log,
     warn_once         = warn_once,
     safe_wrapped_call = safe_wrapped_call,
+    -- Fuer die Aufzeichnung: was MASTER zuletzt geschickt hat und wann.
+    -- Ohne das ist in einer Datei nicht entscheidbar, ob eine Turbine
+    -- steht, weil der Regler es so will, oder weil die Vorgabe es verlangt.
+    get_last_command  = function() return last_command, last_command_ts end,
     warned            = {},   -- Dedup-Map fuer warn_once
   }
 end

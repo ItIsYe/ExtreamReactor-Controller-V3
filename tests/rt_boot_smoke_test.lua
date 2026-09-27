@@ -461,12 +461,25 @@ do
   assert(content:find(',LEARNING,', 1, true), 'das Einlernen fehlt in der Aufzeichnung')
   assert(content:find(',AUTONOM,', 1, true), 'der Regelbetrieb fehlt in der Aufzeichnung')
 
-  -- Der Platzbedarf bleibt gedeckelt.
-  local total = 0
+  -- Der Platzbedarf bleibt gedeckelt. Die Zusicherung ist bewusst an die
+  -- Rotation gebunden statt an eine feste Zahl: hoechstens keep+1 Dateien,
+  -- jede hoechstens max_bytes plus die eine gerade geschriebene Portion.
+  -- Eine Datei wird geschlossen, NACHDEM sie die Grenze reisst.
+  local writer_lib = require('nodes.rt.rt2_trace_writer')
+  local d = writer_lib.defaults()
+  local files, total, biggest = 0, 0, 0
   for name, text in pairs(FILES) do
-    if name:find('rt_trace', 1, true) then total = total + #text end
+    if name:find('rt_trace', 1, true) then
+      files = files + 1
+      total = total + #text
+      if #text > biggest then biggest = #text end
+    end
   end
-  assert(total <= 4 * 64 * 1024,
+  assert(files <= d.keep + 1,
+    ('hoechstens keep+1 = %d Dateien, es sind %d'):format(d.keep + 1, files))
+  assert(biggest <= d.max_bytes + 32 * 1024,
+    ('keine Datei darf ueber max_bytes+Zugabe wachsen: %d'):format(biggest))
+  assert(total <= (d.keep + 1) * (d.max_bytes + 32 * 1024),
     'die Aufzeichnung muss ihren Platz deckeln, belegt aber ' .. total)
 end
 

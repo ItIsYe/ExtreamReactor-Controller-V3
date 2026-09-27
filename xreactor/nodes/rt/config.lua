@@ -56,12 +56,18 @@ return {
   -- Dateien lieber von der Diskette abholt, setzt dir und senkt max_bytes.
   trace = {
     enabled = true,
-    interval_ms = 2000,     -- Sammelzeile: so oft
-    full_sweep_ms = 60000,  -- voller Turbinen-Abdruck: so oft
+    interval_ms = 2000,     -- Takt- und Reaktorzeile: so oft
+    -- Voller Durchgang: JEDE Turbine mit allen Reglerwerten. Dazwischen
+    -- schreibt jede VERAENDERTE Turbine sofort -- vollstaendig im festen
+    -- Takt, lueckenlos bei Aenderungen. Groesser stellen verlaengert die
+    -- Historie, kleiner stellen kostet sie (50 Turbinen = ~5,5 KB je
+    -- Durchgang).
+    full_sweep_ms = 5000,
+    methods_ms = 60000,     -- Methodenzeilen (aendern sich nicht): so oft
     flush_ms = 2000,        -- Datei anfassen: hoechstens so oft
-    max_bytes = 65536,      -- 64 KB, dann rotieren
-    keep = 3,               -- so viele Dateien (also hoechstens 192 KB)
-    max_turbine_rows = 12,  -- aenderungsgetriebene Zeilen je Takt
+    max_bytes = 131072,     -- 128 KB, dann rotieren
+    keep = 1,               -- eine Vorgaenger-Datei (also max ~260 KB)
+    max_turbine_rows = 12,  -- Aenderungszeilen je Takt (Sturmbremse)
     -- dir = "/disk/xreactor_logs",
   },
 

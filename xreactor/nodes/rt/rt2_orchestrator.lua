@@ -301,13 +301,20 @@ function M.new(opts)
 
     local turbine_results = {}
     for index, t in ipairs(input.turbines or {}) do
+      local slot_index = rotated_slot(index, count, now_ms, state)
       local target_rpm = rt2_turbine.compute_target_rpm(state, {
         turbine_count = count,
-        slot_index = rotated_slot(index, count, now_ms, state),
+        slot_index = slot_index,
         power_percent = input.master_percent or self.master_percent,
         max_active = max_active,
       })
       local name = t.name
+      -- VOR der Entscheidung festhalten: beide Felder werden unten
+      -- fortgeschrieben, danach gelesen zeigten sie das Ergebnis statt der
+      -- Eingangslage. Nur fuer die Aufzeichnung -- die Regelung liest
+      -- weiter dieselben Werte wie bisher.
+      local prev_commanded_flow = name and self.turbine_last_flow[name] or nil
+      local prev_change_ms = name and self.turbine_last_change_ms[name] or nil
       -- Drehzahlaenderung seit der letzten Messung dieser Turbine.
       local rpm_rate
       local rpm_now = tonumber(t.rpm)
@@ -390,6 +397,16 @@ function M.new(opts)
       turbine_results[#turbine_results + 1] = {
         name = name,
         target_rpm = target_rpm,
+        -- Ab hier: Eingangslage der Entscheidung, ausschliesslich fuer die
+        -- Aufzeichnung (nodes/rt/rt2_trace.lua). Kein Leser in der Regelung.
+        slot_index = slot_index,
+        rpm_rate = rpm_rate,
+        last_commanded_flow = prev_commanded_flow,
+        last_change_ms = prev_change_ms,
+        model_slope = (name and self.turbine_models[name])
+          and self.turbine_models[name].slope or nil,
+        model_intercept = (name and self.turbine_models[name])
+          and self.turbine_models[name].intercept or nil,
         flow_decision = flow_decision,
         coil_decision = rt2_turbine.compute_coil_decision({
           rpm = t.rpm, target_rpm = target_rpm, currently_engaged = t.coil_engaged,
@@ -414,6 +431,10 @@ function M.new(opts)
       turbines = turbine_results,
       capacity = self.capacity,
       max_active = max_active,
+      -- Nur fuer die Aufzeichnung: welche Verdrehung der AUS-Plaetze
+      -- gerade gilt. Ohne sie ist aus einer Datei nicht nachvollziehbar,
+      -- WARUM eine bestimmte Turbine in diesem Takt abgewaehlt war.
+      rotation_offset = self.rotation_offset,
       turbine_models = self.turbine_models,
       new_turbine_models = self.new_turbine_models,
       dropped_turbine_models = self.dropped_turbine_models,

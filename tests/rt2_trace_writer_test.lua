@@ -146,7 +146,8 @@ end
 do
   local _, _, fs = fake_fs()
   local w = writer_lib.new({
-    fs_impl = fs, dir = '/logs', interval_ms = 1000, full_sweep_ms = 30000, flush_ms = 0,
+    fs_impl = fs, dir = '/logs', interval_ms = 1000, full_sweep_ms = 30000,
+    methods_ms = 30000, flush_ms = 0,
   })
   assert_true(w.due(0), 'der erste Takt ist immer faellig')
   w.append({ 'T,0' }, 0)
@@ -155,8 +156,20 @@ do
 
   assert_true(w.sweep_due(0), 'der erste volle Durchgang ist faellig')
   w.note_sweep(0)
-  assert_eq(w.sweep_due(29000), false, 'dann 30s Ruhe')
+  assert_eq(w.sweep_due(29000), false, 'dann Ruhe bis zum Takt')
   assert_true(w.sweep_due(30000), 'danach wieder')
+
+  -- Die Methodenzeilen laufen auf einem EIGENEN, langsameren Takt: sie
+  -- aendern sich im Betrieb nicht, und 50 Zeilen je Durchgang waeren
+  -- reine Last.
+  local w2 = writer_lib.new({
+    fs_impl = fs, dir = '/logs', full_sweep_ms = 5000, methods_ms = 60000, flush_ms = 0,
+  })
+  assert_true(w2.methods_due(0), 'der erste Methoden-Durchgang ist faellig')
+  w2.note_methods(0)
+  assert_eq(w2.methods_due(30000), false, 'danach lange Ruhe')
+  assert_true(w2.methods_due(60000), 'erst nach methods_ms wieder')
+  assert_true(w2.sweep_due(5000), 'der Turbinen-Durchgang laeuft unabhaengig weiter')
 end
 
 print('rt2_trace_writer_test.lua: ok')

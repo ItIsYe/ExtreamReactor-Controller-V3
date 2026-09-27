@@ -174,6 +174,49 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## Aufzeichnung v3: alle Reglerwerte (v782)
+
+Betreibervorgabe: alle Reglerwerte der Turbinen, dazu die Vorgabe von
+MASTER. Und ausdruecklich: **die Reaktorregelung funktioniert, Dampf ist
+da -- das ist gesetzt.** Der Dampf wird nur noch mitgeschrieben, damit die
+Korrelation vorliegt, nicht als Verdacht.
+
+**Je Turbine, vollstaendig** (`U`-Zeile, 25 Spalten):
+`slot, target_rpm, rpm, rpm_rate, flow_is, flow_act, flow_cmd,
+last_cmd_flow, reason, unchanged, since_change_s, model, slope, intercept,
+coil_is, coil_cmd, active, energy, write_ok, write_err, coil_ok, coil_err`
+
+Das ist die komplette Eingangslage der Entscheidung, die Entscheidung
+selbst und ihr Ergebnis in einer Zeile. Neu darin, und bisher nirgends
+sichtbar: `slot` (Platz in der Reihenfolge -- `slot > max_active` heisst
+abgewaehlt), `rpm_rate` (RPM/s aus zwei Messungen), `last_cmd_flow` (was
+zuletzt befohlen war), `since_change_s` (wie lange die Vorgabe schon
+steht), `slope`/`intercept` der Kennlinie, `active` und `energy`.
+
+**Je Takt** (`T`-Zeile): zusaetzlich `power_target` (die Vorgabe in RF/t),
+`rotation` (welche Verdrehung der AUS-Plaetze gilt), `cmd_age_s` und
+`last_cmd` -- wann MASTER zuletzt etwas geschickt hat und was dabei
+herauskam.
+
+**Takte, entkoppelt statt Schalter:** `T`/`R` je 2 s, **jede** Turbine je
+`full_sweep_ms` (5 s), und dazwischen schreibt jede **veraenderte** Turbine
+sofort ihre Zeile. Vollstaendig im festen Takt, lueckenlos bei Aenderungen.
+Die Methodenzeilen laufen auf einem eigenen, langsamen Takt (60 s) -- sie
+aendern sich im Betrieb nicht.
+
+**Platz:** ~1,1 KB/s bei 50 Turbinen, 128 KB je Datei, eine Vorgaengerdatei
+-- also rund 260 KB Obergrenze und ~4 Minuten Historie. Eine
+CC-Rechnerplatte hat ~1 MB fuer alles.
+
+`rt2_orchestrator` gibt die Eingangslage jetzt zusaetzlich zurueck
+(`slot_index`, `rpm_rate`, `last_commanded_flow`, `last_change_ms`,
+Kennlinien-Parameter, `rotation_offset`). Rein additiv -- **kein Leser in
+der Regelung**, die Entscheidungen sind unveraendert.
+
+Nebenbei: `rt2_trace_format_test.lua` leitet seine Spaltenindizes jetzt aus
+`M.HEADER` ab, statt sie zu zaehlen. Beim Erweitern des Formats hatte sich
+zweimal ein Test auf die falsche Spalte verschoben -- nicht der Code.
+
 ## Erste Feldaufzeichnung: was sie zeigt, und was ihr fehlte (v781)
 
 Aufzeichnung vom 2026-09-27, node RT-101, 61 s, 50 Turbinen, 2 Reaktoren.

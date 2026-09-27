@@ -23,12 +23,22 @@ local M = {}
 local DEFAULTS = {
   dir = "/xreactor_logs",
   basename = "rt_trace",
-  interval_ms = 2000,       -- Sammelzeile: so oft
-  full_sweep_ms = 60000,    -- voller Turbinen-Durchgang: so oft
+  interval_ms = 2000,       -- Takt- und Reaktorzeile: so oft
+  -- Voller Durchgang: JEDE Turbine mit allen Reglerwerten. Zwischen zwei
+  -- Durchgaengen schreibt jede VERAENDERTE Turbine sofort ihre Zeile --
+  -- vollstaendig im festen Takt, lueckenlos bei Aenderungen.
+  --
+  -- 50 Turbinen sind je Durchgang rund 5,5 KB. Bei 5 s sind das ~1,1 KB/s;
+  -- schneller getaktet passt die Historie nicht mehr auf eine
+  -- CC-Rechnerplatte (~1 MB fuer alles).
+  full_sweep_ms = 5000,
+  -- Die Methodenzeilen (welche Peripherie-Methode gelesen/geschrieben wird)
+  -- aendern sich im Betrieb nicht -- sie brauchen keinen 5s-Takt.
+  methods_ms = 60000,
   flush_ms = 2000,          -- Datei anfassen: hoechstens so oft
-  max_bytes = 64 * 1024,    -- dann rotieren
-  keep = 3,                 -- so viele Dateien behalten (also max 192 KB)
-  max_turbine_rows = 12,    -- aenderungsgetriebene Zeilen je Takt
+  max_bytes = 128 * 1024,   -- dann rotieren
+  keep = 1,                 -- eine Vorgaenger-Datei (also max ~260 KB)
+  max_turbine_rows = 12,    -- Aenderungszeilen je Takt (Sturmbremse)
 }
 
 function M.defaults()
@@ -50,6 +60,7 @@ function M.new(opts)
     max_bytes = tonumber(opts.max_bytes) or DEFAULTS.max_bytes,
     keep = math.max(1, tonumber(opts.keep) or DEFAULTS.keep),
     max_turbine_rows = tonumber(opts.max_turbine_rows) or DEFAULTS.max_turbine_rows,
+    methods_ms = tonumber(opts.methods_ms) or DEFAULTS.methods_ms,
     node_id = opts.node_id,
     fs = opts.fs_impl or _G.fs,
     buffer = {},
@@ -57,6 +68,7 @@ function M.new(opts)
     file_bytes = nil,
     last_sample_ms = nil,
     last_sweep_ms = nil,
+    last_methods_ms = nil,
     last_flush_ms = nil,
     memory = { signatures = {} },
     dropped_writes = 0,
@@ -83,6 +95,16 @@ function M.new(opts)
     if not now_ms then return false end
     if not self.last_sweep_ms then return true end
     return (now_ms - self.last_sweep_ms) >= self.full_sweep_ms
+  end
+
+  function self.methods_due(now_ms)
+    if not now_ms then return false end
+    if not self.last_methods_ms then return true end
+    return (now_ms - self.last_methods_ms) >= self.methods_ms
+  end
+
+  function self.note_methods(now_ms)
+    self.last_methods_ms = now_ms
   end
 
   local function ensure_dir()

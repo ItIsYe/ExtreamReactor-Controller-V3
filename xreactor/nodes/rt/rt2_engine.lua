@@ -216,23 +216,37 @@ local function write_trace(ctx, now_ms, result, turbine_readings, reactor_inputs
       local coil = t.coil_decision or {}
       turbines[#turbines + 1] = {
         name = t.name,
+        -- Eingangslage der Entscheidung
+        slot = t.slot_index,
+        target_rpm = t.target_rpm,
         rpm = reading.rpm,                 -- leer = nicht lesbar, nicht 0
+        rpm_rate = t.rpm_rate,             -- RPM je Sekunde
         flow_is = reading.current_flow,    -- die OBERGRENZE (was gesetzt wurde)
         flow_act = reading.flow_actual,    -- der TATSAECHLICHE Durchsatz
-        flow_method = reading.flow_method,
-        flow_actual_method = reading.flow_actual_method,
-        set_flow_method = reading.set_flow_method,
-        target_rpm = t.target_rpm,
+        last_cmd_flow = t.last_commanded_flow,
+        since_change_s = (now_ms and t.last_change_ms)
+          and ((now_ms - t.last_change_ms) / 1000) or nil,
+        model = models[t.name] ~= nil,
+        slope = t.model_slope,
+        intercept = t.model_intercept,
+        -- Entscheidung
         flow_cmd = flow.flow,
         reason = flow.reason,
         unchanged = flow.unchanged == true,
-        coil_is = reading.coil_engaged,
         coil_cmd = coil.engaged,
-        model = models[t.name] ~= nil,
+        -- Zustand der Hardware
+        coil_is = reading.coil_engaged,
+        active = reading.active,
+        energy = reading.energy,
+        -- Ergebnis des Schreibens
         write_ok = write.flow_ok,
         write_err = write.flow_err,
         coil_ok = write.coil_ok,
         coil_err = write.coil_err,
+        -- gebundene Methoden (nur fuer die M-Zeilen)
+        flow_method = reading.flow_method,
+        flow_actual_method = reading.flow_actual_method,
+        set_flow_method = reading.set_flow_method,
       }
     end
 
@@ -256,22 +270,38 @@ local function write_trace(ctx, now_ms, result, turbine_readings, reactor_inputs
       }
     end
 
+    -- Die Vorgabe von MASTER gehoert dazu: ohne sie ist nicht
+    -- entscheidbar, ob eine Turbine steht, weil der Regler es so will,
+    -- oder weil die Vorgabe es so verlangt.
+    local last_cmd, last_cmd_ts
+    if type(ctx.get_last_command) == "function" then
+      last_cmd, last_cmd_ts = ctx.get_last_command()
+    end
+    local cap_ready_max = (result.capacity.ready and result.capacity.max_output or 0)
+
     local full_sweep = trace_writer.sweep_due(now_ms)
+    local methods = trace_writer.methods_due(now_ms)
     local rows = rt2_trace.format_rows({
       ms = now_ms,
       tick = tick_counter,
       state = result.state,
       master_pct = result.master_percent,
+      power_target = cap_ready_max * ((tonumber(result.master_percent) or 0) / 100),
       max_active = result.max_active,
+      rotation = result.rotation_offset,
       capacity = result.capacity,
+      cmd_age_s = (now_ms and last_cmd_ts) and ((now_ms - last_cmd_ts) / 1000) or nil,
+      last_cmd = last_cmd,
       reactors = reactors,
       turbines = turbines,
       dropped = result.dropped_turbine_models,
     }, {
       full_sweep = full_sweep,
+      methods = methods,
       max_turbine_rows = trace_writer.max_turbine_rows,
     }, trace_writer.memory)
     if full_sweep then trace_writer.note_sweep(now_ms) end
+    if methods then trace_writer.note_methods(now_ms) end
     trace_writer.append(rows, now_ms)
   end)
   if not ok then
