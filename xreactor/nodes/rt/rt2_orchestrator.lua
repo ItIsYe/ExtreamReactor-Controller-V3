@@ -26,6 +26,28 @@ local M = {}
 
 M.ROTATE_INTERVAL_MS = 300000 -- 5 min: wie oft der AUS/PUFFER-Platz wandert
 
+-- Eine gelernte Kennlinie darf den Betrieb nicht lahmlegen koennen.
+--
+-- rt2_turbine_model prueft die ZAHLEN einer Kennlinie (Steigung,
+-- Achsenabschnitt) beim Ableiten und beim Laden. Das faengt den groben
+-- Unsinn, aber nicht den stillen Fall: eine Kennlinie mit unauffaelligen
+-- Werten, die trotzdem zu wenig Durchfluss vorgibt. Die Turbine haengt
+-- dann dauerhaft unter ihrem Ziel, ohne dass eine einzelne Zahl falsch
+-- aussieht -- und eine ganze Flotte kann so gemeinsam stehenbleiben,
+-- weil ihre Kennlinien im selben kaputten Zustand entstanden sind.
+--
+-- Deshalb wird zusaetzlich die WIRKUNG geprueft: haelt eine vom Modell
+-- gefuehrte Turbine ihr Ziel ueber diese Zeit nicht, ist die Kennlinie
+-- widerlegt und wird verworfen. Die Turbine faellt auf die Rampe zurueck
+-- (die braucht kein Modell) und vermisst sich neu.
+M.MODEL_DISTRUST_MS = 90000
+
+-- ... aber NICHT, wenn die Turbine bereits volle Foerderung faehrt und
+-- trotzdem zu langsam ist. Dann fehlt Dampf, und die Kennlinie kann
+-- nichts dafuer. Ohne diese Unterscheidung wuerde eine dampfarme Anlage
+-- ihre gueltigen Kennlinien wegwerfen.
+M.MODEL_SATURATION_FRACTION = 0.95
+
 function M.new(opts)
   opts = opts or {}
   local self = {
@@ -50,6 +72,11 @@ function M.new(opts)
     -- den Rueckmesswert der Hardware angewiesen -- und wenn der fehlt,
     -- hat er gar keinen Bezugspunkt mehr (siehe rt2_turbine.lua).
     turbine_last_flow = {},
+    -- Seit wann eine vom Modell gefuehrte Turbine ihr Ziel verfehlt.
+    turbine_model_doubt = {},
+    -- In DIESEM Takt verworfene Kennlinien -- rt2_engine meldet sie und
+    -- schreibt die Datei neu.
+    dropped_turbine_models = {},
     -- Letzte Drehzahlmessung je Turbine, um daraus abzuleiten, wie schnell
     -- der Rotor gerade steigt oder faellt.
     turbine_rpm_trace = {},
@@ -237,6 +264,7 @@ function M.new(opts)
     -- Profil hat. Waehrend SAFE nicht: der Durchfluss ist dort erzwungen
     -- 0, die Paare beschrieben also nicht die Strecke.
     self.new_turbine_models = {}
+    self.dropped_turbine_models = {}
     if state ~= rt2_state.states.SAFE then
       for _, t in ipairs(input.turbines or {}) do
         local name = t.name
@@ -333,6 +361,32 @@ function M.new(opts)
       if name and flow_decision.unchanged ~= true then
         self.turbine_last_flow[name] = flow_decision.flow
       end
+
+      -- Wirkungspruefung der Kennlinie (siehe MODEL_DISTRUST_MS).
+      if name and self.turbine_models[name] then
+        local rpm_value = tonumber(t.rpm)
+        -- Der IST-Wert entscheidet, nicht die Entscheidung: laeuft die
+        -- Turbine bereits auf vollem Durchfluss und ist trotzdem zu
+        -- langsam, fehlt Dampf. Was das Modell in diesem Takt vorgibt,
+        -- sagt darueber nichts -- es koennte gerade heruntersteuern.
+        local flow_now = tonumber(t.current_flow) or tonumber(flow_decision.flow) or 0
+        local saturated = flow_now >= rt2_turbine.MAX_FLOW * M.MODEL_SATURATION_FRACTION
+        local on_target = target_rpm <= 0 or rpm_value == nil
+          or math.abs(target_rpm - rpm_value) <= rt2_turbine.RPM_BAND
+        if on_target or saturated then
+          self.turbine_model_doubt[name] = nil
+        elseif now_ms then
+          local since = self.turbine_model_doubt[name]
+          if not since then
+            self.turbine_model_doubt[name] = now_ms
+          elseif now_ms - since >= M.MODEL_DISTRUST_MS then
+            self.turbine_models[name] = nil
+            self.turbine_model_state[name] = nil
+            self.turbine_model_doubt[name] = nil
+            self.dropped_turbine_models[#self.dropped_turbine_models + 1] = name
+          end
+        end
+      end
       turbine_results[#turbine_results + 1] = {
         name = name,
         target_rpm = target_rpm,
@@ -362,6 +416,7 @@ function M.new(opts)
       max_active = max_active,
       turbine_models = self.turbine_models,
       new_turbine_models = self.new_turbine_models,
+      dropped_turbine_models = self.dropped_turbine_models,
       tripped_reactors = tripped,
       tuning = self.reactors[1] and self.reactors[1].tuning_profile or nil,
       tuning_samples = self.reactors[1] and self.reactors[1].tuning_state.n or 0,

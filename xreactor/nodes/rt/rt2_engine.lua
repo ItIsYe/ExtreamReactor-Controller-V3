@@ -427,6 +427,23 @@ function M.tick(ctx)
       { path = turbine_model_path, write_config = write_config })
   end
 
+  -- Eine Kennlinie, die ihre Turbine nachweislich nicht ans Ziel bringt,
+  -- wurde verworfen (rt2_orchestrator's Wirkungspruefung). Das gehoert
+  -- gemeldet UND weggeschrieben -- sonst kaeme sie beim naechsten Start
+  -- aus der Datei zurueck und legte die Turbine erneut still.
+  if #(result.dropped_turbine_models or {}) > 0 then
+    local names = result.dropped_turbine_models
+    local msg = string.format(
+      "v2 Kennlinie verworfen fuer %d Turbine(n) (z.B. %s): sie hielt ihr Ziel"
+        .. " ueber %.0fs nicht, ohne dass der Durchfluss am Anschlag war."
+        .. " Diese Turbinen fahren wieder auf der Rampe und vermessen sich neu.",
+      #names, tostring(names[1]), orchestrator.MODEL_DISTRUST_MS / 1000)
+    ctx.log("WARN", msg)
+    pcall(print, "[RT] " .. msg)
+    rt2_turbine_model.save_units(result.turbine_models,
+      { path = turbine_model_path, write_config = write_config })
+  end
+
   -- Jeder Reaktor wird nach seinem eigenen Messwert und seiner eigenen
   -- Sicherheitslage beurteilt.
   local by_name = {}
