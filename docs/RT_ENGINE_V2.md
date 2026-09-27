@@ -1,24 +1,27 @@
 # RT-Regel-Engine v2
 
-**Stand: 2026-09-24 | manifest-v732 | Zweig `beta`**
+**Stand: 2026-09-27 | manifest-v775 | Zweig `beta`**
 
-Der RT-Knoten hat zwei Regel-Engines. v1 (`reactor_control.lua`,
-`turbine_control.lua`, `module_lifecycle.lua`) ist der Bestand, v2
-(`rt2_*.lua`) der Neubau. Welche laeuft, entscheidet **pro Knoten** ein
-Eintrag in `/xreactor_config/rt.lua`:
+**Der RT-Knoten hat genau einen Regler: `rt2_*.lua`.** Seit v769 gibt es
+keinen zweiten mehr und keinen Schalter. Der frueher hier beschriebene
+Eintrag `engine` in `/xreactor_config/rt.lua` ist entfallen; ein noch
+vorhandenes Feld entfernt `config_normalizer.lua` beim naechsten
+Schreiben mit einer Warnung.
 
-```lua
-engine = "v2",
-```
-
-Ohne den Eintrag laeuft der Knoten unveraendert auf v1. v2 soll v1
-spaeter ersetzen — **noch nicht**; bis dahin ist es eine Kanarienvogel-
-Umstellung auf einzelnen Knoten.
+Was mit v1 verschwunden ist: `state_handlers.lua`,
+`module_lifecycle.lua`, `command_handler.lua`, `startup_diagnostics.lua`,
+`capacity_learning.lua`, `capacity_cache.lua`, `flow_apply_helpers.lua`,
+`reactor_steam_guard.lua`, `core/turbine_regulator.lua`,
+`core/control_rails.lua`, `core/state_machine.lua`.
+`reactor_control.lua` und `turbine_control.lua` gibt es noch, aber
+entkernt: sie sind reiner Hardwarezugriff (Capability-Erkennung, Messung
+fuer Anzeige und Telemetrie, initiale Rod-Stellung, Sicherheitszustand
+fuer den Update-Quiesce) und regeln nichts.
 
 Beim Start sagt der Rechner selbst, was laeuft:
 
 ```
-[RT] engine=v2 AKTIV -- 2 Reaktor(en), 30 Turbinen
+[RT] REGLER AKTIV -- 2 Reaktor(en), 50 Turbinen
 ```
 
 ## Warum es v2 gibt
@@ -49,7 +52,7 @@ einer "AUTONOM-Reaktorlogik", die man synchron halten muesste.
 | `rt2_safety.lua` | Temperatur/Kuehlmittel (nutzt `core/safety.lua`) | ja |
 | `rt2_command_handler.lua` | Befehle von MASTER | ja |
 | `rt2_master_link.lua` | MASTER-Verbindung, 12-s-Fenster | ja |
-| `rt2_projection.lua` | Uebersetzung in v1-Vokabular fuer UI und MASTER | ja |
+| `rt2_projection.lua` | Uebersetzung in das aeltere Vokabular fuer UI und MASTER | ja |
 | `rt2_unit.lua` | EIN Reaktor: Stellrate, Profil, Sicherheitslage | Zustand |
 | `rt2_orchestrator.lua` | ein Takt fuer den Knoten | Zustand |
 | `rt2_adapter.lua` | Peripherie lesen und schreiben | nein |
@@ -270,16 +273,16 @@ Ergebnis wird persistiert.
 
 | Datei | Inhalt |
 |---|---|
-| `rt.lua` | `engine = "v2"`, Sicherheitsgrenzen — **legt der Installer an** |
+| `rt.lua` | Knoten-Einstellungen, Sicherheitsgrenzen — **legt der Installer an** |
 | `rt2_capacity_cache.lua` | gemessene Knotenleistung (flach — eine Flotte) |
 | `rt2_reactor_tuning.lua` | Anlagenprofil je Reaktor |
 | `rt2_turbine_model.lua` | Kennlinie je Turbine |
 
 ## Anzeige
 
-v2 fuehrt seinen Zustand nur in sich selbst. Alles, was ihn anzeigt,
-liest v1-Feldnamen — also muss `main.lua` an **jeder** Stelle
-uebersetzen, an der eine Anzeige gefuellt wird:
+Der Regler fuehrt seinen Zustand nur in sich selbst. Alles, was ihn
+anzeigt, liest aeltere Feldnamen — also muss `main.lua` an **jeder**
+Stelle uebersetzen, an der eine Anzeige gefuellt wird:
 
 | Weg | Quelle | Uebersetzung in |
 |---|---|---|
@@ -290,55 +293,49 @@ Die zweite Zeile fehlte und ist im ersten Livetest aufgefallen: im
 Terminal lief `v2 Einlernen FERTIG: … RF/t aus 25 Turbinen`, waehrend
 derselbe Knoten auf seinem Monitor gleichzeitig `! LEARNING`,
 `> KAPAZITAET WIRD GELERNT`, `CAPACITY 0.0`, `SOLL 0.0` und
-`MASTER % 0.0` zeigte. Beides stimmte fuer sich — die Regelung lief auf
-v2, die Anzeige las v1:
+`MASTER % 0.0` zeigte. Beides stimmte fuer sich: die Regelung lief im
+neuen Regler, die Anzeige las die Felder des alten. Seit v769 gibt es
+diese zweite Quelle nicht mehr — die Ersatzpfade in `monitor_ui.lua`
+(`ctx.capacity_learning`, `ctx.node_state_machine`) sind entfernt.
 
-- `ctx.capacity_learning` ist v1s Lernzustand; unter `engine = "v2"`
-  fuellt ihn niemand mehr.
-- `ctx.node_state_machine` wird unter v2 bewusst nie weitergeschaltet
-  (siehe unten) und bleibt auf seinem Bootwert.
-- `ctx.targets` fuellte v1s `command_handler`, den `handle_command_v2`
-  ersetzt — die Leistungsvorgabe lebt jetzt im Orchestrator
-  (`master_percent`).
-
-`monitor_ui.lua` bleibt engine-agnostisch: es nimmt mit
+`monitor_ui.lua` entscheidet nichts selbst: es nimmt mit
 `ctx.capacity_override` / `ctx.node_state` / `ctx.targets` entgegen, was
-der Aufrufer ihm gibt, und faellt ohne diese Vorgaben auf v1 zurueck.
-Abgesichert in `rt2_monitor_v2_display_test.lua` — inklusive der Pruefung,
-dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
+der Aufrufer ihm gibt, und zeigt ohne diese Vorgaben den leeren Zustand,
+statt einen zu erfinden. Abgesichert in
+`rt2_monitor_v2_display_test.lua` — inklusive der Pruefung, dass
+`update_monitor()` die Uebersetzung auch wirklich aufruft.
 
-## Umschalten
+## Konfiguration
 
-Der Schalter steht in `/xreactor_config/rt.lua`:
-
-```lua
-engine = "v2",
-```
-
-Genau so: klein, in Anfuehrungszeichen. Alles andere setzt
-`config_normalizer.validate_config()` still auf `"v1"` zurueck. Danach
-den Rechner neu starten; beim Start steht am Bildschirm
-
-    [RT] engine=v2 AKTIV -- 1 Reaktor(en), 25 Turbinen
-
-Der **Installer legt die Datei an** (`installer/init.lua`), mit
-`engine = "v1"` und einem Kommentarblock, der beides erklaert — sie muss
-also nur editiert werden. Eine **vorhandene** Datei fasst er nie an:
+Es gibt nichts umzuschalten. `/xreactor_config/rt.lua` traegt die
+Einstellungen dieses Knotens; der **Installer legt die Datei an**
+(`installer/init.lua`) und fasst eine **vorhandene** nie an —
 `/xreactor_config/` liegt ausserhalb von `/xreactor` und ueberlebt jede
-Neuinstallation und jedes Auto-Update. Einmal setzen reicht.
+Neuinstallation und jedes Auto-Update. Die ausgelieferte Vorlage ist leer
+bis auf Kommentare: der Knoten fuellt sie beim ersten Start aus seinen
+Vorgabewerten auf. Abgesichert in
+`installer_rt_config_template_test.lua`, das auch prueft, dass der
+entfallene `engine`-Schalter nicht zurueckkommt.
 
-Der Schalter existiert nur, solange es beide Engines gibt. Abgesichert in
-`installer_rt_engine_config_test.lua`.
+Der Sollwert des Dampftanks ist ein **fester Wert**
+(`rt2_reactor.DEFAULT_TARGET_FILL`, 0.7) — Betreiberentscheidung, weder
+per Konfiguration noch per Kommando aenderbar. Er beschreibt die Anlage,
+nicht den Betriebspunkt; den stellt MASTER ueber die Leistungsvorgabe,
+und die wirkt ueber die Turbinen auf den Tankstand.
 
-## Was v2 bewusst NICHT tut
+## Was der Regler bewusst NICHT tut
 
 - **Kein gestaffelter Start.** Alle Turbinen fahren gleichzeitig auf Ziel.
 - **Keine Zuordnung Turbine → Reaktor** (siehe oben).
-- **Kein Ansteuern von v1s `node_state_machine`.** Deren
-  Eintrittshandler wuerden echte v1-Regelarbeit ausloesen, darunter einen
-  SCRAM. v2 meldet den uebersetzten Zustand, statt ihn zu schalten — zwei
-  Regler auf derselben Hardware sind genau der Fehler, den der Umbau
-  beseitigen sollte.
+- **Keine Drosselung der Turbinen bei Dampfmangel.** Ist der Tank leer,
+  regelt der **Reaktor** nach — die Turbinen behalten ihren Durchfluss.
+  Ein Versuch, das anders zu machen, hat 49 von 50 Turbinen abgestellt
+  (v754, zurueckgenommen in v758). Festgehalten in
+  `rt2_turbine_flow_decoupled_from_tank_test.lua` und im Lauf in
+  `rt_boot_smoke_test.lua`.
+- **Keine zweite Zustandshaltung.** `rt2_projection.lua` uebersetzt den
+  einen Zustand in das aeltere Vokabular fuer UI und MASTER, statt einen
+  zweiten zu fuehren.
 
 ## Tests
 
@@ -353,7 +350,10 @@ Der Schalter existiert nur, solange es beide Engines gibt. Abgesichert in
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
 | `rt2_tuning_test.lua` | Selbstvermessung des Reaktors gegen eine bekannte Anlage |
 | `rt2_turbine_model_test.lua` | Kennlinie je Turbine, und dass der Regler damit zur Ruhe kommt (Vergleich alt/neu an einer traegen Strecke) |
-| `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt v2s Zustand, nicht v1s leeren |
+| `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt den Zustand des Reglers, und ruft die Uebersetzung wirklich auf |
+| `rt_boot_smoke_test.lua` | **echter Boot** von `nodes/rt/main.lua` mit 2 Reaktoren + 50 Turbinen im geschlossenen Regelkreis: kein v1-Modul geladen, Einlernen fertig, alle 50 Turbinen im Drehzahlband, Staebe regeln strikt zwischen den Grenzen, Tank am Sollwert, 52/52 Module `STABLE`, und ein leerer Tank drosselt die Turbinen nicht |
+| `rt_control_tick_wiring_regression_test.lua` | `control_tick()` ist Quiesce-Sperre plus genau ein Regleraufruf, kein v1-Pfad |
+| `quiesce_cancel_resumes_control_test.lua` | ein stornierter Update-Quiesce laesst die Node nicht stehen |
 | plus Modultests je `rt2_*`-Datei | |
 
 ## Stand im Betrieb
@@ -403,4 +403,12 @@ Vorausschau und Ruhezone — die brauchen kein Lernen. Siehe
   ungeprueft gegen das, was die ENERGY-Node am Induktionsmatrix-Eingang
   sieht. Stimmt die Skala nicht, stimmt auch MASTERs ganze Aufteilung
   nicht, denn sie rechnet gegen genau diesen Wert.
-- Der Umstieg von v1 auf v2 als Standard ist **nicht** beschlossen.
+- ~~Der Umstieg von v1 auf v2 als Standard ist **nicht** beschlossen.~~
+  Erledigt (v769, Betreibervorgabe): v1 ist entfernt, es gibt nur noch
+  diesen Regler.
+- **MASTERs Startup-Sequencer** lief im Feld in `Timeout stage=
+  WAITING_ACK elapsed=60.2s` mit Warteschlange 51/52. Der Sequencer
+  wartet auf `module.state == "STABLE"`; `rt2_projection.lua` liefert das
+  (im Lauf nachgewiesen: 52 von 52 Modulen `STABLE`,
+  `rt_boot_smoke_test.lua`). Die Ursache liegt also auf der MASTER-Seite
+  oder im ACK-Weg, nicht in der Projektion — noch nicht nachverfolgt.

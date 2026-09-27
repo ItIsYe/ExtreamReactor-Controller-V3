@@ -1,22 +1,27 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Bootet nodes/rt/main.lua WIRKLICH -- mit der Anlage, um die es ging:
--- 2 Reaktoren und 50 Turbinen an einem Knoten.
+-- Bootet nodes/rt/main.lua WIRKLICH und faehrt die Anlage im geschlossenen
+-- Regelkreis -- mit der Groesse, um die es ging: 2 Reaktoren, 50 Turbinen.
 --
--- Bis v768 lagen in dieser Datei zwei Regler. Erreichbar war nur rt2, aber
--- v1 wurde weiter initialisiert, seine Zustandsmaschine gebaut und beim
--- Boot durchgeschaltet, und sein Sicherheits-Schreiber konnte die Regelung
--- stillegen. v1 ist entfernt. Kein Modultest merkt, wenn dabei ein Aufrufer
--- auf ein entferntes Feld zeigt: main.lua ist ein Boot-Skript, es laesst
--- sich nicht require()n, und ein nil-Zugriff in init() faellt erst auf dem
--- Computer auf -- als abgestuerzte Node.
+-- Zwei Luecken schliesst dieser Test, die kein Modultest schliessen kann:
 --
--- Darum hier ein echter Boot gegen gestubbte CC:Tweaked-Peripherie, mit:
---   * einer ALTEN rt.lua, die noch engine = "v1" enthaelt (der haeufigste
---     Bestand -- das war die Vorgabe),
---   * der Pruefung, dass danach kein einziges v1-Modul geladen ist,
---   * und der Pruefung, dass der Regler die Turbinen tatsaechlich
---     ansteuert, statt sie nur zu kennen.
+-- 1. main.lua ist ein Boot-Skript und nicht require()-bar. Ein nil-Zugriff
+--    in init() faellt erst auf dem Computer auf -- als abgestuerzte Node.
+--    Bis v768 lagen hier zwei Regler; beim Ausbau von v1 kann jede
+--    Verdrahtung ins Leere zeigen, ohne dass ein Modultest es merkt.
+--
+-- 2. Ein Regler, der laedt, ist kein Regler, der regelt. Die Peripherie-
+--    Stubs sind deshalb keine Attrappen, sondern ein kleines Modell:
+--    Durchfluss treibt die Drehzahl (traege), ausgefahrene Staebe erzeugen
+--    Dampf, die Turbinen verbrauchen ihn. Die Rueckkopplung laeuft damit
+--    ueber den DAMPF, nicht ueber Code -- genau die Architektur, die diese
+--    Anlage haben soll.
+--
+-- Geprueft wird der Reihe nach: der Boot laeuft durch; danach ist kein
+-- einziges v1-Modul geladen; die Anlage ist vollstaendig erkannt; das
+-- Einlernen wird fertig; alle 50 Turbinen fuehren Durchfluss und stehen in
+-- ihrem Drehzahlband; die Staebe regeln WIRKLICH (sie stehen weder auf
+-- Anschlag noch fest); und ein leerer Dampftank drosselt die Turbinen NICHT.
 
 -- CC:Tweaked-Umgebung fuer einen echten Boot von nodes/rt/main.lua.
 local real_dofile = dofile
@@ -44,7 +49,8 @@ _G.fs = {
 }
 _G.settings = { get = function() return nil end, set = function() end, save = function() end }
 os.getComputerID = function() return 101 end
-os.epoch = function() return math.floor(os.clock()*1000) + 1700000000000 end
+local NOW_MS = 1700000000000
+os.epoch = function() return NOW_MS end
 os.startTimer = function() return 1 end
 os.cancelTimer = function() end
 os.queueEvent = function() end
@@ -87,28 +93,85 @@ local function reactor_stub()
     getEnergyProducedLastTick = function() return 0 end,
   }
 end
-local function turbine_stub()
-  local flow, coil, active = 0, false, true
+-- Turbine mit Traegheit: die Drehzahl laeuft dem Durchfluss nach.
+-- 600 mB/t entsprechen etwa 900 RPM -- so verhaelt sich eine
+-- Extreme-Reactors-Turbine im relevanten Bereich naeherungsweise.
+local TURBINE_SIM = {}
+local function turbine_stub(name)
+  local sim = { flow = 0, rpm = 0, coil = false, active = true }
+  TURBINE_SIM[name] = sim
   return {
     getConnected = function() return true end,
-    getActive = function() return active end,
-    setActive = function(v) active = v; return true end,
-    getRotorSpeed = function() return 880 end,
-    getFluidFlowRateMax = function() return flow end,
-    setFluidFlowRateMax = function(v) flow = v; return true end,
-    getFluidFlowRate = function() return flow end,
-    getInductorEngaged = function() return coil end,
-    setInductorEngaged = function(v) coil = v; return true end,
-    getEnergyProducedLastTick = function() return 12000 end,
+    getActive = function() return sim.active end,
+    setActive = function(v) sim.active = v; return true end,
+    getRotorSpeed = function() return sim.rpm end,
+    getFluidFlowRateMax = function() return sim.flow end,
+    setFluidFlowRateMax = function(v) sim.flow = v; return true end,
+    getFluidFlowRate = function() return sim.flow end,
+    getInductorEngaged = function() return sim.coil end,
+    setInductorEngaged = function(v) sim.coil = v; return true end,
+    getEnergyProducedLastTick = function()
+      return sim.coil and (sim.rpm * 30) or 0
+    end,
     getEnergyStored = function() return 0 end,
-    getInputAmount = function() return 2000 end,
+    getInputAmount = function() return sim.flow end,
     getInputAmountMax = function() return 4000 end,
   }
 end
 
+-- Reaktor mit Dampftank: ausgefahrene Staebe erzeugen Dampf, die Turbinen
+-- verbrauchen ihn. Genau die Rueckkopplung, ueber die der Regler arbeitet --
+-- durch den Dampf, nicht durch Code.
+local REACTOR_SIM = {}
+local function reactor_stub(name)
+  local sim = { rods = 100, steam = 8000, steam_max = 16000, active = true }
+  REACTOR_SIM[name] = sim
+  return {
+    getConnected = function() return true end,
+    getActive = function() return sim.active end,
+    setActive = function(v) sim.active = v; return true end,
+    getControlRodLevel = function() return sim.rods end,
+    setAllControlRodLevels = function(v) sim.rods = v; return true end,
+    getControlRods = function() return { { level = sim.rods } } end,
+    getFuelTemperature = function() return 900 end,
+    getCasingTemperature = function() return 500 end,
+    getEnergyStored = function() return 0 end,
+    getFuelAmount = function() return 4000 end,
+    getFuelAmountMax = function() return 4000 end,
+    getWasteAmount = function() return 0 end,
+    getHotFluidAmount = function() return sim.steam end,
+    getHotFluidAmountMax = function() return sim.steam_max end,
+    getColdFluidAmount = function() return 16000 end,
+    getColdFluidAmountMax = function() return 16000 end,
+    getEnergyProducedLastTick = function() return 0 end,
+  }
+end
+
+-- Ein Simulationsschritt = ein Regeltakt (100 ms bei 10 Hz).
+STEAM_PRODUCTION_SCALE = 1
+local function advance_world()
+  NOW_MS = NOW_MS + 100
+  local demand = 0
+  for _, sim in pairs(TURBINE_SIM) do
+    local target_rpm = math.min(sim.flow * 1.5, 1800)
+    sim.rpm = sim.rpm + (target_rpm - sim.rpm) * 0.08
+    demand = demand + sim.flow
+  end
+  local produced = 0
+  for _, sim in pairs(REACTOR_SIM) do
+    produced = produced + (100 - sim.rods) * 1000 * STEAM_PRODUCTION_SCALE
+  end
+  local share = produced - demand
+  for _, sim in pairs(REACTOR_SIM) do
+    local n = 0
+    for _ in pairs(REACTOR_SIM) do n = n + 1 end
+    sim.steam = math.max(0, math.min(sim.steam_max, sim.steam + share / n * 0.1))
+  end
+end
+
 local WRAPPED = {}
-for _, n in ipairs(REACTORS) do WRAPPED[n] = reactor_stub() end
-for _, n in ipairs(TURBINES) do WRAPPED[n] = turbine_stub() end
+for _, n in ipairs(REACTORS) do WRAPPED[n] = reactor_stub(n) end
+for _, n in ipairs(TURBINES) do WRAPPED[n] = turbine_stub(n) end
 WRAPPED['modem_0'] = {
   isWireless = function() return true end, open = function() end,
   isOpen = function() return true end, transmit = function() end, closeAll = function() end,
@@ -166,6 +229,21 @@ FILES['/xreactor_config/rt.lua'] = 'return {\n  engine = "v1",\n}\n'
 FILES['/xreactor_config/node_id.txt'] = 'node-101'
 FILES['/xreactor_config/role.lua'] = 'return {\n  role = "rt"\n}\n'
 
+-- discovery_runtime.build_modules() abgreifen: dieses Verzeichnis ist das,
+-- was rt2_projection.lua beschreibt und was MASTER liest.
+local dr_wrapper
+do
+  local dr = require('nodes.rt.discovery_runtime')
+  dr_wrapper = {}
+  for k, v in pairs(dr) do dr_wrapper[k] = v end
+  local real = dr.build_modules
+  dr_wrapper.build_modules = function(devices)
+    local r = real(devices)
+    _G.__rt_modules_seed = r
+    return r
+  end
+end
+
 -- Den "control"-Service abgreifen, damit der Test danach echte Regeltakte
 -- fahren kann. bootstrap.require() cached in _G.__xreactor_loaded -- wer
 -- dort vorher liegt, wird ausgeliefert.
@@ -183,7 +261,8 @@ do
     end
     return mgr
   end
-  _G.__xreactor_loaded = { ['services.service_manager'] = wrapper }
+  _G.__xreactor_loaded = { ['services.service_manager'] = wrapper,
+    ['nodes.rt.discovery_runtime'] = dr_wrapper }
 end
 
 -- dofile() aus main.lua ("/xreactor/core/bootstrap.lua") auf das Repo lenken.
@@ -212,10 +291,29 @@ _G.print = real_print
 assert(ok, 'die RT-Node bootet nicht mehr: ' .. tostring(err))
 assert(loop_entered, 'der Boot hat die Event-Schleife nie erreicht')
 
+
+local rt2_engine = _G.__xreactor_loaded['nodes.rt.rt2_engine']
+local rt2_turbine = _G.__xreactor_loaded['nodes.rt.rt2_turbine']
+local rt2_reactor = _G.__xreactor_loaded['nodes.rt.rt2_reactor']
+assert(rt2_engine and rt2_turbine and rt2_reactor, 'der Regler ist nicht geladen')
+
+local function run(ticks)
+  for _ = 1, ticks do
+    control_tick()
+    advance_world()
+  end
+end
+
+local function turbines_with_flow()
+  local n = 0
+  for _, sim in pairs(TURBINE_SIM) do if sim.flow > 0 then n = n + 1 end end
+  return n
+end
+
 -- ── 1. Kein v1-Modul ist geladen ─────────────────────────────────────────
 --
 -- Nicht "wird nicht aufgerufen" -- gar nicht erst geladen. Ein geladenes
--- Modul haelt Zustand und kann geschrieben werden.
+-- Modul haelt Zustand und kann schreiben.
 
 for _, mod in ipairs({
   'nodes.rt.module_lifecycle', 'nodes.rt.state_handlers',
@@ -240,26 +338,86 @@ assert(booted, 'der Boot meldet den Regler nicht -- gesehen: ' .. table.concat(p
 assert(booted:find('2 Reaktor(en), 50 Turbinen', 1, true),
   'falsche Anlagengroesse erkannt: ' .. booted)
 
--- ── 3. Der Regler steuert die Turbinen wirklich an ───────────────────────
+-- ── 3. Der Regler faehrt die Anlage hoch und lernt sie ein ───────────────
+
+run(400)
+local f = rt2_engine.status_fields()
+assert(f.capacity_ready == true,
+  'das Einlernen wird nicht fertig (Modus ' .. tostring(f.mode) .. ')')
+assert((tonumber(f.capacity_max) or 0) > 0, 'die gemessene Kapazitaet ist 0')
+assert(f.node_state == 'AUTONOM',
+  'nach dem Einlernen ohne Master erwarten wir AUTONOM, nicht ' .. tostring(f.node_state))
+
+-- ── 4. Alle Turbinen laufen, im Drehzahlband ─────────────────────────────
 --
 -- Das ist der Punkt, an dem es im Feld wehtat: Flow 0 auf allen Turbinen,
--- waehrend Anzeige und Drehzahlmessung normal weiterliefen. Ein Boot, der
--- nur nicht abstuerzt, ist deshalb kein ausreichender Nachweis.
+-- waehrend Anzeige und Drehzahlmessung normal weiterliefen.
 
-assert(type(control_tick) == 'function', 'der control-Service wurde nicht verdrahtet')
-for _ = 1, 40 do control_tick() end
+assert(turbines_with_flow() == #TURBINES,
+  ('nur %d von %d Turbinen fuehren Durchfluss -- genau das Bild aus dem Feld')
+    :format(turbines_with_flow(), #TURBINES))
 
-local with_flow = 0
-for _, name in ipairs(TURBINES) do
-  if (WRAPPED[name].getFluidFlowRateMax() or 0) > 0 then with_flow = with_flow + 1 end
+local off_band = {}
+for name, sim in pairs(TURBINE_SIM) do
+  if math.abs(sim.rpm - rt2_turbine.FULL_TARGET_RPM) > rt2_turbine.RPM_BAND then
+    off_band[#off_band + 1] = ('%s=%.0f'):format(name, sim.rpm)
+  end
 end
-assert(with_flow == #TURBINES,
-  ('der Regler hat nur %d von %d Turbinen angesteuert -- genau das Bild aus dem Feld')
-    :format(with_flow, #TURBINES))
+assert(#off_band == 0, 'Turbinen ausserhalb des Drehzahlbandes: '
+  .. table.concat(off_band, ' ', 1, math.min(5, #off_band)))
 
--- Und die Staebe stehen nicht mehr stur auf 100%: der Regler holt sie
--- herunter, sobald der Dampftank Bedarf zeigt.
-local rods = WRAPPED[REACTORS[1]].getControlRodLevel()
-assert(type(rods) == 'number', 'Rod-Stellung nicht lesbar')
+-- ── 5. Die Staebe REGELN -- kein Anschlag, kein Stillstand ───────────────
+--
+-- Auf 100 % stehenzubleiben sah im Feld wie Regelung aus und war keine.
+-- Ein Wert strikt zwischen den Grenzen ist der Nachweis, dass wirklich
+-- gestellt wird; ein Tankstand im Sollband der Nachweis, dass es stimmt.
+
+for name, sim in pairs(REACTOR_SIM) do
+  assert(sim.rods > rt2_reactor.ROD_MIN and sim.rods < rt2_reactor.ROD_MAX,
+    ('%s steht auf Anschlag (rods=%d) -- der Regler stellt nicht'):format(name, sim.rods))
+  local fill = sim.steam / sim.steam_max
+  assert(math.abs(fill - rt2_reactor.DEFAULT_TARGET_FILL) <= rt2_reactor.DEADBAND * 2,
+    ('%s haelt den Tank nicht am Sollwert: fill=%.2f soll=%.2f')
+      :format(name, fill, rt2_reactor.DEFAULT_TARGET_FILL))
+end
+
+-- ── 6. MASTER sieht die Module als STABLE ────────────────────────────────
+--
+-- rt2_projection.lua ist die einzige Quelle dieser Felder (v1s
+-- Modul-Lebenszyklus, der sie fuehrte, ist entfernt). MASTERs
+-- Startup-Sequencer wartet auf module.state == "STABLE" -- bleibt das aus,
+-- laeuft er in einen Timeout, ohne dass an der Regelung etwas falsch waere.
+
+do
+  local seen = {}
+  for _, m in pairs(_G.__rt_modules_seed or {}) do
+    if type(m) == 'table' then seen[tostring(m.state)] = (seen[tostring(m.state)] or 0) + 1 end
+  end
+  local expected = #REACTORS + #TURBINES
+  assert((seen.STABLE or 0) == expected,
+    ('MASTER sieht nur %d von %d Modulen als STABLE -- sein Startup-Sequencer wartet dann ewig')
+      :format(seen.STABLE or 0, expected))
+end
+
+-- ── 7. Ein LEERER Dampftank drosselt die Turbinen NICHT ──────────────────
+--
+-- Betreibervorgabe, wortwoertlich: "Wenn der Tank leer ist, soll der
+-- Reaktor nur nachregeln, nichts anderes." Ein Versuch, aus Dampfmangel die
+-- Turbinen herunterzufahren, hat schon einmal 49 von 50 abgestellt (v754,
+-- zurueckgenommen in v758). Der Test haelt die Regel fest: Dampfmangel ist
+-- Sache des Reaktors, nicht der Turbinen.
+
+for _, sim in pairs(REACTOR_SIM) do sim.steam = 0 end
+STEAM_PRODUCTION_SCALE = 0   -- der Reaktor kann nichts mehr liefern
+run(300)
+
+assert(turbines_with_flow() == #TURBINES,
+  ('ein leerer Dampftank hat %d von %d Turbinen gedrosselt -- verboten')
+    :format(#TURBINES - turbines_with_flow(), #TURBINES))
+for name, sim in pairs(REACTOR_SIM) do
+  assert(sim.rods <= rt2_reactor.ROD_MIN + 1,
+    ('%s muss bei leerem Tank voll ausfahren, steht aber auf %d')
+      :format(name, sim.rods))
+end
 
 print('rt_boot_smoke_test.lua: ok')

@@ -96,6 +96,9 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 - RT verwendet den korrekten Stringwert `TURBINE_MODE_RAMP`.
 - RT behandelt die Startup-Rampendauer explizit in Millisekunden.
 - `module_lifecycle.update_module_states()` ist im Produktions-Controltick verdrahtet.
+  *(Historisch, Stand v472. Seit v769 gibt es `module_lifecycle.lua` nicht mehr:
+  RTs Controltick ist die Quiesce-Sperre plus `rt2_engine.tick()`. Siehe
+  `docs/RT_ENGINE_V2.md`.)*
 - historische RT-Defaultintervalle werden migrationsgesteuert auf 0,10 Sekunden aktualisiert.
 - WATER und RT liefern bei Configwrite-Fehlern ein ehrliches `persisted`-Feld im Commandresultat.
 - FUEL-Confignormalisierung und asynchroner Request-Lifecycle wurden korrigiert.

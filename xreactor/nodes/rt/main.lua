@@ -242,6 +242,8 @@ local function build_ctx()
     last_rod_apply_ts         = state.last_rod_apply_ts,
     steam_tank_name           = state.steam_tank_name,
     peripherals               = peripheral_cache,
+    -- rt2_engine.lua schreibt hierhin den projizierten Modulzustand
+    -- (rt2_projection.lua) -- Telemetrie und UI lesen ihn von dort.
     modules                   = modules_registry,
     reactor_ctrl              = {},   -- wird in init_reactor_ctrl befuellt
     turbine_ctrl_store        = {},   -- wird in init_turbine_ctrl befuellt
@@ -256,14 +258,10 @@ local function build_ctx()
     utils             = utils,
     binding           = binding,
     runtime_config    = runtime_config,
-    reactor_control   = reactor_control,
     -- Funktionen
     log               = log,
     warn_once         = warn_once,
     safe_wrapped_call = safe_wrapped_call,
-    get_turbine_ctrl  = function(name)
-      return turbine_control.get_turbine_ctrl(ctx, name)
-    end,
     warned            = {},   -- Dedup-Map fuer warn_once
   }
 end
@@ -438,8 +436,6 @@ local function build_status_payload(status_level)
     read_turbine_rpm     = function(t,c) return turbine_control.read_turbine_rpm(ctx,t,c) end,
     read_turbine_flow    = function(t,c) return turbine_control.read_turbine_flow(ctx,t,c) end,
     last_status_snapshot = last_status_snapshot,
-    monitor_ui           = monitor_ui,
-    status_snapshot      = status_snapshot_lib,
   }
   local payload = status_snapshot_lib.build_status_payload(ctx_snap)
   payload.mode = v2.mode
@@ -452,10 +448,6 @@ local function build_status_payload(status_level)
   if v2.capacity_reason then payload.capacity_source = v2.capacity_reason end
   writeback_ctx()
   return payload
-end
-
-local function broadcast_status(status_level)
-  comms:publish_status(build_status_payload(status_level))
 end
 
 -- ── Monitor ───────────────────────────────────────────────────────────────────
@@ -491,6 +483,12 @@ local function update_monitor()
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
     manifest_id          = RT_BUILD_INFO.manifest_id,
     release_id           = RT_BUILD_INFO.release_id,
+    -- monitor_ui.lua zeigt den wirksamen Skalierungsfaktor auf der
+    -- Diagnoseseite an und liest ihn als ctx.monitor_scale. Der wurde hier
+    -- nie mitgegeben (schon vor dem v1-Ausbau nicht), die Anzeige blieb
+    -- deshalb leer -- der Wert selbst wurde korrekt gefuehrt und
+    -- persistiert, nur nicht angezeigt.
+    monitor_scale        = ctx and ctx.monitor_scale or config.monitor_scale,
   }
   -- Genau dieselbe Uebersetzung wie in build_status_payload(): der lokale
   -- Schirm und die Telemetrie an MASTER zeigen denselben Regler, also

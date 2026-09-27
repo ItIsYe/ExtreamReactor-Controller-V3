@@ -1,32 +1,31 @@
--- RT rewrite, step 11: project v2's own state onto the vocabulary the
--- rest of the system already reads.
+-- RT: projiziert den Zustand des Reglers auf das Vokabular, das der Rest
+-- des Systems schon liest.
 --
--- WHY THIS EXISTS: main.lua's control_tick() returns early for v2 and
--- therefore never runs module_lifecycle.update_module_states() (which
--- maintains modules_registry[id].state) nor node_state_machine:tick().
--- Everything downstream still reads those:
---   - status_snapshot.build_module_payload() ships module.state to MASTER
---   - build_turbine_snapshots()/build_reactor_snapshots() attach it per device
---   - MASTER's message_handlers.lua counts state=="RUNNING"/"STABLE" and its
---     startup sequencer WAITS for state=="STABLE" before advancing
---   - payload.state comes from node_state_machine:state()
--- Under v2 all of that stayed frozen at its boot value ("OFF" for every
--- module), so a correctly regulating v2 node still looked completely dead
--- to the operator and to MASTER, and MASTER's sequencer would wait forever.
+-- WARUM DAS EXISTIERT: rt2_state/rt2_turbine entscheiden in ihren eigenen
+-- Begriffen (LEARNING/MASTER/AUTONOM/SAFE, Flow-Entscheidungen). Alles
+-- danach liest aeltere Felder:
+--   - status_snapshot.build_module_payload() schickt module.state an MASTER
+--   - build_turbine_snapshots()/build_reactor_snapshots() haengen ihn je
+--     Geraet an
+--   - MASTERs message_handlers.lua zaehlt state=="RUNNING"/"STABLE", und
+--     sein Startup-Sequencer WARTET auf state=="STABLE", bevor er weiterlaeuft
+--   - payload.state trug frueher den Zustand einer Zustandsmaschine
+-- Ohne diese Uebersetzung blieb all das auf seinem Bootwert stehen ("OFF"
+-- fuer jedes Modul): eine korrekt regelnde Node sah fuer den Betreiber und
+-- fuer MASTER vollstaendig toter aus als sie war, und MASTERs Sequencer
+-- haette ewig gewartet.
 --
--- Deliberately a PROJECTION, not a second state machine: this module owns
--- no state of its own and never decides anything -- it only translates the
--- single authoritative rt2_state/turbine decisions into the older
--- vocabulary. That keeps v2's "exactly one state, one place that decides
--- it" property intact, which is the whole reason the rewrite exists.
+-- Bewusst eine PROJEKTION, keine zweite Zustandsmaschine: dieses Modul
+-- haelt keinen eigenen Zustand und entscheidet nie etwas -- es uebersetzt
+-- nur. Damit bleibt "genau ein Zustand, genau eine Stelle, die ihn
+-- entscheidet" erhalten, und das ist der Grund, warum es diesen Regler gibt.
 --
--- It deliberately does NOT drive node_state_machine:transition(): those
--- transitions fire state_handlers' on_enter/on_exit handlers, which do
--- real v1 control work (EMERGENCY enters via scram(), STARTUP rebuilds a
--- startup queue). Driving them from v2 would put two controllers on the
--- same hardware -- exactly the failure mode this rewrite removes. The
--- projected node state is reported instead, by main.lua's v2 branch in
--- build_status_payload().
+-- Historische Notiz: bis v768 gab es daneben noch v1s Modul-Lebenszyklus und
+-- eine Knoten-Zustandsmaschine, die genau diese Felder selbst pflegten. Die
+-- Projektion durfte sie deshalb NICHT antreiben -- deren Uebergaenge loesten
+-- echte v1-Regelarbeit aus, und zwei Regler an derselben Hardware sind das
+-- Problem, das dieser Umbau beseitigt hat. v1 ist entfernt; die Projektion
+-- ist seitdem die einzige Quelle dieser Felder.
 
 local rt2_state = require("nodes.rt.rt2_state")
 local rt2_turbine = require("nodes.rt.rt2_turbine")

@@ -174,6 +174,65 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## Verdrahtungs-Durchgang nach dem v1-Ausbau (v776)
+
+Betreiberauftrag: "Gehe noch mal alles durch, ob alles noch richtig
+verdrahtet ist, ob die Logik/Regler noch funktionieren und ob noch
+irgendwo toter Code ist." Durchgefuehrt. Ergebnis:
+
+**Regler laeuft — im Lauf nachgewiesen, nicht nur behauptet.**
+`tests/rt_boot_smoke_test.lua` bootet `nodes/rt/main.lua` echt und faehrt
+die Anlage im **geschlossenen Regelkreis** (Durchfluss treibt die Drehzahl
+traege, ausgefahrene Staebe erzeugen Dampf, die Turbinen verbrauchen ihn —
+die Rueckkopplung laeuft also ueber den Dampf, wie vorgesehen). Mit 2
+Reaktoren und 50 Turbinen, aus einer alten `rt.lua` mit `engine = "v1"`:
+Einlernen wird fertig (1.30 M RF/t), alle 50 Turbinen stehen bei 899–901
+RPM, die Staebe regeln auf 85 % (strikt zwischen 70 und 100 — also wird
+wirklich gestellt), der Tank haelt 0.65–0.67 gegen Soll 0.70, alle 52
+Module projizieren `STABLE`, und ein **leergefahrener Tank drosselt die
+Turbinen nicht**.
+
+**Toter Code — vier Stellen, alle entfernt:**
+* `main.lua`: `broadcast_status()` (mit v1s Aufrufern entfallen)
+* `main.lua`: `ctx.reactor_control`, `ctx.get_turbine_ctrl` (v1-Querverweise)
+* `reactor_control.has_reactor_rod_write_path()` — dazu hatte ich selbst
+  einen falschen Kommentar geschrieben ("genutzt von der Discovery"); sie
+  wurde von nirgends aufgerufen, `binding.lua` hat eigene Logik
+* `status_snapshot.update_status_snapshot()` — reiner Durchreicher, den
+  niemand aufrief
+* `rt2_engine.lua`: ungenutztes `require("nodes.rt.rt2_reactor")`
+
+**Ein echter Verdrahtungsfehler, aelter als der Umbau — behoben:**
+`payload.snapshot` war das **Modul** `status_snapshot.lua` selbst
+(`snapshot = ctx.status_snapshot`, und unter diesem Namen reicht `main.lua`
+das Modul herein) — eine Tabelle voller Funktionen. MASTER liest daraus in
+`startup_sequencer.lua` genau zwei Werte: `snapshot.avg_rpm` und
+`snapshot.max_temp`, letzteres in `should_emergency()`. **MASTERs
+Temperatur-SCRAM ueber den RT-Snapshot konnte damit nie ausloesen.** Jetzt
+aus den Aufnahmen gebildet, die derselbe Aufruf ohnehin hat (kein zweiter
+Peripherie-Durchgang); `reactors[].temperature` wird zusaetzlich
+mitgeschickt. Festgehalten in
+`tests/rt_status_snapshot_master_fields_test.lua`.
+
+**Eine kleinere Luecke, ebenfalls aelter — behoben:** `monitor_ctx`
+enthielt nie `monitor_scale`, obwohl `monitor_ui.lua` es fuer die
+Diagnoseseite liest. Der Wert wurde korrekt gefuehrt und persistiert, nur
+nie angezeigt.
+
+**Sauber:** alle `ctx`-Felder, die RT-Module lesen, werden geliefert (je
+Verbraucher geprueft: Hardware-Module, `status_snapshot`, `monitor_ui`,
+`health_payload`); keine verwaisten Dateien; keine ungenutzten
+`require`s; kein toter Export und kein toter lokaler Helfer mehr im
+RT-Knoten.
+
+**Offen geblieben (nicht von diesem Umbau verursacht):** MASTERs
+Startup-Sequencer lief im Feld in `Timeout stage=WAITING_ACK elapsed=60.2s`
+mit Warteschlange 51/52. Die Projektion liefert `STABLE` (52/52 im Lauf
+nachgewiesen), die Ursache liegt also auf der MASTER-Seite oder im
+ACK-Weg. Ebenso offen: `Config issue (lua invalid) at /xreactor_config/
+rt.lua` (vermutlich fehlendes `return`) und `Reactor_9`s Staebe, die im
+Feld nur 97 statt 100 erreichten.
+
 ## v1 ist raus — die RT-Node hat genau einen Regler (v769)
 
 Betreibervorgabe: "Nimm die v1 komplett raus. V2 wird jetzt Standard fuer

@@ -22,7 +22,6 @@ local rt2_projection = require("nodes.rt.rt2_projection")
 local rt2_tuning = require("nodes.rt.rt2_tuning")
 local rt2_turbine_model = require("nodes.rt.rt2_turbine_model")
 local rt2_turbine = require("nodes.rt.rt2_turbine")
-local rt2_reactor = require("nodes.rt.rt2_reactor")
 local utils = require("core.utils")
 
 local M = {}

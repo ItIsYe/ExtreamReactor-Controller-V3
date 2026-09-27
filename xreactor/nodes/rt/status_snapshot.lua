@@ -71,6 +71,7 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
       alias = entry.alias,
       rods_level = info and info.control_rod_level or nil,
       active = info and info.active or nil,
+      temperature = info and info.temperature or nil,
       steam_production = info and info.steam or nil,
       coolant_amount = info and info.coolant_amount or nil,
       coolant_amount_max = info and info.coolant_amount_max or nil,
@@ -96,6 +97,34 @@ end
 -- ueberschrieben wird jedes Feld, bevor das Payload die Node verlaesst.
 -- Die Alt-Feldnamen (capacity_stable_samples/-_turbines/-_required) bleiben,
 -- weil UI (monitor_ui.lua) und Master (ui_controller.lua) sie lesen.
+-- payload.snapshot: MASTER liest daraus max_temp und avg_rpm -- in
+-- startup_sequencer.lua's build_telemetry() UND in should_emergency(), also
+-- im Temperatur-Notausweg. Hier stand bis v776 `ctx.status_snapshot`, und
+-- das war das MODUL selbst (main.lua reicht status_snapshot_lib unter diesem
+-- Namen herein): eine Tabelle voller Funktionen, die ueber das Modem nichts
+-- Brauchbares hinterlaesst. MASTER las daraus nie eine Temperatur, sein
+-- Temperatur-SCRAM ueber diesen Weg konnte also nie ausloesen. Aus den
+-- Aufnahmen gebildet, die dieser Aufruf ohnehin schon hat -- kein zweiter
+-- Peripherie-Durchgang.
+local function build_node_snapshot(turbines, reactors)
+  local max_temp, rpm_sum, rpm_count = nil, 0, 0
+  local turbine_list = {}
+  for _, t in ipairs(turbines) do
+    local rpm = numeric_value(t.rpm)
+    if rpm then rpm_sum = rpm_sum + rpm; rpm_count = rpm_count + 1 end
+    turbine_list[#turbine_list + 1] = { name = t.name, rpm = rpm }
+  end
+  for _, r in ipairs(reactors) do
+    local temp = numeric_value(r.temperature)
+    if temp and (not max_temp or temp > max_temp) then max_temp = temp end
+  end
+  return {
+    max_temp = max_temp,
+    avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or nil,
+    turbines = turbine_list,
+  }
+end
+
 function M.build_status_payload(ctx)
   local health_payload = ctx.build_health_payload()
   local turbines, actual_output = M.build_turbine_snapshots(ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
@@ -125,7 +154,7 @@ function M.build_status_payload(ctx)
     bindings_summary = health.summarize_bindings(health_payload.bindings),
     health = health_payload,
     modules = M.build_module_payload(ctx.modules),
-    snapshot = ctx.status_snapshot,
+    snapshot = build_node_snapshot(turbines, reactors),
     turbines = turbines,
     reactors = reactors,
     registry = {
@@ -137,21 +166,8 @@ function M.build_status_payload(ctx)
   }
 end
 
-function M.update_status_snapshot(ctx)
-  return ctx.monitor_ui.update_status_snapshot({
-    devices = ctx.devices,
-    registry = ctx.registry,
-    comms = ctx.comms,
-    config = ctx.config,
-    read_turbine_rpm = ctx.read_turbine_rpm,
-    read_turbine_flow = ctx.read_turbine_flow,
-    reactor_adapter = ctx.reactor_adapter,
-    turbine_adapter = ctx.turbine_adapter,
-    log_prefix = ctx.log_prefix,
-    get_device_caps = ctx.get_device_caps,
-    get_available_steam = ctx.get_available_steam,
-    last_status_snapshot = ctx.last_status_snapshot,
-  })
-end
+-- M.update_status_snapshot() ist mit v776 entfallen: ein reiner
+-- Durchreicher auf monitor_ui.update_status_snapshot(), den niemand aufrief.
+-- Der lokale Schirm ruft monitor_ui direkt.
 
 return M

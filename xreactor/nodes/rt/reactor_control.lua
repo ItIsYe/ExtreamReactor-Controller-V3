@@ -140,18 +140,6 @@ end
 
 -- ── Rod-Ansteuerung ─────────────────────────────────────────────────────────
 
--- Prueft, ob ein Reaktor-Peripheral ueberhaupt einen Rod-Write-Pfad hat.
--- Genutzt von der Discovery/Bindung, nicht von einer Regelung.
-function M.has_reactor_rod_write_path(caps)
-  if type(caps) ~= "table" then return false end
-  return (
-    caps.setAllControlRodLevels or
-    caps.setControlRodsLevels   or
-    caps.setControlRodLevel     or
-    caps.getControlRods
-  ) and true or false
-end
-
 -- Schreibt EINEN Rod-Level auf alle konfigurierten Reaktoren. Der einzige
 -- Aufrufer ist apply_initial_reactor_rods() -- die laufende Rod-Regelung
 -- macht rt2_engine.lua ueber rt2_adapter.lua, pro Reaktor und mit eigener
