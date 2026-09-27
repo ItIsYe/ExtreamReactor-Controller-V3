@@ -545,11 +545,17 @@ local ok, result = xpcall(function()
       support_runtime.run_fast_loop({
         receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
         after_cycle = function() get_rs_router():tick() end,
-        quiesce_opts = quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
-          local rs_router = get_rs_router()
-          rs_router:begin_quiesce("UPDATE_QUIESCE")
-          return rs_router:poll_quiesce()
-        end } or nil,
+        quiesce_opts = quiesce_handshake and {
+          handshake = quiesce_handshake,
+          on_quiesce = function()
+            local rs_router = get_rs_router()
+            rs_router:begin_quiesce("UPDATE_QUIESCE")
+            return rs_router:poll_quiesce()
+          end,
+          on_quiesce_cancelled = function()
+            get_rs_router():cancel_quiesce("UPDATE_ABGEBROCHEN")
+          end,
+        } or nil,
       })
     end,
     function()

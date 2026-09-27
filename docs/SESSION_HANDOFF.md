@@ -174,6 +174,47 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## Der stornierte Update-Quiesce — wie v1 doch in v2 eingreift (v768)
+
+Betreiberfrage: "Kann das auch eine Sache sein, dass v1 in v2 eingreift?
+Bei v1 hatte das mit dem Doppelsetup geklappt." — Ja, aber nicht dort, wo
+man es vermutet. v1s Regler laeuft unter v2 nicht mit: `control_tick()`
+kehrt bei `engine_v2` sofort zurueck, `node_state_machine:tick()` wird nie
+gefahren, `handle_command_v2` ersetzt v1s Command-Handler. Der einzige v1-
+Code, der unter v2 noch an die Hardware schreibt, ist der Sicherheits-
+Schreiber des Update-Pfads — und der hatte keinen Rueckweg.
+
+Ablauf: Der Auto-Updater fordert vor jedem Update einen Quiesce an. RTs
+`update_quiesce_safe()` setzt daraufhin `rt_update_quiescing = true`,
+schreibt **auf allen Turbinen Flow 0, haengt alle Coils ein** und faehrt die
+Staebe auf 100%. Ab da kehrt `control_tick()` bei jedem Takt sofort zurueck:
+weder v1 noch v2 regelt noch. Bestaetigt wird der Quiesce nur, wenn **jede**
+Turbine Flow 0, inaktiv und Coil eingehaengt zurueckmeldet — mit 50 Turbinen
+deutlich seltener vollstaendig als mit 25. Bricht der Updater danach ab
+(`installer/auto_update.lua`s `recover_unexpected()` ruft im Zustand
+`QUIESCE_REQUESTED` `update_handshake.reset()` — **ohne** Reboot), bleibt die
+Node dauerhaft in diesem Zustand stehen. Nur ein Reboot half.
+
+Das erklaert die Symptomkombination, die jede andere Theorie ueberlebt hat:
+flottenweit, unabhaengig vom MASTER, unabhaengig vom Readback, Drehzahlen in
+der Anzeige weiterhin aktuell (der Status-Snapshot liest die Hardware
+unabhaengig von `control_tick()`) — und vor allem **Coils eingehaengt,
+obwohl die Drehzahl nicht im Zielband ist**: das entscheidet kein Regler so,
+das ist genau der Zustand, den `apply_update_quiesce()` schreibt.
+
+`update_handshake.reset()` sagt seinen Vertrag selbst: "Only cancel a
+request while the role is still running." Die Rolle laeuft danach also
+weiter und muss ihren Sicherheitszustand wieder verlassen. Seit v768 tut sie
+das: `runtime.lua` meldet die Ruecknahme ueber `on_quiesce_cancelled`, RT
+loest damit die Regelsperre (`update_quiesce_resume()`), FUEL seine
+Liefersperre (`redstone_router:cancel_quiesce()`). Ein **bestaetigter**
+Quiesce wird bewusst nicht zurueckgenommen — ab da gehoert die Hardware dem
+gestoppten Runtime-Zustand, Erholung heisst Reboot. Zusaetzlich sagt RT den
+Halt jetzt einmal laut (Log + `print`), statt ihn als "Flow 0" zu tarnen.
+
+Test: `tests/quiesce_cancel_resumes_control_test.lua` (gegen v767
+nachgewiesen: Storno wird dort nie gemeldet, die Sperre bleibt).
+
 ## FUEL-Logistik: warum nie Brennstoff ankam (v743–v750, geloest)
 
 Im Betrieb bestaetigt: **FUEL liefert.** Die Ursache war eine einzige

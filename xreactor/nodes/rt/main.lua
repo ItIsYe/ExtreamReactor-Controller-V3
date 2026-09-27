@@ -754,11 +754,26 @@ end
 -- ── Control-Tick ──────────────────────────────────────────────────────────────
 
 local rt_update_quiescing = false
+local rt_quiesce_hold_logged = false
 
 local function control_tick()
   -- A dedicated safe-state writer owns the hardware from the first update
   -- quiesce attempt onward. Normal regulation/startup must not race it.
-  if rt_update_quiescing then return end
+  -- Diese Sperre war bis v768 eine Einbahnstrasse ohne Rueckweg: wurde ein
+  -- Quiesce-Request storniert, statt in einen Reboot zu laufen, regelte die
+  -- Node nie wieder -- unsichtbar, weil Anzeige und Drehzahl-Messung
+  -- weiterliefen. Der Rueckweg ist jetzt update_quiesce_resume() (unten,
+  -- verdrahtet als on_quiesce_cancelled). Damit dieser Zustand nicht noch
+  -- einmal stumm bleibt, sagt er es einmal laut.
+  if rt_update_quiescing then
+    if not rt_quiesce_hold_logged then
+      rt_quiesce_hold_logged = true
+      log("WARN", "Regelung ausgesetzt: UPDATE_QUIESCE haelt die Hardware"
+        .. " im sicheren Zustand (Flow 0, Coils eingehaengt, Rods 100%)")
+      pcall(print, "[RT] REGELUNG AUSGESETZT -- UPDATE_QUIESCE aktiv")
+    end
+    return
+  end
   if engine_v2 then
     rt2_engine.tick(ctx)
     return
@@ -1365,6 +1380,28 @@ local function update_quiesce_safe()
   return true
 end
 
+-- Gegenstueck zu update_quiesce_safe(): core/update_handshake.lua's reset()
+-- storniert einen Quiesce-Request ausdruecklich nur, solange die Rolle noch
+-- laeuft (installer/auto_update.lua's recover_unexpected() tut genau das im
+-- Zustand QUIESCE_REQUESTED -- ohne Reboot). Ohne diesen Rueckweg blieb die
+-- Node danach fuer immer stehen: control_tick() kehrte sofort zurueck, also
+-- regelte weder v1 noch v2 noch, waehrend auf allen Turbinen Flow 0 stand
+-- und die Coils eingehaengt waren -- der Zustand, den update_quiesce_safe()
+-- geschrieben hat, nicht einer, den ein Regler beschlossen haette. Nur ein
+-- Reboot half. Der Reaktorzweig braucht keine Sonderbehandlung: rt2 regelt
+-- die Staebe aus dem eigenen Dampftank, sobald es wieder tickt.
+local function update_quiesce_resume()
+  if not rt_update_quiescing then return end
+  rt_update_quiescing = false
+  rt_quiesce_hold_logged = false
+  current_state_value = STATE.AUTONOM
+  if node_state_machine then
+    pcall(node_state_machine.transition, node_state_machine, constants.node_states.RUNNING)
+  end
+  log("WARN", "UPDATE_QUIESCE zurueckgenommen -- Regelung laeuft wieder an")
+  pcall(print, "[RT] UPDATE_QUIESCE zurueckgenommen -- Regelung laeuft wieder")
+end
+
 -- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
 -- loop()/run_slow_loop()): "fast" traegt UI/Touch/Comms UND die
 -- zeitkritische Reaktor-/Turbinenregelung ("control"-Service), "slow"
@@ -1378,6 +1415,7 @@ local ok, result = xpcall(function()
         quiesce_opts = quiesce_handshake and {
           handshake = quiesce_handshake,
           on_quiesce = update_quiesce_safe,
+          on_quiesce_cancelled = update_quiesce_resume,
         } or nil,
       })
     end,

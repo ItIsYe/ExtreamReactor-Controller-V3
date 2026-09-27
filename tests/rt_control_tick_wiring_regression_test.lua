@@ -1,7 +1,13 @@
 local f=assert(io.open('xreactor/nodes/rt/main.lua','r'));local s=f:read('*a');f:close()
 local start=assert(s:find('local function control_tick()',1,true)); local stop=assert(s:find('-- ── Command-Handler',start,true)); local b=s:sub(start,stop)
+-- Die Quiesce-Sperre ist seit v768 ein Block statt eines Einzeilers (sie
+-- meldet den Halt jetzt einmal sichtbar, siehe quiesce_cancel_resumes_
+-- control_test.lua) -- geprueft wird weiterhin, dass sie VOR jeder
+-- Regelarbeit steht und sofort zurueckkehrt.
+local guard=assert(b:match('if rt_update_quiescing then.-\n    return\n  end'),
+  'missing control tick delegation if rt_update_quiescing then ... return')
 local order={
-  'if rt_update_quiescing then return end',
+  'if rt_update_quiescing then',
   'module_lifecycle.update_module_states(make_lifecycle_ctx())',
   'module_lifecycle.process_startup(make_lifecycle_ctx())',
   'node_state_machine:tick()',

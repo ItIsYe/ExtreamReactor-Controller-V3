@@ -690,6 +690,24 @@ function M:poll_quiesce(now_ms)
   return false
 end
 
+-- Gegenstueck zu begin_quiesce(): core/update_handshake.lua's reset()
+-- storniert einen Quiesce-Request ausdruecklich nur, solange die Rolle noch
+-- laeuft. _state.quiesce sperrt begin_transaction() ("quiescing") und damit
+-- jede Lieferung -- ohne Rueckweg blieb FUEL nach einem abgebrochenen
+-- Update-Versuch dauerhaft stumm, bis zum naechsten Reboot. Ein bereits
+-- BESTAETIGTER Quiesce wird NICHT zurueckgenommen: ab da gehoert die
+-- Hardware dem gestoppten Runtime-Zustand, Erholung heisst Reboot (dieselbe
+-- Grenze, die update_handshake.reset() selbst zieht).
+function M:cancel_quiesce(reason)
+  local q = self._state.quiesce
+  if not q then return false end
+  if q.state == "CONFIRMED" then return false end
+  self._state.quiesce = nil
+  self.log("WARN", "RedstoneRouter: Update-Quiesce zurueckgenommen ("
+    .. tostring(reason or "CANCELLED") .. ") -- Lieferungen sind wieder erlaubt")
+  return true
+end
+
 function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
   opts = opts or {}
   if self._state.quiesce then return false, "quiescing" end

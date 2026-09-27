@@ -180,6 +180,71 @@ local function log_quiesce_seen_once(flag)
   end)
 end
 
+-- Quiesce-Pruefung, geteilt zwischen run_event_loop() und run_fast_loop()
+-- (vorher in beiden dupliziert). Rueckgabe true = Runtime darf/soll enden.
+--
+-- Der Ruecknahme-Zweig (on_quiesce_cancelled) ist sicherheitsrelevant, kein
+-- Aufraeumen: core/update_handshake.lua's reset() storniert einen Quiesce-
+-- Request ausdruecklich nur, "while the role is still running" -- die Rolle
+-- laeuft danach also weiter und MUSS ihren Sicherheitszustand wieder
+-- verlassen. Genau das fehlte: on_quiesce() setzt bei RT/FUEL eine Sperre
+-- (rt_update_quiescing bzw. _state.quiesce), die die gesamte Regelung bzw.
+-- jede Lieferung unterdrueckt, und diese Sperre hatte keinen Rueckweg.
+-- Bestaetigt die Rolle den sicheren Zustand nicht innerhalb des Update-
+-- Fensters (bei RT muessen ALLE Turbinen Flow 0 + Coil + inaktiv
+-- zurueckmelden -- mit 50 Turbinen deutlich wahrscheinlicher unvollstaendig
+-- als mit 25) und bricht der Updater danach ab (installer/auto_update.lua's
+-- recover_unexpected() ruft im Zustand QUIESCE_REQUESTED reset(), OHNE
+-- Reboot), blieb die Node dauerhaft in diesem Zustand: Flow 0 auf allen
+-- Turbinen, Coils eingehaengt, v2-Regelung tot -- waehrend die Anzeige
+-- weiter Drehzahlen las und "einlernen" behauptete, weil der Status-
+-- Snapshot die Hardware unabhaengig von control_tick() abfragt. Nur ein
+-- Reboot half.
+local function run_quiesce_check(handshake_lib, quiesce_opts, quiesce_seen)
+  if not handshake_lib then return false end
+  if handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
+    log_quiesce_seen_once(quiesce_seen)
+    quiesce_seen.attempted = true
+    handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
+    -- Fail-closed default: ohne echtes on_quiesce-Ergebnis gilt der
+    -- Quiesce-Vorgang nicht als bestaetigt.
+    local confirmed = false
+    if type(quiesce_opts.on_quiesce) == "function" then
+      local ok3, result3 = pcall(quiesce_opts.on_quiesce)
+      if ok3 then
+        -- Safety acknowledgement is fail-closed: nil/omitted results are
+        -- not proof that physical outputs reached their safe state.
+        confirmed = result3 == true
+      else
+        confirmed = false
+        pcall(function()
+          require("core.utils").log("RUNTIME", "on_quiesce error: " .. tostring(result3), "ERROR")
+        end)
+      end
+    end
+    if confirmed then
+      handshake_lib.mark_safe_outputs_applied(quiesce_opts.handshake)
+      handshake_lib.mark_runtime_stopped(quiesce_opts.handshake)
+      return true
+    end
+    return false
+  end
+  quiesce_seen.seen = false
+  if quiesce_seen.attempted then
+    quiesce_seen.attempted = false
+    if type(quiesce_opts.on_quiesce_cancelled) == "function" then
+      local ok4, err4 = pcall(quiesce_opts.on_quiesce_cancelled)
+      if not ok4 then
+        pcall(function()
+          require("core.utils").log("RUNTIME",
+            "on_quiesce_cancelled error: " .. tostring(err4), "ERROR")
+        end)
+      end
+    end
+  end
+  return false
+end
+
 function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce_opts)
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
   local quiesce_seen = { seen = false } -- TEMP DIAGNOSTIC, see log_quiesce_seen_once() above
@@ -208,32 +273,8 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
         end
       end
       services:tick()
-      if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
-        log_quiesce_seen_once(quiesce_seen)
-        handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
-        -- Fail-closed default: ohne echtes on_quiesce-Ergebnis gilt der
-        -- Quiesce-Vorgang nicht als bestaetigt.
-        local confirmed = false
-        if type(quiesce_opts.on_quiesce) == "function" then
-          local ok3, result3 = pcall(quiesce_opts.on_quiesce)
-          if ok3 then
-            -- Safety acknowledgement is fail-closed: nil/omitted results are
-            -- not proof that physical outputs reached their safe state.
-            confirmed = result3 == true
-          else
-            confirmed = false
-            pcall(function()
-              require("core.utils").log("RUNTIME", "on_quiesce error: " .. tostring(result3), "ERROR")
-            end)
-          end
-        end
-        if confirmed then
-          handshake_lib.mark_safe_outputs_applied(quiesce_opts.handshake)
-          handshake_lib.mark_runtime_stopped(quiesce_opts.handshake)
-          return
-        end
-      else
-        quiesce_seen.seen = false
+      if run_quiesce_check(handshake_lib, quiesce_opts, quiesce_seen) then
+        return
       end
     end
   end, function(e) return e end)
@@ -302,28 +343,8 @@ function M.run_fast_loop(opts)
         end)
       end
     end
-    if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
-      log_quiesce_seen_once(quiesce_seen)
-      handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
-      local confirmed = false
-      if type(quiesce_opts.on_quiesce) == "function" then
-        local ok3, result3 = pcall(quiesce_opts.on_quiesce)
-        if ok3 then
-          confirmed = result3 == true
-        else
-          confirmed = false
-          pcall(function()
-            require("core.utils").log("RUNTIME", "on_quiesce error: " .. tostring(result3), "ERROR")
-          end)
-        end
-      end
-      if confirmed then
-        handshake_lib.mark_safe_outputs_applied(quiesce_opts.handshake)
-        handshake_lib.mark_runtime_stopped(quiesce_opts.handshake)
-        return
-      end
-    else
-      quiesce_seen.seen = false
+    if run_quiesce_check(handshake_lib, quiesce_opts, quiesce_seen) then
+      return
     end
   end
 end
