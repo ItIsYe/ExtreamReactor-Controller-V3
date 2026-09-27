@@ -42,6 +42,16 @@ function M.read_turbine(name, turbine_info)
     -- im Mod weiter 2000 anstanden und die Rotoren lastfrei hochliefen.
     -- nil heisst jetzt nil, und der Aufrufer muss damit umgehen.
     current_flow = num_or_nil(turbine_info.flow),
+    -- Der tatsaechliche Durchsatz, getrennt von der Obergrenze oben.
+    -- Der REGLER benutzt ihn NICHT -- er regelt weiter gegen dieselbe
+    -- Groesse wie bisher, damit sich sein Verhalten nicht aendert. Er
+    -- geht nur in die Aufzeichnung: ohne ihn ist nicht entscheidbar, ob
+    -- eine geaenderte Vorgabe ueberhaupt mehr Dampf durch die Turbine
+    -- schickt.
+    flow_actual = num_or_nil(turbine_info.flow_actual),
+    flow_method = turbine_info.flow_method,
+    flow_actual_method = turbine_info.flow_actual_method,
+    set_flow_method = turbine_info.set_flow_method,
     active = turbine_info.active == true,
   }
 end

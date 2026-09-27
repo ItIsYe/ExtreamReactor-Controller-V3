@@ -38,7 +38,7 @@ local NIL = setmetatable({}, { __tostring = function() return 'NIL' end })
 
 local function turbine(over)
   local t = {
-    name = 'Turbine_1', rpm = 880, flow_is = 600, target_rpm = 900,
+    name = 'Turbine_1', rpm = 880, flow_is = 600, flow_act = 590, target_rpm = 900,
     flow_cmd = 640, reason = 'TRIM_UP', unchanged = false,
     coil_is = true, coil_cmd = true, model = false,
     write_ok = true, write_err = nil, coil_ok = true,
@@ -59,21 +59,22 @@ do
   local memory = {}
   local rows = rt2_trace.format_rows({
     ms = 1000, tick = 10, state = 'LEARNING',
-    turbines = { turbine({ rpm = NIL, flow_is = NIL }) },
+    turbines = { turbine({ rpm = NIL, flow_is = NIL, flow_act = NIL }) },
   }, { full_sweep = true }, memory)
 
   local u = rows_of_kind(rows, 'U')[1]
   assert_true(u ~= nil, 'keine Turbinenzeile')
   assert_eq(u[4], '', 'eine nicht lesbare Drehzahl muss LEER sein, nicht 0')
-  assert_eq(u[5], '', 'ein nicht lesbarer Durchfluss muss LEER sein, nicht 0')
+  assert_eq(u[5], '', 'eine nicht lesbare Obergrenze muss LEER sein, nicht 0')
 
   -- Und eine echte 0 muss als 0 erkennbar bleiben.
   local rows0 = rt2_trace.format_rows({
-    ms = 2000, turbines = { turbine({ rpm = 0, flow_is = 0 }) },
+    ms = 2000, turbines = { turbine({ rpm = 0, flow_is = 0, flow_act = 0 }) },
   }, { full_sweep = true }, {})
   local u0 = rows_of_kind(rows0, 'U')[1]
   assert_eq(u0[4], '0', 'eine gemessene 0 muss als 0 dastehen')
-  assert_eq(u0[5], '0', 'ebenso beim Durchfluss')
+  assert_eq(u0[5], '0', 'ebenso bei der Obergrenze')
+  assert_eq(u0[6], '0', 'und beim tatsaechlichen Durchsatz')
 end
 
 -- ── 2. Wiederholung wird unterdrueckt, Aenderung nicht ───────────────────
@@ -111,8 +112,8 @@ do
   rt2_trace.format_rows(broken, {}, memory2)
   local again = rows_of_kind(rt2_trace.format_rows(broken, {}, memory2), 'U')
   assert_eq(#again, 1, 'ein fehlgeschlagenes Schreiben muss in JEDEM Takt dastehen')
-  assert_eq(again[1][13], '0', 'write_ok=false muss als 0 dastehen')
-  assert_eq(again[1][14], 'NO_FLOW_API', 'und der Fehlertext mit')
+  assert_eq(again[1][14], '0', 'write_ok=false muss als 0 dastehen')
+  assert_eq(again[1][15], 'NO_FLOW_API', 'und der Fehlertext mit')
 end
 
 -- ── 4. Die Sammelzeile zaehlt, was zaehlt ────────────────────────────────
@@ -188,12 +189,57 @@ do
     ms = 1, turbines = { turbine({ write_err = 'bad argument #1, string expected' }) },
   }, { full_sweep = true }, {})
   local u = rows_of_kind(rows, 'U')[1]
-  assert_eq(#u, 16, 'die Spaltenzahl muss stimmen, auch mit Komma im Fehlertext')
-  assert_true(u[14]:find('bad argument #1', 1, true) ~= nil
-    and u[14]:find('string expected', 1, true) ~= nil,
-    'der Text bleibt lesbar: ' .. tostring(u[14]))
-  assert_true(u[14]:find(',', 1, true) == nil,
+  assert_eq(#u, 17, 'die Spaltenzahl muss stimmen, auch mit Komma im Fehlertext')
+  assert_true(u[15]:find('bad argument #1', 1, true) ~= nil
+    and u[15]:find('string expected', 1, true) ~= nil,
+    'der Text bleibt lesbar: ' .. tostring(u[15]))
+  assert_true(u[15]:find(',', 1, true) == nil,
     'aber ohne Komma, sonst rutschen die Spalten')
+end
+
+-- ── 7. Obergrenze und tatsaechlicher Durchsatz sind ZWEI Spalten ─────────
+--
+-- Der Grund, warum die erste Feldaufzeichnung nicht auswertbar war: die
+-- Spalte hiess "Durchfluss", enthielt aber die per setFluidFlowRateMax
+-- gesetzte OBERGRENZE -- also den Stellwert, den der Regler selbst
+-- geschrieben hatte, nicht den Messwert. Eine Vorgabe stieg dort um das
+-- 13-fache, waehrend die Drehzahl fiel, und es war nicht entscheidbar, ob
+-- ueberhaupt mehr Dampf floss.
+
+do
+  local rows = rt2_trace.format_rows({
+    ms = 1000,
+    turbines = { turbine({ flow_is = 1564, flow_act = 31 }) },
+  }, { full_sweep = true }, {})
+  local u = rows_of_kind(rows, 'U')[1]
+  assert_eq(u[5], '1564', 'Spalte 5 ist die Obergrenze')
+  assert_eq(u[6], '31', 'Spalte 6 ist der tatsaechliche Durchsatz -- sie muessen getrennt sein')
+end
+
+-- ── 8. Der volle Durchgang nennt die gebundenen Methoden ─────────────────
+--
+-- Ohne sie ist aus der Datei nicht erkennbar, WAS gelesen und WAS
+-- geschrieben wurde.
+
+do
+  local rows = rt2_trace.format_rows({
+    ms = 7000,
+    turbines = { turbine({
+      flow_method = 'getFluidFlowRateMax',
+      flow_actual_method = 'getFluidFlowRate',
+      set_flow_method = 'setFluidFlowRateMax',
+    }) },
+  }, { full_sweep = true }, {})
+  local m = rows_of_kind(rows, 'M')[1]
+  assert_true(m ~= nil, 'der volle Durchgang muss die Methoden nennen')
+  assert_eq(m[4], 'getFluidFlowRateMax', 'Lesemethode')
+  assert_eq(m[5], 'getFluidFlowRate', 'Messmethode')
+  assert_eq(m[6], 'setFluidFlowRateMax', 'Schreibmethode')
+
+  -- Nur im vollen Durchgang, nicht in jedem Takt.
+  assert_eq(#rows_of_kind(rt2_trace.format_rows({
+    ms = 8000, turbines = { turbine({ flow_method = 'getFluidFlowRateMax' }) },
+  }, {}, {}), 'M'), 0, 'Methodenzeilen gehoeren nicht in jeden Takt')
 end
 
 print('rt2_trace_format_test.lua: ok')

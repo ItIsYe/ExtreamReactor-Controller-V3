@@ -76,6 +76,19 @@ local capability_cache = {}
 -- stammt aus der Big-Reactors-Aera und existiert dort nicht mehr.
 local RPM_METHODS  = { "getRotorSpeed", "getRotorRPM" }
 local FLOW_METHODS = { "getFluidFlowRateMax", "getFluidFlowRate" }
+-- Der TATSAECHLICHE Durchsatz, getrennt von der Obergrenze.
+--
+-- Diese Trennung fehlte, und sie ist der Grund, warum eine Feldmessung
+-- nicht auswertbar war: FLOW_METHODS liefert bevorzugt
+-- getFluidFlowRateMax -- die per setFluidFlowRateMax gesetzte OBERGRENZE,
+-- nicht das, was durch die Turbine laeuft. Beides unter einem Namen zu
+-- fuehren heisst, den Stellwert mit dem Messwert zu verwechseln: der
+-- Regler liest seine eigene Vorgabe zurueck und haelt sie fuer eine
+-- Messung. In einer Aufzeichnung vom 2026-09-27 stieg die Vorgabe auf
+-- 11 Turbinen um das 13-fache, waehrend die Drehzahl monoton FIEL -- ob
+-- dabei ueberhaupt mehr Dampf floss, liess sich nicht sagen, weil nur die
+-- Obergrenze aufgezeichnet war.
+local FLOW_ACTUAL_METHODS = { "getFluidFlowRate" }
 
 -- Auch das SCHREIBEN wird ermittelt, nicht angenommen.
 --
@@ -119,6 +132,7 @@ local function capabilities(name, log_prefix)
     methods = methods, set = set,
     rpm_method = first_available(set, RPM_METHODS),
     flow_method = first_available(set, FLOW_METHODS),
+    flow_actual_method = first_available(set, FLOW_ACTUAL_METHODS),
     set_flow_method = first_available(set, SET_FLOW_METHODS),
     set_coil_method = first_available(set, SET_COIL_METHODS),
     set_active_method = first_available(set, SET_ACTIVE_METHODS),
@@ -192,6 +206,12 @@ function turbine.inspect(name, log_prefix)
     and (safe_call(name, "getActive", log_prefix) == true) or false
   local rpm = read_number(name, caps and caps.rpm_method or nil, log_prefix)
   local flow = read_number(name, caps and caps.flow_method or nil, log_prefix)
+  -- Nur lesen, wenn es eine ANDERE Methode ist als die fuer `flow` --
+  -- sonst waere es derselbe Peripherieaufruf zweimal je Takt.
+  local flow_actual
+  if caps and caps.flow_actual_method and caps.flow_actual_method ~= caps.flow_method then
+    flow_actual = read_number(name, caps.flow_actual_method, log_prefix)
+  end
   local energy = read_number(name,
     has_method(method_set, "getEnergyProducedLastTick") and "getEnergyProducedLastTick" or nil, log_prefix)
   local coil = has_method(method_set, "getInductorEngaged")
@@ -204,6 +224,7 @@ function turbine.inspect(name, log_prefix)
       active = has_method(method_set, "getActive"),
       rpm = caps ~= nil and caps.rpm_method ~= nil,
       flow = caps ~= nil and caps.flow_method ~= nil,
+      flow_actual = caps ~= nil and caps.flow_actual_method ~= nil,
       energy = has_method(method_set, "getEnergyProducedLastTick"),
       coils = has_method(method_set, "getInductorEngaged")
     },
@@ -211,13 +232,21 @@ function turbine.inspect(name, log_prefix)
       active = "boolean",
       rpm = "number",
       flow = "number",
+      flow_actual = "number",
       energy = "number",
       coil_engaged = "boolean"
     },
     active = active,
     rpm = rpm,
     flow = flow,
+    flow_actual = flow_actual,
     energy = energy,
+    -- Welche Methoden dieser Adapter tatsaechlich gebunden hat. Ohne das
+    -- ist aus einer Aufzeichnung nicht erkennbar, WAS gelesen und WAS
+    -- geschrieben wurde -- und genau daran hing die Auswertung.
+    flow_method = caps and caps.flow_method or nil,
+    flow_actual_method = caps and caps.flow_actual_method or nil,
+    set_flow_method = caps and caps.set_flow_method or nil,
     coil_engaged = coil == true,
     methods = methods
   }

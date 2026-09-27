@@ -174,6 +174,58 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## Erste Feldaufzeichnung: was sie zeigt, und was ihr fehlte (v781)
+
+Aufzeichnung vom 2026-09-27, node RT-101, 61 s, 50 Turbinen, 2 Reaktoren.
+
+**Was belegt ist:**
+* **194 Schreibvorgaenge, alle `write_ok = 1`, kein einziger Fehler.** Coils
+  sitzen, Drehzahlen sind lesbar. Adapter und Schreibpfad sind sauber --
+  alle Theorien ueber abgelehnte Stellbefehle sind damit erledigt.
+* **Die Vorgabe stieg auf 11 Turbinen von ~118 auf ~1564 (13-fach), und die
+  Drehzahl fiel dabei monoton von 915 auf 864.** Kein einzelnes RPM
+  Reaktion, bei allen 11 dieselbe Form.
+* Die Abfallrate dieser Turbinen (0,84 RPM/s) ist **dieselbe** wie bei den
+  26 Turbinen, die mit Durchfluss **0** auslaufen (1,63 RPM/s bei
+  eingehaengter Spule). Sie verhalten sich wie Turbinen ohne Dampf,
+  unabhaengig davon, was befohlen wird.
+* Die 10 abgeschalteten Turbinen (`TARGET_ZERO`) wechseln im ganzen
+  Zeitraum **nicht** -- die Slot-Rotation ist als Ursache ausgeschlossen.
+* `n_model = 0`: **keine einzige Kennlinie in Gebrauch.** Kennlinien
+  brauchen Betriebspunkte mit STILLSTEHENDEM Durchfluss; solange nichts
+  einschwingt, entsteht keine. Das 25-Turbinen-Setup hatte geladene
+  Kennlinien -- dort regelt der Modellzweig proportional statt in
+  35er-Schritten zu tasten.
+
+**Zurueckgezogen:** ich hatte `fill = 0` bei Reactor_6 als Dampfmangel
+gelesen. Falsch. Bei einem aktiv gekuehlten Reaktor, dessen Dampf laufend
+abgenommen wird, ist ein leerer Innentank der Normalfall -- er fuellt sich
+nur, wenn die Produktion den Verbrauch uebersteigt. Der Betreiber hat
+Dampfmangel ausdruecklich ausgeschlossen.
+
+**Was der Aufzeichnung fehlte, und warum sie nicht zu Ende auswertbar war:**
+die Spalte `flow_is` enthielt `getFluidFlowRateMax` -- die per
+`setFluidFlowRateMax` gesetzte **Obergrenze**, also den Stellwert, den der
+Regler selbst geschrieben hatte, zurueckgelesen. Nicht den Messwert. Damit
+liess sich die entscheidende Frage nicht beantworten: **floss ueberhaupt
+mehr Dampf, als die Vorgabe um das 13-fache stieg?**
+
+`adapters/turbine.lua`s `FLOW_METHODS` bevorzugt `getFluidFlowRateMax` vor
+`getFluidFlowRate` -- Stellwert vor Messwert, unter einem Namen.
+
+**Behoben in v781, rein diagnostisch:** der Adapter liest beides getrennt
+(`flow` = Obergrenze, `flow_actual` = `getFluidFlowRate`), die Aufzeichnung
+hat dafuer zwei Spalten, und jeder volle Durchgang schreibt eine `M`-Zeile
+je Turbine mit den tatsaechlich gebundenen Methoden (lesen / messen /
+schreiben). **Der Regler benutzt den neuen Wert NICHT** -- er regelt weiter
+gegen dieselbe Groesse wie bisher, damit sich sein Verhalten nicht aendert.
+
+Die naechste Aufzeichnung entscheidet in einem Blick: steigt `flow_act`
+mit der Vorgabe, ist der Dampf da und die Turbine setzt ihn nicht in
+Drehzahl um (Spule/Last). Bleibt `flow_act` stehen, waehrend die Vorgabe
+steigt, ist `setFluidFlowRateMax` auf dieser Anlage nicht der Hebel, der
+den Dampfeinlass bestimmt.
+
 ## Regler-Aufzeichnung auf dem Knoten (v779)
 
 Betreiberauftrag: "Der Regler spinnt immer noch rum -- lege ein Logging vom

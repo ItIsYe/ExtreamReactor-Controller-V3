@@ -32,7 +32,7 @@
 
 local M = {}
 
-M.VERSION = 1
+M.VERSION = 2
 
 -- Spaltenkoepfe, damit die Datei ohne diese Quelle lesbar ist.
 M.HEADER = table.concat({
@@ -41,8 +41,10 @@ M.HEADER = table.concat({
   "# T,ms,tick,state,master_pct,max_active,cap_ready,cap_max,cap_sust,cap_at_target,"
     .. "n_turb,n_flow0,n_unchanged,n_model,n_dropped,n_suppressed",
   "# R,ms,name,fill,rods_is,rods_cmd,reason,temp,coolant,tripped,write_ok,write_err",
-  "# U,ms,name,rpm,flow_is,target_rpm,flow_cmd,reason,unchanged,coil_is,coil_cmd,"
-    .. "model,write_ok,write_err,coil_ok,coil_err",
+  "# U,ms,name,rpm,flow_is,flow_act,target_rpm,flow_cmd,reason,unchanged,coil_is,"
+    .. "coil_cmd,model,write_ok,write_err,coil_ok,coil_err",
+  "# flow_is = OBERGRENZE (was gesetzt wurde), flow_act = TATSAECHLICHER Durchsatz",
+  "# M,ms,name,flow_method,flow_actual_method,set_flow_method  (einmal je Durchgang)",
   "# leeres Feld = kein Messwert (nil), NICHT 0",
 }, "\n")
 
@@ -72,6 +74,21 @@ function M.turbine_signature(row)
     s(row.reason), b(row.unchanged), n(row.flow_cmd), n(row.target_rpm),
     b(row.coil_cmd), b(row.model), b(row.write_ok), s(row.write_err),
   }, "|")
+end
+
+-- Welche Peripherie-Methoden dieser Turbine gebunden sind. Eine Zeile je
+-- vollem Durchgang -- ohne sie ist aus der Datei nicht erkennbar, WAS
+-- gelesen und WAS geschrieben wurde, und genau daran scheiterte die
+-- Auswertung der ersten Feldaufzeichnung.
+local function method_rows(ms, turbines, out)
+  for _, t in ipairs(turbines) do
+    if t.flow_method or t.flow_actual_method or t.set_flow_method then
+      out[#out + 1] = table.concat({
+        "M", n(ms), s(t.name), s(t.flow_method), s(t.flow_actual_method),
+        s(t.set_flow_method),
+      }, ",")
+    end
+  end
 end
 
 -- Ein Takt -> Zeilen. Rein: kein Dateisystem, keine Uhr, kein Zustand
@@ -149,11 +166,13 @@ function M.format_rows(sample, opts, memory)
   for index, t in ipairs(interesting) do
     if index > limit then break end
     rows[#rows + 1] = table.concat({
-      "U", n(ms), s(t.name), n(t.rpm), n(t.flow_is), n(t.target_rpm),
+      "U", n(ms), s(t.name), n(t.rpm), n(t.flow_is), n(t.flow_act), n(t.target_rpm),
       n(t.flow_cmd), s(t.reason), b(t.unchanged), b(t.coil_is), b(t.coil_cmd),
       b(t.model), b(t.write_ok), s(t.write_err), b(t.coil_ok), s(t.coil_err),
     }, ",")
   end
+
+  if full_sweep then method_rows(ms, turbines, rows) end
 
   for _, name in ipairs(sample.dropped or {}) do
     rows[#rows + 1] = table.concat({ "D", n(ms), s(name) }, ",")

@@ -217,7 +217,11 @@ local function write_trace(ctx, now_ms, result, turbine_readings, reactor_inputs
       turbines[#turbines + 1] = {
         name = t.name,
         rpm = reading.rpm,                 -- leer = nicht lesbar, nicht 0
-        flow_is = reading.current_flow,    -- ebenso
+        flow_is = reading.current_flow,    -- die OBERGRENZE (was gesetzt wurde)
+        flow_act = reading.flow_actual,    -- der TATSAECHLICHE Durchsatz
+        flow_method = reading.flow_method,
+        flow_actual_method = reading.flow_actual_method,
+        set_flow_method = reading.set_flow_method,
         target_rpm = t.target_rpm,
         flow_cmd = flow.flow,
         reason = flow.reason,
