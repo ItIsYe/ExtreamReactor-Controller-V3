@@ -5,8 +5,7 @@ local rt2_state = require('nodes.rt.rt2_state')
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
 
--- Boot sequence: INIT -> LEARNING (hardware found) -> LEARNING holds until
--- capacity is ready, regardless of MASTER connectivity (spec point 1).
+-- Der Knoten lernt nichts mehr ein: sobald Hardware da ist, arbeitet er.
 do
   local m = rt2_state.new()
   assert_eq(m.current(), rt2_state.states.INIT, 'boots into INIT')
@@ -16,137 +15,87 @@ do
   assert_true(not changed, 'no transition without hardware')
 
   s, changed = m.tick({ hardware_ready = true, master_connected = true })
-  assert_eq(s, rt2_state.states.LEARNING, 'moves to LEARNING once hardware is found')
-  assert_true(changed, 'INIT->LEARNING is a real transition')
-
-  -- Still learning, MASTER connected -- must NOT jump to MASTER yet.
-  s = m.tick({ hardware_ready = true, master_connected = true, capacity_ready = false })
-  assert_eq(s, rt2_state.states.LEARNING, 'learning must complete independently of MASTER presence')
-
-  -- Still learning, MASTER absent -- must also stay in LEARNING (not AUTONOM).
-  s = m.tick({ hardware_ready = true, master_connected = false, capacity_ready = false })
-  assert_eq(s, rt2_state.states.LEARNING, 'learning is unconditional -- MASTER absence does not skip it either')
-end
-
--- Once learning completes, MASTER presence decides MASTER vs AUTONOM (spec point 2).
-do
-  local m = rt2_state.new(rt2_state.states.LEARNING)
-  local s = m.tick({ capacity_ready = true, master_connected = true })
-  assert_eq(s, rt2_state.states.MASTER, 'learning complete + MASTER connected -> MASTER')
+  assert_eq(s, rt2_state.states.MASTER, 'hardware + MASTER -> MASTER, no learning phase in between')
+  assert_true(changed, 'INIT->MASTER is a real transition')
 end
 
 do
-  local m = rt2_state.new(rt2_state.states.LEARNING)
-  local s = m.tick({ capacity_ready = true, master_connected = false })
-  assert_eq(s, rt2_state.states.AUTONOM, 'learning complete + no MASTER -> AUTONOM')
+  local m = rt2_state.new()
+  local s = m.tick({ hardware_ready = true, master_connected = false })
+  assert_eq(s, rt2_state.states.AUTONOM, 'hardware without MASTER -> AUTONOM')
 end
 
--- Live MASTER connect/disconnect while capacity is already known must
--- flip MASTER<->AUTONOM directly, never back through LEARNING.
+-- Es gibt keinen Zustand LEARNING mehr, und ein alter, gespeicherter
+-- Startzustand darf den Knoten nicht dorthin setzen.
+do
+  assert_eq(rt2_state.states.LEARNING, nil, 'LEARNING is gone from the vocabulary')
+  local m = rt2_state.new('LEARNING')
+  assert_eq(m.current(), rt2_state.states.INIT, 'an unknown persisted state falls back to INIT')
+end
+
+-- Live MASTER connect/disconnect flips MASTER<->AUTONOM directly.
 do
   local m = rt2_state.new(rt2_state.states.MASTER)
-  local s = m.tick({ capacity_ready = true, master_connected = false })
+  local s = m.tick({ hardware_ready = true, master_connected = false })
   assert_eq(s, rt2_state.states.AUTONOM, 'MASTER disconnect while running -> AUTONOM directly')
-  s = m.tick({ capacity_ready = true, master_connected = true })
-  assert_eq(s, rt2_state.states.MASTER, 'MASTER reconnect -> MASTER directly, no relearning')
+  s = m.tick({ hardware_ready = true, master_connected = true })
+  assert_eq(s, rt2_state.states.MASTER, 'MASTER reconnect -> MASTER directly')
 end
 
 -- Safety trip always wins, from any state, and overrides even a connected MASTER.
 do
   local m = rt2_state.new(rt2_state.states.MASTER)
-  local s = m.tick({ capacity_ready = true, master_connected = true, safety_tripped = true })
+  local s = m.tick({ hardware_ready = true, master_connected = true, safety_tripped = true })
   assert_eq(s, rt2_state.states.SAFE, 'a safety trip must override MASTER connectivity')
 end
 
 do
-  local m = rt2_state.new(rt2_state.states.LEARNING)
-  local s = m.tick({ capacity_ready = false, safety_tripped = true })
-  assert_eq(s, rt2_state.states.SAFE, 'a safety trip must override even an incomplete learning phase')
+  local m = rt2_state.new(rt2_state.states.INIT)
+  local s = m.tick({ hardware_ready = false, safety_tripped = true })
+  assert_eq(s, rt2_state.states.SAFE, 'a safety trip wins even before hardware is confirmed')
 end
 
--- Recovery from SAFE goes straight to MASTER/AUTONOM (capacity already
--- known), never back through LEARNING.
+-- Recovery from SAFE goes straight back to MASTER/AUTONOM.
 do
   local m = rt2_state.new(rt2_state.states.SAFE)
-  local s = m.tick({ capacity_ready = true, master_connected = true, safety_tripped = false })
+  local s = m.tick({ hardware_ready = true, master_connected = true, safety_tripped = false })
   assert_eq(s, rt2_state.states.MASTER, 'SAFE recovery with MASTER connected goes straight to MASTER')
 end
 
 do
   local m = rt2_state.new(rt2_state.states.SAFE)
-  local s = m.tick({ capacity_ready = true, master_connected = false, safety_tripped = false })
+  local s = m.tick({ hardware_ready = true, master_connected = false, safety_tripped = false })
   assert_eq(s, rt2_state.states.AUTONOM, 'SAFE recovery without MASTER goes straight to AUTONOM')
+end
+
+-- Regression: eine Turbinenzahl, die sich im Betrieb aendert, darf den
+-- Knoten nicht mehr aus dem Betrieb werfen. Vorher verwarf rt2_capacity
+-- dabei die eingelernte Kapazitaet, der Knoten fiel zurueck ins LEARNING
+-- und konnte sich dort nicht mehr einlernen, weil die Flotte unter MASTER
+-- auf geteilten Zielen fuhr -- er stand bis zum Neustart. Es gibt jetzt
+-- weder eine gelernte Kapazitaet noch einen Weg dorthin zurueck.
+do
+  assert_eq(rt2_state.decide_next_state('MASTER',
+    { hardware_ready = true, master_connected = true }),
+    'MASTER', 'a running MASTER node stays operational')
+  assert_eq(rt2_state.decide_next_state('AUTONOM',
+    { hardware_ready = true, master_connected = false }),
+    'AUTONOM', 'a running AUTONOM node stays operational')
+  assert_eq(rt2_state.decide_next_state('MASTER',
+    { hardware_ready = true, master_connected = true, safety_tripped = true }),
+    'SAFE', 'a trip still wins')
 end
 
 -- History records every real transition, in order.
 do
   local m = rt2_state.new()
-  m.tick({ hardware_ready = true })
-  m.tick({ capacity_ready = true, master_connected = false })
+  m.tick({ hardware_ready = true, master_connected = false })
+  m.tick({ hardware_ready = true, master_connected = true })
   local h = m.history()
   assert_eq(#h, 2, 'two real transitions recorded')
   assert_eq(h[1].from, rt2_state.states.INIT, 'first transition from INIT')
-  assert_eq(h[1].to, rt2_state.states.LEARNING, 'first transition to LEARNING')
-  assert_eq(h[2].to, rt2_state.states.AUTONOM, 'second transition to AUTONOM')
-end
-
--- Regression: a safety trip that happens DURING learning must resume
--- LEARNING on recovery, not jump into MASTER/AUTONOM with an unlearned
--- capacity (MASTER would then split power against a capacity_max of 0).
-do
-  local m = rt2_state.new()
-  m.tick({ hardware_ready = true })                       -- INIT -> LEARNING
-  assert_eq(m.current(), rt2_state.states.LEARNING)
-  m.tick({ hardware_ready = true, safety_tripped = true }) -- trip mid-learning
-  assert_eq(m.current(), rt2_state.states.SAFE)
-  m.tick({ hardware_ready = true, capacity_ready = false, master_connected = true })
-  assert_eq(m.current(), rt2_state.states.LEARNING,
-    'recovering from SAFE without a learned capacity must resume LEARNING, not go operational')
-  m.tick({ hardware_ready = true, capacity_ready = true, master_connected = true })
-  assert_eq(m.current(), rt2_state.states.MASTER, 'once learned it may go operational')
-end
-
--- A trip AFTER learning still recovers straight to MASTER/AUTONOM --
--- there is nothing left to relearn.
-do
-  local m = rt2_state.new()
-  m.tick({ hardware_ready = true })
-  m.tick({ hardware_ready = true, capacity_ready = true, master_connected = false })
-  assert_eq(m.current(), rt2_state.states.AUTONOM)
-  m.tick({ hardware_ready = true, capacity_ready = true, safety_tripped = true })
-  assert_eq(m.current(), rt2_state.states.SAFE)
-  m.tick({ hardware_ready = true, capacity_ready = true, master_connected = false })
-  assert_eq(m.current(), rt2_state.states.AUTONOM, 'a learned node recovers straight to AUTONOM')
-end
-
--- ── Topologie-Wechsel im Betrieb ─────────────────────────────────────────
---
--- Wird im laufenden Betrieb eine Turbine an- oder abgebaut, verwirft
--- rt2_capacity die eingelernte Kapazitaet (sie invalidiert ueber die
--- Turbinen-ANZAHL). Vorher gab es aus MASTER/AUTONOM keinen Weg zurueck
--- ins LEARNING: beide Zweige sahen nur auf die MASTER-Verbindung. Der
--- Knoten blieb also MASTER mit capacity_ready=false und max_output=0 --
--- MASTER verteilte Leistung gegen eine Kapazitaet, die er nicht mehr
--- hatte -- bis jemand den Rechner neu startete. Und einlernen konnte er
--- sich dort auch nicht mehr, weil die Flotte unter MASTER auf geteilten
--- Zielen faehrt und die Messung damit nie wieder gelingt.
-do
-  assert_eq(rt2_state.decide_next_state('MASTER',
-    { hardware_ready = true, capacity_ready = false, master_connected = true }),
-    'LEARNING', 'a MASTER node whose capacity was invalidated must relearn')
-  assert_eq(rt2_state.decide_next_state('AUTONOM',
-    { hardware_ready = true, capacity_ready = false, master_connected = false }),
-    'LEARNING', 'an AUTONOM node whose capacity was invalidated must relearn')
-
-  -- Und danach genauso selbstverstaendlich wieder heraus.
-  assert_eq(rt2_state.decide_next_state('LEARNING',
-    { hardware_ready = true, capacity_ready = true, master_connected = true }),
-    'MASTER', 'and returns to MASTER once it has relearned')
-
-  -- Ein Sicherheitsausloeser gewinnt weiterhin gegen alles.
-  assert_eq(rt2_state.decide_next_state('MASTER',
-    { hardware_ready = true, capacity_ready = false, master_connected = true, safety_tripped = true }),
-    'SAFE', 'a trip still wins over the relearn path')
+  assert_eq(h[1].to, rt2_state.states.AUTONOM, 'first transition to AUTONOM')
+  assert_eq(h[2].to, rt2_state.states.MASTER, 'second transition to MASTER')
 end
 
 print('rt2_state_machine_test.lua: ok')

@@ -1,7 +1,7 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- LEBENSLAUF-PRUEFUNG: PC-Start -> Einlernen -> AUTONOM -> MASTER -> zurueck,
--- Sicherheitsausloesung und Erholung, Neustart aus dem Cache.
+-- LEBENSLAUF-PRUEFUNG: PC-Start -> AUTONOM -> MASTER -> zurueck,
+-- Sicherheitsausloesung und Erholung, Neustart.
 --
 -- Geht durch die ECHTE Engine und den echten Adapterstapel auf einer
 -- simulierten Anlage mit 25 Turbinen und einem Reaktor. Die Einzeltests
@@ -190,7 +190,6 @@ local rt2_reactor = require('nodes.rt.rt2_reactor')
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
 
-local CACHE = '/xreactor_config/rt2_lifecycle_cache.lua'
 local phase_log = {}
 local function phase(name) phase_log[#phase_log + 1] = name end
 
@@ -221,7 +220,7 @@ end
 phase('A INIT ohne Hardware')
 -- Vor der Discovery sind beide Listen leer -- so startet der Rechner.
 config.turbines, config.reactors = {}, {}
-rt2_engine.init({ cache_path = CACHE, turbine_count = 0, log = ctx.log })
+rt2_engine.init({ log = ctx.log })
 tick(3)
 assert_eq(last.state, rt2_state.states.INIT, 'ohne entdeckte Geraete bleibt der Knoten in INIT')
 assert_eq(#last.turbines, 0, 'und trifft keine Turbinenentscheidung')
@@ -231,40 +230,34 @@ for _, t in pairs(plant.turbines) do
 end
 
 -- ═══ B · Discovery findet die Anlage ═════════════════════════════════════
-phase('B Discovery -> LEARNING')
+phase('B Discovery -> Betrieb')
 config.turbines = turbine_names
 config.reactors = { REACTOR_NAME }
-rt2_engine.init({ cache_path = CACHE, turbine_count = TURBINE_COUNT, log = ctx.log })
+rt2_engine.init({ log = ctx.log })
 
 tick(1)
-assert_eq(last.state, rt2_state.states.LEARNING, 'erster Takt mit Hardware fuehrt ins Einlernen')
+assert_eq(last.state, rt2_state.states.AUTONOM,
+  'der erste Takt mit Hardware ist schon Betrieb -- es gibt keine Lernphase mehr')
 assert_true(plant.reactor.active, 'der Reaktor wird selbst eingeschaltet, wenn er aus gelesen wird')
 local full = count_targets()
-assert_eq(full, TURBINE_COUNT, 'beim Einlernen bekommt JEDE Turbine das volle Ziel')
-assert_true(last.max_active == nil, 'und es wird dabei nichts gedeckelt')
+assert_eq(full, TURBINE_COUNT, 'und JEDE Turbine bekommt das volle Ziel')
 
 -- Alle Turbinen muessen eingeschaltet worden sein.
 local switched_on = 0
 for _, t in pairs(plant.turbines) do if t.active then switched_on = switched_on + 1 end end
 assert_eq(switched_on, TURBINE_COUNT, 'jede Turbine wird eingeschaltet')
 
--- ═══ C · Einlernen laeuft durch ══════════════════════════════════════════
-phase('C Einlernen')
+-- ═══ C · Die gemeldete Leistung entsteht im Betrieb ══════════════════════
+phase('C Leistungsmeldung')
 for _ = 1, 400 do
   tick(1)
   if last.capacity.ready then break end
 end
-assert_true(last.capacity.ready, 'die Anlage muss sich ausmessen lassen -- Grund: ' .. tostring(last.capacity.reason))
-assert_true(last.capacity.max_output > 0, 'mit einem positiven, gemessenen Gesamtausstoss')
-assert_eq(last.capacity.sustainable_turbines, TURBINE_COUNT,
-  'diese Anlage traegt ihre ganze Flotte, das muss die Messung auch so sehen')
-assert_true(last.capacity.at_target >= math.ceil(TURBINE_COUNT * 0.8),
-  'und die 80-%-Schwelle war erfuellt, als gemessen wurde')
+assert_true(last.capacity.ready,
+  'sobald die Flotte liefert, hat der Knoten etwas zu melden -- Grund: ' .. tostring(last.capacity.reason))
+assert_true(last.capacity.max_output > 0, 'mit einem positiven, wirklich geflossenen Gesamtausstoss')
+assert_eq(last.capacity.total_turbines, TURBINE_COUNT)
 local learned_max = last.capacity.max_output
-
--- Der Cache muss geschrieben sein, sonst war das Einlernen beim naechsten
--- Start umsonst.
-assert_true(files[CACHE] ~= nil, 'die Messung muss im Cache landen')
 
 -- ═══ D · Ohne MASTER -> AUTONOM ══════════════════════════════════════════
 phase('D AUTONOM')
@@ -326,8 +319,9 @@ tick(200)   -- laenger als das 12-s-Fenster
 assert_eq(last.state, rt2_state.states.AUTONOM, 'ohne Nachrichten faellt der Knoten selbsttaetig auf AUTONOM zurueck')
 full = count_targets()
 assert_eq(full, TURBINE_COUNT, 'und faehrt wieder alle Turbinen auf das feste Ziel')
-assert_true(last.capacity.ready, 'der gelernte Wert ueberlebt den Moduswechsel')
-assert_eq(last.capacity.max_output, learned_max, 'unveraendert')
+assert_true(last.capacity.ready, 'die gemeldete Leistung ueberlebt den Moduswechsel')
+assert_true(last.capacity.max_output >= learned_max,
+  'und sinkt nicht -- der Hoechstwert haelt')
 
 -- ═══ H · Sicherheitsausloesung ═══════════════════════════════════════════
 phase('H SAFE')
@@ -348,24 +342,30 @@ phase('I Erholung')
 plant.reactor.temperature = 800
 tick(10)
 assert_true(last.state == rt2_state.states.AUTONOM or last.state == rt2_state.states.MASTER,
-  'faellt die Bedingung weg, geht es direkt zurueck in den Betrieb, nicht ins Einlernen')
-assert_true(last.capacity.ready, 'und ohne neu einzulernen -- die Kapazitaet ist ja bekannt')
+  'faellt die Bedingung weg, geht es direkt zurueck in den Betrieb')
 
 -- ═══ J · Neustart des Rechners ═══════════════════════════════════════════
-phase('J Neustart aus dem Cache')
-rt2_engine.init({ cache_path = CACHE, turbine_count = TURBINE_COUNT, log = ctx.log })
+--
+-- Ein Neustart legt nichts mehr aus einer Datei nach: es gibt keine
+-- gelernte Kapazitaet, kein Anlagenprofil und keine Turbinenkennlinien,
+-- die dabei zurueckkommen koennten. Der Knoten ist im ersten Takt wieder
+-- im Betrieb und meldet seine Leistung neu, sobald die Flotte liefert.
+phase('J Neustart')
+rt2_engine.init({ log = ctx.log })
+assert_eq(rt2_engine.current_state(), rt2_state.states.INIT, 'nach init() steht der Knoten auf INIT')
 tick(1)
-assert_eq(last.state, rt2_state.states.LEARNING, 'auch mit Cache laeuft der erste Takt ueber LEARNING')
-assert_true(last.capacity.ready, 'aber die Kapazitaet steht sofort -- kein erneutes Ausmessen')
-assert_eq(last.capacity.max_output, learned_max, 'und zwar der gemessene Wert von vorhin')
-tick(1)
-assert_true(last.state ~= rt2_state.states.LEARNING, 'der zweite Takt ist schon im Betrieb')
+assert_true(last.state ~= rt2_state.states.INIT, 'und ist nach einem Takt wieder im Betrieb')
+for _ = 1, 400 do
+  tick(1)
+  if last.capacity.ready then break end
+end
+assert_true(last.capacity.ready, 'die Leistungsmeldung entsteht binnen weniger Takte neu')
 
 -- ═══ K · Was MASTER zu sehen bekommt ═════════════════════════════════════
 phase('K Statusfelder')
 local fields = rt2_engine.status_fields()
 assert_eq(fields.capacity_ready, true)
-assert_eq(fields.capacity_max, learned_max, 'MASTER teilt gegen genau diese Zahl auf')
+assert_true(fields.capacity_max > 0, 'MASTER teilt gegen genau diese Zahl auf')
 assert_eq(fields.capacity_total_turbines, TURBINE_COUNT)
 assert_eq(fields.capacity_sustainable_turbines, TURBINE_COUNT)
 assert_true(fields.capacity_stable_turbines ~= nil, 'MASTER liest capacity_stable_turbines')
@@ -426,6 +426,5 @@ rt2_engine.note_master_seen(clock_ms)
 tick(3)
 assert_true(last.state == rt2_state.states.MASTER or last.state == rt2_state.states.AUTONOM,
   'danach laeuft der Knoten wieder, ist aber: ' .. tostring(last.state))
-assert_true(last.capacity.ready, 'und muss dafuer nicht neu einlernen')
 
 print('rt2_lifecycle_test.lua: ok (' .. table.concat(phase_log, ' | ') .. ')')

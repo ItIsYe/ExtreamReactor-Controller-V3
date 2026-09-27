@@ -2,129 +2,132 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 local orchestrator = require('nodes.rt.rt2_orchestrator')
 local rt2_state = require('nodes.rt.rt2_state')
-local rt2_capacity = require('nodes.rt.rt2_capacity')
 
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
-
--- Eine bereits eingelernte Anlage, wie sie aus dem Cache kaeme. Die
--- meisten Bloecke hier pruefen das Verhalten NACH dem Einlernen; seit das
--- Einlernen ein gestaffelter Suchlauf ist (rt2_capacity), dauert es
--- mehrere Sekunden Modellzeit und wuerde diese Bloecke nur verwaessern.
-local function learned(count, max_output)
-  local c = rt2_capacity.new_state()
-  c.ready = true
-  c.max_output = max_output or 1000
-  c.total_turbines = count
-  c.sustainable_turbines = count
-  c.released = count
-  c.reason = 'LOADED_FROM_CACHE'
-  return c
-end
 
 local function turbine(name, rpm, energy, coil_engaged, current_flow)
   return { name = name, rpm = rpm, energy = energy, coil_engaged = coil_engaged, current_flow = current_flow or 0 }
 end
 
--- End-to-end spec check: boot -> LEARNING runs unconditionally, even with
--- a MASTER already connected -- capacity readiness is what gates the
--- exit, not MASTER presence.
+-- Der Knoten lernt nichts mehr ein: mit Hardware und MASTER ist er im
+-- ersten Takt betriebsbereit.
 do
   local o = orchestrator.new()
-  o.note_master_seen(0) -- MASTER connected from tick 1 onward
+  o.note_master_seen(0)
 
   local result = o.tick({
     now_ms = 1000, hardware_ready = true,
     turbines = { turbine('T1', 100, 0, false), turbine('T2', 100, 0, false) },
     reactor = { fill_ratio = 0.5 },
   })
-  assert_eq(result.state, rt2_state.states.LEARNING, 'must enter LEARNING on first tick with hardware, regardless of MASTER')
-
-  -- Beim Einlernen faehrt jede Turbine auf Ziel: gemessen wird, was die
-  -- Anlage wirklich gleichzeitig liefert, und dafuer muss sie zeigen
-  -- duerfen, was sie kann.
+  assert_eq(result.state, rt2_state.states.MASTER,
+    'hardware plus MASTER is operational at once -- there is no learning phase left')
   for _, t in ipairs(result.turbines) do
-    assert_eq(t.target_rpm, 900, 'LEARNING faehrt jede Turbine auf das feste Ziel')
+    assert_eq(t.target_rpm, 900, 'and every turbine gets the fixed target')
   end
-  assert_true(result.max_active == nil, 'und deckelt dabei nichts')
-  assert_true(not result.capacity.ready, 'capacity must not be ready before anything was measured')
-
-  -- Der Wert steht erst, wenn er sich eine Weile nicht mehr verbessert --
-  -- sonst friert ein Zwischenstand des Hochlaufs als Kapazitaet ein.
-  local fleet = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }
-  result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  assert_true(not result.capacity.ready, 'ein einzelner Messwert legt noch nichts fest')
-  assert_eq(result.capacity.reason, 'MEASURING')
-
-  result = o.tick({ now_ms = 2000 + rt2_capacity.STABLE_MS + 1, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  assert_true(result.capacity.ready, 'bleibt der Hoechstwert stehen, ist die Anlage ausgemessen')
-  assert_eq(result.capacity.reason, 'MEASURED')
-  assert_eq(result.capacity.sustainable_turbines, 2)
-  -- Gemessen, nicht hochgerechnet: 2 x 100, abzueglich 5 % Reserve.
-  assert_eq(result.capacity.max_output, 190)
-  assert_eq(result.state, rt2_state.states.MASTER, 'learning complete with MASTER connected must move straight to MASTER')
 end
 
--- Same boot sequence but with NO MASTER at all -> must still learn (spec
--- point 1: unabhaengig vom Master), then land in AUTONOM.
+-- Ohne MASTER landet derselbe Knoten in AUTONOM, und die Turbinen fahren
+-- ebenfalls das feste Ziel -- geregelt wird dort der REAKTOR.
 do
   local o = orchestrator.new()
-  -- never call note_master_seen()
-
   local fleet = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }
   local result = o.tick({ now_ms = 1000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  assert_eq(result.state, rt2_state.states.LEARNING, 'learning must still happen with no MASTER present at all')
-
-  -- Dieselbe Messung, nur ohne MASTER.
-  local now = 1000
-  for _ = 1, 4 do
-    now = now + rt2_capacity.STABLE_MS
-    result = o.tick({ now_ms = now, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  end
-  assert_true(result.capacity.ready, 'die Messung laeuft auch voellig ohne MASTER durch')
-  assert_eq(result.capacity.sustainable_turbines, 2)
-
-  result = o.tick({ now_ms = now + 1000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  assert_eq(result.state, rt2_state.states.AUTONOM, 'learning complete with no MASTER must land in AUTONOM')
+  assert_eq(result.state, rt2_state.states.AUTONOM, 'no MASTER -> AUTONOM immediately')
   for _, t in ipairs(result.turbines) do
-    assert_eq(t.target_rpm, 900, 'AUTONOM turbines still target the fixed RPM (the reactor is what regulates independently)')
+    assert_eq(t.target_rpm, 900, 'AUTONOM turbines still target the fixed RPM')
   end
 end
 
--- The regression that started this rewrite: a turbine assigned to the
--- AUS slot under MASTER control, still spinning at thousands of RPM
--- (residual momentum), must be forced to flow=0 THIS tick -- not ramped
--- down over many ticks, and without needing to engage its coil.
+-- Die gemeldete Leistung wird nur noch mitgeschrieben: der hoechste
+-- Gesamtausstoss, der wirklich geflossen ist.
 do
-  local o = orchestrator.new({ initial_capacity = learned(2) })
-  o.note_master_seen(0)
-  -- Warm up into MASTER: two ticks of a settled, at-target fleet.
-  o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }, reactor = {} })
-  local warm = o.tick({ now_ms = 2000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }, reactor = {} })
-  assert_eq(warm.state, rt2_state.states.MASTER)
+  local o = orchestrator.new()
+  local result = o.tick({ now_ms = 1000, hardware_ready = true,
+    turbines = { turbine('T1', 100, 0, false), turbine('T2', 100, 0, false) }, reactor = {} })
+  assert_true(not result.capacity.ready, 'nothing has been produced yet')
+  assert_eq(result.capacity.reason, 'NO_OUTPUT')
 
-  -- MASTER now asks for 50% with T1 landing in the AUS slot (rotation
-  -- offset is 0 at this point, so slot 1 = turbine 1 = the AUS slot at 50%/2).
+  result = o.tick({ now_ms = 2000, hardware_ready = true,
+    turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 120, true) }, reactor = {} })
+  assert_true(result.capacity.ready, 'a single flowing tick is enough -- it is a measurement, not an estimate')
+  assert_eq(result.capacity.max_output, 220, 'exactly the sum that flowed, no margin and no extrapolation')
+  assert_eq(result.capacity.at_target, 2)
+
+  -- Ein schwaecherer Takt darf den Hoechstwert nicht senken.
+  result = o.tick({ now_ms = 3000, hardware_ready = true,
+    turbines = { turbine('T1', 900, 50, true), turbine('T2', 900, 50, true) }, reactor = {} })
+  assert_eq(result.capacity.max_output, 220, 'the peak holds')
+
+  -- Eine geaenderte Turbinenzahl setzt ihn dagegen zurueck: ein abgebautes
+  -- Geraet darf nicht in einer Zahl weiterleben, die MASTER fuer belastbar
+  -- haelt.
+  result = o.tick({ now_ms = 4000, hardware_ready = true,
+    turbines = { turbine('T1', 900, 50, true) }, reactor = {} })
+  assert_eq(result.capacity.max_output, 50, 'a changed fleet size resets the peak')
+end
+
+-- Regression gegen einen Stillstand, aus dem der Knoten nicht mehr
+-- herauskommt: MASTER teilt seinen Bedarf gegen capacity_max auf. Solange
+-- der Knoten noch nichts geliefert hat, ist das 0, also kaeme eine Vorgabe
+-- von 0 % zurueck -- keine Turbine laeuft, kein Ausstoss, capacity_max
+-- bleibt 0. Frueher hielt die Lernphase diesen Kreis auf.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
   local result = o.tick({
-    now_ms = 3000, hardware_ready = true, master_percent = 50,
-    turbines = { turbine('T1', 2000, 100, true, 20000), turbine('T2', 900, 100, true, 20000) },
+    now_ms = 1000, hardware_ready = true, master_percent = 0,
+    turbines = { turbine('T1', 0, 0, false), turbine('T2', 0, 0, false) },
     reactor = {},
   })
-  local t1 = result.turbines[1]
-  assert_eq(t1.target_rpm, 0, 'sanity: T1 must be the AUS-slot turbine at 50%/2 turbines')
-  assert_eq(t1.flow_decision.flow, 0, 'an AUS-slot turbine massively overspeeding must be forced to flow=0 this very tick')
-  -- The steam is cut, and the coil stays engaged so the rotor is actually
-  -- braked down instead of coasting -- the coil is the brake, and braking
-  -- an AUS-slot turbine also recovers its rotational energy.
-  assert_eq(t1.coil_decision.engaged, true, 'a parked turbine still spinning at 2000 rpm must brake through its coil')
-  assert_eq(t1.coil_decision.reason, 'BRAKE_TO_STOP')
+  assert_eq(result.state, rt2_state.states.MASTER)
+  assert_eq(result.effective_percent, 100, 'without a reported output the MASTER percentage does not apply yet')
+  for _, t in ipairs(result.turbines) do
+    assert_eq(t.target_rpm, 900, 'the whole fleet runs until the node has something to report')
+  end
+
+  -- Sobald Leistung gemeldet ist, gilt die Vorgabe.
+  result = o.tick({
+    now_ms = 2000, hardware_ready = true, master_percent = 0,
+    turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) },
+    reactor = {},
+  })
+  assert_eq(result.effective_percent, 0, 'once output is known the MASTER percentage applies')
+  for _, t in ipairs(result.turbines) do
+    assert_eq(t.target_rpm, 0, 'and 0 % really means no turbine runs')
+  end
+end
+
+-- MASTER: die Vorgabe in Prozent bestimmt, WIEVIELE Turbinen laufen.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  local fleet = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }
+  o.tick({ now_ms = 1000, hardware_ready = true, turbines = fleet, reactor = {} })
+  local result = o.tick({
+    now_ms = 2000, hardware_ready = true, master_percent = 50,
+    turbines = { turbine('T1', 900, 100, true, 1200), turbine('T2', 2000, 100, true, 1200) },
+    reactor = {},
+  })
+  assert_eq(result.turbines[1].target_rpm, 900, 'at 50% of 2 turbines the first slot runs')
+  assert_eq(result.turbines[2].target_rpm, 0, 'and the second one stands')
+
+  -- Die abgestellte Turbine dreht noch (Schwung). Der Dampf muss SOFORT
+  -- weg -- das war der Fehler, der diesen Umbau ausgeloest hat (node-101:
+  -- abgestellte Turbinen auf 2.0k Durchfluss bei 3200 RPM).
+  local t2 = result.turbines[2]
+  assert_eq(t2.flow_decision.flow, 0, 'a parked turbine still spinning must be cut to flow=0 this very tick')
+  -- Und die Spule bleibt gekoppelt: sie IST die Bremse, das holt die
+  -- Rotationsenergie noch herein statt sie auslaufen zu lassen.
+  assert_eq(t2.coil_decision.engaged, true, 'a parked turbine still spinning at 2000 rpm brakes through its coil')
+  assert_eq(t2.coil_decision.reason, 'BRAKE_TO_STOP')
 end
 
 -- AUTONOM reactor regulation: purely steam-tank driven, MASTER's percent
 -- (if any leaked through) must have zero effect on the rod decision.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
-  -- No MASTER ever seen -> straight to AUTONOM once learned.
+  local o = orchestrator.new()
   o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
   local result = o.tick({
     now_ms = 2000, hardware_ready = true, master_percent = 999, -- must be ignored entirely in AUTONOM
@@ -132,14 +135,15 @@ do
     reactor = { fill_ratio = 0.1 }, -- tank low -> withdraw rods -> more power
   })
   assert_eq(result.state, rt2_state.states.AUTONOM)
-  assert_eq(result.reactor_decision.reason, 'TANK_LOW_WITHDRAW', 'AUTONOM reactor control must react only to the steam tank, never to a stray master_percent')
+  assert_eq(result.reactor_decision.reason, 'TANK_LOW_WITHDRAW',
+    'AUTONOM reactor control must react only to the steam tank, never to a stray master_percent')
 end
 
 -- reactor_decision.activate must be wired through from the tick's own
 -- reactor.active reading -- true while the reading says OFF/unknown,
 -- false once the reading confirms it is already ON.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   local off_result = o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5, active = false } })
   assert_true(off_result.reactor_decision.activate, 'a reactor reading active=false must be flagged for activation')
   local on_result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5, active = true } })
@@ -148,7 +152,7 @@ end
 
 -- Same wiring for turbines[i].activate.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   local t1_off = turbine('T1', 900, 100, true); t1_off.active = false
   local off_result = o.tick({ now_ms = 1000, hardware_ready = true, turbines = { t1_off }, reactor = { fill_ratio = 0.5 } })
   assert_true(off_result.turbines[1].activate, 'a turbine reading active=false must be flagged for activation')
@@ -160,7 +164,7 @@ end
 -- Safety trip forces full rod insertion and zero flow everywhere,
 -- overriding whatever state the node was in.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   o.note_master_seen(0)
   o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
   local result = o.tick({
@@ -178,7 +182,7 @@ end
 -- across ticks until explicitly cleared -- not just for the one tick it
 -- was received on.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   o.note_master_seen(0)
   o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
 
@@ -195,7 +199,7 @@ do
 
   o.clear_manual_safety_trip()
   result = o.tick({ now_ms = 4000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
-  assert_eq(result.state, rt2_state.states.MASTER, 'clearing the trip must allow recovery back to MASTER (capacity already known)')
+  assert_eq(result.state, rt2_state.states.MASTER, 'clearing the trip must allow recovery back to MASTER')
 end
 
 -- Regression: the latch must be releasable THROUGH A COMMAND, not only by
@@ -203,7 +207,7 @@ end
 -- ever called that helper, so a SCRAMmed node had no way back at all short
 -- of a physical reboot.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   o.note_master_seen(0)
   o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
   o.handle_command({ target = 'SCRAM' })
@@ -221,7 +225,7 @@ end
 -- ...but a still-active PHYSICAL trip must not be clearable that way:
 -- safety_tripped is re-read from hardware every tick.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   o.note_master_seen(0)
   o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
   o.handle_command({ target = 'SCRAM' })
@@ -236,16 +240,24 @@ end
 -- SET_SETPOINTS via handle_command() must actually steer the turbine
 -- targets on the next tick.
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   o.note_master_seen(0)
-  o.tick({ now_ms = 1000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
-  o.tick({ now_ms = 2000, hardware_ready = true, turbines = { turbine('T1', 900, 100, true) }, reactor = { fill_ratio = 0.5 } })
+  local fleet = {
+    turbine('T1', 900, 100, true), turbine('T2', 900, 100, true),
+    turbine('T3', 900, 100, true), turbine('T4', 900, 100, true),
+  }
+  o.tick({ now_ms = 1000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
+  o.tick({ now_ms = 2000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
 
-  local ack = o.handle_command({ target = 'SET_SETPOINTS', value = { power_target_percent = 20 } })
+  local ack = o.handle_command({ target = 'SET_SETPOINTS', value = { power_target_percent = 25 } })
   assert_true(ack.ok, 'SET_SETPOINTS must be accepted once in MASTER state')
 
-  local result = o.tick({ now_ms = 3000, hardware_ready = true, turbines = { turbine('T1', 100, 0, false) }, reactor = { fill_ratio = 0.5 } })
-  assert_eq(result.turbines[1].target_rpm, 180, 'a stored master_percent from handle_command() must steer the next tick target (single turbine at 20% = 180 RPM)')
+  local result = o.tick({ now_ms = 3000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
+  local running = 0
+  for _, t in ipairs(result.turbines) do
+    if t.target_rpm > 0 then running = running + 1 end
+  end
+  assert_eq(running, 1, 'a stored master_percent must steer the next tick: 25% of 4 turbines = 1 running')
 end
 
 print('rt2_orchestrator_test.lua: ok')

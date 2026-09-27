@@ -3,7 +3,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- Behavioural proof for the five things the operator asked to have verified:
 --   1. every turbine is regulated INDIVIDUALLY, not by one broadcast decision
 --   2. the state machine walks its full lifecycle
---   3. capacity learning gates on the real measurement condition
+--   3. die Leistungsmeldung an MASTER ist gemessen, nicht geschaetzt
 --   4. the reactor regulates from its steam tank, in every mode
 --   5. devices get switched on when they read off
 --
@@ -17,20 +17,6 @@ local orchestrator = require('nodes.rt.rt2_orchestrator')
 local rt2_state = require('nodes.rt.rt2_state')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_reactor = require('nodes.rt.rt2_reactor')
-local rt2_capacity = require('nodes.rt.rt2_capacity')
-
--- Diese Datei prueft die EINZELREGELUNG, nicht das Einlernen. Seit das
--- Einlernen ein gestaffelter Suchlauf ist, laeuft in LEARNING zunaechst
--- nur eine Turbine -- dann gaebe es nichts zu vergleichen. Also startet
--- hier jeder Block mit einer bereits vermessenen Anlage, so wie sie nach
--- dem ersten Lauf aus dem Cache kaeme.
-local function learned(count)
-  local c = rt2_capacity.new_state()
-  c.ready, c.max_output = true, 1000
-  c.total_turbines, c.sustainable_turbines, c.released = count, count, count
-  c.reason = 'LOADED_FROM_CACHE'
-  return c
-end
 
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
@@ -51,44 +37,42 @@ end
 -- Five turbines, five different situations, one tick. Every one must get
 -- the decision its OWN readings call for.
 do
-  local o = orchestrator.new({ initial_capacity = learned(5) })
+  local o = orchestrator.new()
   -- Reach AUTONOM so every turbine shares the same 900 target -- that way
   -- any difference in the outcome can only come from the turbine's own
-  -- readings, not from a different target. Aufgewaermt wird mit derselben
-  -- Flottengroesse: eine abweichende Anzahl gilt als Umbau und wuerfe die
-  -- eingelernte Kapazitaet weg (rt2_capacity, TOPOLOGY_CHANGED).
+  -- readings, not from a different target.
   local warm = {}
   for i = 1, 5 do warm[i] = turbine('W' .. i, 900, 1000, true, 100, true) end
   o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = warm })
 
   local fleet = {
-    turbine('SLOW',      100, 500,  false, 0,   true),   -- weit unter Ziel  -> RAMP_UP
-    turbine('UNDER',     880, 1000, true,  100, true),   -- knapp drunter    -> HOLD_TRIM_UP
-    turbine('OVER',      905, 1200, true,  100, true),   -- knapp drüber     -> HOLD_TRIM_DOWN
-    turbine('FAST',      1000, 1500, true, 100, true),   -- über Band        -> RAMP_DOWN
-    turbine('RUNAWAY',   2400, 1800, true, 100, true),   -- echter Ausreißer -> OVERSPEED
+    turbine('SLOW',      100, 500,  false, 0,   true),   -- weit unter Ziel  -> TRIM_UP
+    turbine('OVER',      905, 1200, true,  100, true),   -- knapp drueber    -> TRIM_DOWN
+    turbine('ONTARGET',  900, 1000, true,  100, true),   -- angekommen       -> SETTLED
+    turbine('RUNAWAY',   2400, 1800, true, 100, true),   -- echter Ausreisser-> OVERSPEED
+    turbine('BLIND',     nil, 1500, true,  100, true),   -- Drehzahl unlesbar-> NO_RPM_READING
   }
   local r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
   local t = by_name(r)
 
   assert_eq(#r.turbines, 5, 'every discovered turbine must get its own decision entry')
 
-  assert_eq(t.SLOW.flow_decision.reason,    'RAMP_UP')
-  assert_eq(t.SLOW.flow_decision.flow, 500 + rt2_turbine.TRIM_STEP, 'SLOW ramps up from its OWN flow, not the fleet average')
+  assert_eq(t.SLOW.flow_decision.reason, 'TRIM_UP')
+  assert_eq(t.SLOW.flow_decision.flow, 500 + rt2_turbine.TRIM_STEP,
+    'SLOW steps up from its OWN flow, not the fleet average, and by at most one full step')
 
-  assert_eq(t.UNDER.flow_decision.reason,   'HOLD_TRIM_UP')
-  -- 20 RPM unter Ziel bei Band 40 -> halber Rampenschritt (35/2 ~ 18).
-  assert_eq(t.UNDER.flow_decision.flow, 1018, 'UNDER trims up proportionally from its OWN 1000')
-
-  assert_eq(t.OVER.flow_decision.reason,    'HOLD_TRIM_DOWN')
+  assert_eq(t.OVER.flow_decision.reason, 'TRIM_DOWN')
   -- nur 5 RPM drueber -> entsprechend kleiner Schritt (35 * 5/40 ~ 4).
-  assert_eq(t.OVER.flow_decision.flow, 1196, 'OVER trims down proportionally from its OWN 1200')
+  assert_eq(t.OVER.flow_decision.flow, 1196, 'OVER steps down proportionally from its OWN 1200')
 
-  assert_eq(t.FAST.flow_decision.reason,    'RAMP_DOWN')
-  assert_eq(t.FAST.flow_decision.flow, 1500 - rt2_turbine.TRIM_STEP, 'FAST ramps down from its OWN flow')
+  assert_eq(t.ONTARGET.flow_decision.reason, 'SETTLED')
+  assert_eq(t.ONTARGET.flow_decision.flow, 1000, 'a turbine at its target is left alone')
 
   assert_eq(t.RUNAWAY.flow_decision.reason, 'OVERSPEED')
   assert_eq(t.RUNAWAY.flow_decision.flow, 0, 'a genuine runaway is cut to zero immediately')
+
+  assert_eq(t.BLIND.flow_decision.reason, 'NO_RPM_READING')
+  assert_eq(t.BLIND.flow_decision.flow, 0, 'an unreadable rpm cuts the steam -- unknown is not "0 RPM"')
 
   -- Five distinct reasons in one tick is the actual proof of independence.
   local reasons = {}
@@ -103,22 +87,22 @@ do
 end
 
 -- Individual regulation must also hold when the TARGETS differ (MASTER
--- split): VOLLAST, PUFFER and AUS turbines in the same tick.
+-- split): laufende und stehende Turbinen im selben Takt.
 do
-  local o = orchestrator.new({ initial_capacity = learned(4) })
+  local o = orchestrator.new()
   o.note_master_seen(0)
   local fleet = {}
   for i = 1, 4 do fleet[i] = turbine('T' .. i, 900, 1000, true, 100, true) end
 
-  -- Tick 1 is INIT -> LEARNING, tick 2 is LEARNING -> MASTER. A setpoint
-  -- sent before the node has actually reached MASTER is rejected by design
-  -- (the command handler validates against the real state, it does not
-  -- trust the sender) -- MASTER's retry covers that gap in production.
-  o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
+  -- A setpoint sent before the node has actually reached MASTER is
+  -- rejected by design (the command handler validates against the real
+  -- state, it does not trust the sender) -- MASTER's retry covers that gap
+  -- in production.
   local early = o.handle_command({ target = 'SET_SETPOINTS', value = { power_target_percent = 50 } })
   assert_true(early.ok == false, 'a setpoint arriving before the node reached MASTER must be rejected')
   assert_eq(early.reason_code, 'INVALID_STATE')
 
+  o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
   o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
   assert_eq(o.current_state(), rt2_state.states.MASTER)
   local accepted = o.handle_command({ target = 'SET_SETPOINTS', value = { power_target_percent = 50 } })
@@ -128,10 +112,10 @@ do
   local targets = {}
   for _, entry in ipairs(r.turbines) do targets[#targets + 1] = entry.target_rpm end
   table.sort(targets)
-  -- 50 % of 4 turbines = 2 full, 0 partial, 2 off.
-  assert_eq(targets[1], 0,   'the AUS slots must target 0')
+  -- 50 % of 4 turbines = 2 laufen, 2 stehen. Keine Teillast mehr.
+  assert_eq(targets[1], 0,   'the parked slots must target 0')
   assert_eq(targets[2], 0)
-  assert_eq(targets[3], 900, 'the VOLLAST slots must target the full rpm')
+  assert_eq(targets[3], 900, 'the running slots must target the full rpm')
   assert_eq(targets[4], 900)
 
   -- An AUS-slot turbine must be flow-zeroed -- that is the regression from
@@ -149,7 +133,7 @@ end
 
 -- ═══ 2. Zustandsmaschine: vollständiger Lebenszyklus ═══
 do
-  local o = orchestrator.new({ initial_capacity = learned(1) })
+  local o = orchestrator.new()
   local fleet = { turbine('T1', 900, 1000, true, 100, true) }
   local reactor = { fill_ratio = 0.5, active = true }
 
@@ -159,13 +143,9 @@ do
   local r = o.tick({ now_ms = 1000, hardware_ready = false, turbines = {}, reactor = reactor })
   assert_eq(r.state, rt2_state.states.INIT, 'without hardware the node stays in INIT')
 
-  -- hardware present -> LEARNING
+  -- hardware present, no MASTER -> AUTONOM, ohne Zwischenzustand
   r = o.tick({ now_ms = 2000, hardware_ready = true, turbines = fleet, reactor = reactor })
-  assert_eq(r.state, rt2_state.states.LEARNING, 'INIT -> LEARNING once hardware is there')
-
-  -- capacity learned, no MASTER -> AUTONOM
-  r = o.tick({ now_ms = 3000, hardware_ready = true, turbines = fleet, reactor = reactor })
-  assert_eq(r.state, rt2_state.states.AUTONOM, 'LEARNING -> AUTONOM without a MASTER')
+  assert_eq(r.state, rt2_state.states.AUTONOM, 'INIT -> AUTONOM once hardware is there and no MASTER answers')
 
   -- MASTER appears -> MASTER, purely from connectivity
   o.note_master_seen(4000)
@@ -180,17 +160,18 @@ do
   r = o.tick({ now_ms = 200000, hardware_ready = true, safety_tripped = true, turbines = fleet, reactor = reactor })
   assert_eq(r.state, rt2_state.states.SAFE, 'any state -> SAFE on a trip')
 
-  -- condition clears, capacity already known -> straight back to operation
+  -- condition clears -> straight back to operation
   r = o.tick({ now_ms = 201000, hardware_ready = true, turbines = fleet, reactor = reactor })
   assert_eq(r.state, rt2_state.states.AUTONOM, 'SAFE -> AUTONOM once the condition clears')
 end
 
--- ═══ 3. Einlernen: misst nur, was wirklich am Ziel ist ═══
+-- ═══ 3. Leistungsmeldung: gemessen, nicht geschaetzt ═══
 do
-  -- Gemessen wird der hoechste Gesamtausstoss, der tatsaechlich floss --
-  -- ohne Schwelle, ohne Staffelung, ohne guenstigen Augenblick. Frueher
-  -- stand hier eine 80-%-Regel: waren nie genug Turbinen GLEICHZEITIG im
-  -- Messfenster, lieferte das Einlernen ueberhaupt keine Zahl.
+  -- Der Knoten meldet MASTER den hoechsten Gesamtausstoss, der wirklich
+  -- geflossen ist. Frueher lief dafuer ein gestaffelter Suchlauf mit einer
+  -- 80-%-Regel: waren nie genug Turbinen GLEICHZEITIG im Messfenster,
+  -- lieferte das Einlernen ueberhaupt keine Zahl, und der Knoten kam nicht
+  -- aus der Lernphase heraus.
   local o = orchestrator.new()
   local function fleet_at(n_running)
     local f = {}
@@ -201,30 +182,29 @@ do
     return f
   end
 
-  -- Beim Einlernen wird nichts gedeckelt -- alle fahren auf Ziel.
-  local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
-  assert_true(r.max_active == nil, 'beim Einlernen deckelt der Knoten nichts')
+  -- Solange noch nichts geliefert wurde, faehrt die ganze Flotte -- ohne
+  -- das kaeme von MASTER eine Vorgabe von 0 % und der Knoten stuende still.
+  local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(0) })
+  assert_true(not r.capacity.ready, 'nothing has flowed yet')
   for _, t in ipairs(r.turbines) do
     assert_eq(t.target_rpm, 900, 'jede Turbine bekommt das volle Ziel')
   end
 
-  -- Vier von fuenf liefern -> genau die 80 %, ab denen ein Takt zaehlt.
+  -- Vier von fuenf liefern -> der Takt zaehlt sofort, es gibt keine
+  -- Mindestbeteiligung mehr.
   r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
-  assert_eq(r.capacity.reason, 'MEASURING')
-  assert_true(not r.capacity.ready, 'ein einzelner Messwert legt noch nichts fest')
+  assert_true(r.capacity.ready, 'ein wirklich geflossener Gesamtausstoss reicht')
+  assert_eq(r.capacity.reason, 'OBSERVED')
+  assert_eq(r.capacity.at_target, 4, 'vier Turbinen standen am Ziel')
+  -- Gemessen, NICHT hochgerechnet: 4 x 100. Die alte Formel trug
+  -- (400/4) * 5 = 500 ein -- also Leistung fuer eine fuenfte Turbine
+  -- erfunden, die in dem Moment gar nichts lieferte.
+  assert_eq(r.capacity.max_output, 400)
 
-  r = o.tick({ now_ms = 2000 + rt2_capacity.STABLE_MS + 1, hardware_ready = true,
-               reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
-  assert_true(r.capacity.ready, 'bleibt der Hoechstwert stehen, ist die Anlage ausgemessen')
-  assert_eq(r.capacity.sustainable_turbines, 4, 'vier Turbinen lieferten den Hoechstwert')
-  -- Gemessen, NICHT hochgerechnet: 4 x 100 minus 5 % Reserve. Die alte
-  -- Formel haette (400/4) * 5 = 500 eingetragen -- also Leistung fuer eine
-  -- fuenfte Turbine erfunden, die in dem Moment gar nichts lieferte.
-  assert_eq(r.capacity.max_output, 380)
-
-  -- Und erst JETZT, nach dem Einlernen, wirkt die beobachtete Grenze.
-  r = o.tick({ now_ms = 400000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
-  assert_eq(r.max_active, 4, 'im Betrieb faehrt der Knoten nicht mehr an, als je gleichzeitig lieferten')
+  -- Laeuft die Flotte spaeter voll, steigt die gemeldete Leistung -- ohne
+  -- Suchlauf, ohne Zustandswechsel.
+  r = o.tick({ now_ms = 3000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(5) })
+  assert_eq(r.capacity.max_output, 500, 'a fuller fleet simply raises the reported figure')
 end
 
 -- ═══ 4. Reaktorregelung: nur Dampftank, in JEDEM Modus gleich ═══
@@ -246,7 +226,7 @@ do
   -- Mode independence: the SAME tank reading must give the SAME rods in
   -- AUTONOM and in MASTER, and a MASTER power setpoint must not shift it.
   local function rods_in(state_setup)
-    local o = orchestrator.new({ initial_capacity = learned(1) })
+    local o = orchestrator.new()
     local fleet = { turbine('T1', 900, 1000, true, 100, true) }
     state_setup(o)
     o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5, current_rods = 90 }, turbines = fleet })
@@ -266,7 +246,7 @@ do
     'the same tank level must give the same rod level in MASTER and AUTONOM -- the reactor never sees the mode')
 
   -- A MASTER power setpoint moves turbine targets but must leave the rods alone.
-  local o = orchestrator.new({ initial_capacity = learned(4) })
+  local o = orchestrator.new()
   o.note_master_seen(0)
   local fleet = {}
   for i = 1, 4 do fleet[i] = turbine('T' .. i, 900, 1000, true, 100, true) end
@@ -292,7 +272,7 @@ end
 
 -- ═══ 5. An- und Abschaltung ═══
 do
-  local o = orchestrator.new({ initial_capacity = learned(3) })
+  local o = orchestrator.new()
   local mixed = {
     turbine('ON',  900, 1000, true, 100, true),    -- läuft schon
     turbine('OFF', 900, 1000, true, 100, false),   -- steht
@@ -322,7 +302,7 @@ do
 
   -- Documented behaviour: v2 only ever switches ON. Even a parked AUS-slot
   -- turbine stays active and is parked via flow=0 + coil off instead.
-  local o2 = orchestrator.new({ initial_capacity = learned(4) })
+  local o2 = orchestrator.new()
   o2.note_master_seen(0)
   local fleet = {}
   for i = 1, 4 do fleet[i] = turbine('T' .. i, 900, 1000, true, 100, true) end

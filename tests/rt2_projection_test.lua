@@ -20,7 +20,6 @@ do
   end
   assert_eq(projection.node_state(rt2_state.states.MASTER), 'RUNNING')
   assert_eq(projection.node_state(rt2_state.states.AUTONOM), 'AUTONOM')
-  assert_eq(projection.node_state(rt2_state.states.LEARNING), 'STARTUP')
   assert_eq(projection.node_state(rt2_state.states.INIT), 'STARTUP')
   assert_eq(projection.node_state(rt2_state.states.SAFE), 'EMERGENCY')
 end
@@ -54,7 +53,7 @@ end
 
 do
   assert_eq(projection.reactor_state({ active = true }, rt2_state.states.MASTER), 'STABLE')
-  assert_eq(projection.reactor_state({ active = true }, rt2_state.states.LEARNING), 'STARTING')
+  assert_eq(projection.reactor_state({ active = true }, rt2_state.states.INIT), 'STARTING')
   assert_eq(projection.reactor_state({ active = false }, rt2_state.states.MASTER), 'OFF')
   assert_eq(projection.reactor_state({ active = true }, rt2_state.states.SAFE), 'ERROR')
   assert_eq(projection.reactor_state(nil, rt2_state.states.MASTER), 'OFF', 'a missing reactor reading must not read as healthy')

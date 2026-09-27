@@ -211,9 +211,6 @@ local function assert_true(v, m) if not v then error(m or 'assert_true failed') 
 config.turbines = turbine_names
 config.reactors = REACTOR_NAMES
 
-local CACHE = '/xreactor_config/rt2_twin_cache.lua'
-local TUNING = '/xreactor_config/rt2_twin_tuning.lua'
-
 local last
 local function tick(steps)
   for _ = 1, (steps or 1) do
@@ -226,30 +223,29 @@ local function tick(steps)
   return last
 end
 
-rt2_engine.init({ cache_path = CACHE, tuning_path = TUNING,
-                  turbine_count = TURBINE_COUNT, config = config, log = ctx.log })
+rt2_engine.init({ config = config, log = ctx.log })
 
 -- ── Hochlauf: BEIDE Reaktoren werden bedient ─────────────────────────────
 
 tick(1)
-assert_eq(last.state, rt2_state.states.LEARNING, 'erster Takt mit Hardware fuehrt ins Einlernen')
+assert_true(last.state ~= rt2_state.states.INIT,
+  'der erste Takt mit Hardware ist schon Betrieb -- es gibt keine Lernphase mehr')
 assert_eq(#last.reactors, 2, 'beide Reaktoren bekommen eine eigene Entscheidung')
 for _, rname in ipairs(REACTOR_NAMES) do
   assert_true(plant.reactors[rname].active, rname .. ' muss eingeschaltet worden sein')
 end
 assert_eq(#last.turbines, TURBINE_COUNT, 'die Flotte wird als EINE entschieden')
 
--- ── Einlernen: eine Kapazitaet fuer den ganzen Knoten ────────────────────
+-- ── EINE Leistungsmeldung fuer den ganzen Knoten ─────────────────────────
 
 for _ = 1, 3000 do
   tick(1)
   if last.capacity.ready then break end
 end
-assert_true(last.capacity.ready, 'die Anlage muss sich ausmessen lassen -- Grund: ' .. tostring(last.capacity.reason))
+assert_true(last.capacity.ready,
+  'sobald die Flotte liefert, hat der Knoten etwas zu melden -- Grund: ' .. tostring(last.capacity.reason))
 assert_eq(last.capacity.total_turbines, TURBINE_COUNT)
-assert_true(last.capacity.max_output > 0, 'mit positivem, gemessenem Gesamtausstoss')
-local learned = last.capacity.max_output
-assert_true(files[CACHE] ~= nil, 'die Messung muss im Cache landen')
+assert_true(last.capacity.max_output > 0, 'mit positivem, wirklich geflossenem Gesamtausstoss')
 
 -- Beide Reaktoren regeln und stehen im erlaubten Stellbereich.
 for _, rname in ipairs(REACTOR_NAMES) do
@@ -330,7 +326,7 @@ do
   tick(20)
   assert_eq(last.tripped_reactors, 0, 'faellt die Bedingung weg, ist kein Reaktor mehr ausgeloest')
   assert_true(plant.reactors[REACTOR_NAMES[1]].active, 'und er wird wieder eingeschaltet')
-  assert_true(last.capacity.ready, 'ohne neu einzulernen')
+  assert_true(last.capacity.ready, 'und der Knoten meldet weiter seine Leistung')
 end
 
 -- ── Beide ausgeloest -> der ganze Knoten SAFE ────────────────────────────
@@ -350,22 +346,22 @@ do
   assert_true(last.state ~= rt2_state.states.SAFE, 'und danach laeuft der Knoten wieder')
 end
 
--- ── Neustart: Cache und Anlagenprofile ueberleben ────────────────────────
+-- ── Neustart: der Knoten braucht nichts von der Platte ───────────────────
 
 do
-  -- Der gemessene Hoechstwert kann im Lauf noch gestiegen sein (ein neuer
-  -- Spitzenwert hebt ihn an) -- verglichen wird deshalb mit dem Stand
-  -- unmittelbar VOR dem Neustart, nicht mit dem beim Einlernen.
-  local before_restart = last.capacity.max_output
-  assert_true(before_restart >= learned, 'der Wert kann nur gestiegen sein')
-  rt2_engine.init({ cache_path = CACHE, tuning_path = TUNING,
-                    turbine_count = TURBINE_COUNT, config = config, log = ctx.log })
+  -- Es gibt keine gelernte Kapazitaet und kein Anlagenprofil mehr, die
+  -- einen Neustart ueberdauern muessten. Der Knoten ist im ersten Takt
+  -- wieder im Betrieb und meldet seine Leistung neu, sobald die Flotte
+  -- liefert.
+  rt2_engine.init({ config = config, log = ctx.log })
   tick(1)
-  assert_true(last.capacity.ready, 'die Kapazitaet steht sofort aus dem Cache')
-  assert_eq(last.capacity.max_output, before_restart, 'und zwar unveraendert')
-  tick(1)
-  assert_true(last.state ~= rt2_state.states.LEARNING, 'der zweite Takt ist schon im Betrieb')
+  assert_true(last.state ~= rt2_state.states.INIT, 'der erste Takt ist schon wieder Betrieb')
   assert_eq(#last.reactors, 2, 'und beide Reaktoren sind wieder da')
+  for _ = 1, 3000 do
+    tick(1)
+    if last.capacity.ready then break end
+  end
+  assert_true(last.capacity.ready, 'die Leistungsmeldung entsteht neu')
 end
 
 print('rt2_twin_reactor_integration_test.lua: ok')

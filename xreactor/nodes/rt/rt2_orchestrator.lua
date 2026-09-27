@@ -1,52 +1,82 @@
 -- RT rewrite, step 6: der Orchestrator -- ein Takt fuer den ganzen Knoten.
 --
 -- Der Knoten fasst seine Anlage als EIN System auf: eine Turbinenflotte
--- an einem gemeinsamen Dampfnetz, eine gelernte Kapazitaet, eine
--- Leistungsvorgabe. Mehrere Reaktoren speisen dasselbe Netz und regeln
+-- an einem gemeinsamen Dampfnetz, eine Leistungsvorgabe. Mehrere
+-- Reaktoren speisen dasselbe Netz und regeln
 -- sich unabhaengig voneinander aus ihrem JEWEILIGEN Dampftank (siehe
 -- rt2_unit.lua) -- sie stimmen sich nicht ab und brauchen es auch nicht:
 -- zieht die Flotte mehr, fallen alle Taenke, alle fahren die Staebe aus.
 --
 -- Hier liegt deshalb alles, wovon es pro Knoten eines gibt: der
 -- Betriebszustand, die MASTER-Verbindung, der Hand-Riegel, die
--- Leistungsvorgabe, das Einlernen und die Slot-Rotation der Flotte.
+-- Leistungsvorgabe und die Slot-Rotation der Flotte.
 --
 -- Hardware-frei wie bisher: M.tick() nimmt schlichte Messwert-Tabellen
 -- und gibt schlichte Entscheidungs-Tabellen zurueck.
 
 local rt2_state = require('nodes.rt.rt2_state')
-local rt2_capacity = require('nodes.rt.rt2_capacity')
 local rt2_master_link = require('nodes.rt.rt2_master_link')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_command_handler = require('nodes.rt.rt2_command_handler')
 local rt2_unit = require('nodes.rt.rt2_unit')
-local rt2_turbine_model = require('nodes.rt.rt2_turbine_model')
 
 local M = {}
 
 M.ROTATE_INTERVAL_MS = 300000 -- 5 min: wie oft der AUS/PUFFER-Platz wandert
 
--- Eine gelernte Kennlinie darf den Betrieb nicht lahmlegen koennen.
+-- Was der Knoten MASTER ueber seine Leistung meldet.
 --
--- rt2_turbine_model prueft die ZAHLEN einer Kennlinie (Steigung,
--- Achsenabschnitt) beim Ableiten und beim Laden. Das faengt den groben
--- Unsinn, aber nicht den stillen Fall: eine Kennlinie mit unauffaelligen
--- Werten, die trotzdem zu wenig Durchfluss vorgibt. Die Turbine haengt
--- dann dauerhaft unter ihrem Ziel, ohne dass eine einzelne Zahl falsch
--- aussieht -- und eine ganze Flotte kann so gemeinsam stehenbleiben,
--- weil ihre Kennlinien im selben kaputten Zustand entstanden sind.
+-- Frueher lief dafuer eine eigene Lernphase (rt2_capacity): ein Suchlauf,
+-- der Turbinen stufenweise freigab, auf einen tragenden Betriebspunkt
+-- wartete, einen Hoechstwert mit Sicherheitsabschlag bildete und ihn in
+-- einer eigenen Datei ablegte -- mit einem eigenen Zustand im
+-- Zustandsautomaten davor und mehreren Wegen, auf denen er haengenblieb.
 --
--- Deshalb wird zusaetzlich die WIRKUNG geprueft: haelt eine vom Modell
--- gefuehrte Turbine ihr Ziel ueber diese Zeit nicht, ist die Kennlinie
--- widerlegt und wird verworfen. Die Turbine faellt auf die Rampe zurueck
--- (die braucht kein Modell) und vermisst sich neu.
-M.MODEL_DISTRUST_MS = 90000
+-- Gemessen wird jetzt nur noch MITGESCHRIEBEN: der hoechste Gesamtausstoss,
+-- den diese Flotte in diesem Lauf schon geliefert hat. Das ist immer eine
+-- Zahl, die wirklich geflossen ist -- sie verspricht MASTER also nie zu
+-- viel. Zu WENIG darf sie behaupten, und das korrigiert sich von selbst:
+-- teilt MASTER gegen eine zu kleine Kapazitaet auf, fordert er einen
+-- hoeheren Prozentsatz, es laufen mehr Turbinen, der Ausstoss steigt --
+-- und damit der mitgeschriebene Hoechstwert.
+--
+-- Der Hoechstwert verfaellt nicht von allein, aber eine geaenderte
+-- Turbinenzahl setzt ihn zurueck: eine abgebaute Turbine darf nicht in
+-- einer Zahl weiterleben, die MASTER fuer belastbar haelt.
+function M.new_output_state()
+  return { max_output = 0, at_target = 0, total_turbines = 0, ready = false, reason = "NO_TURBINES" }
+end
 
--- ... aber NICHT, wenn die Turbine bereits volle Foerderung faehrt und
--- trotzdem zu langsam ist. Dann fehlt Dampf, und die Kennlinie kann
--- nichts dafuer. Ohne diese Unterscheidung wuerde eine dampfarme Anlage
--- ihre gueltigen Kennlinien wegwerfen.
-M.MODEL_SATURATION_FRACTION = 0.95
+local function observe_output(previous, turbines)
+  local sum, at_target, count = 0, 0, 0
+  for _, t in ipairs(turbines or {}) do
+    count = count + 1
+    sum = sum + (tonumber(t.energy) or 0)
+    local rpm = tonumber(t.rpm)
+    if rpm and math.abs(rpm - rt2_turbine.FULL_TARGET_RPM) <= rt2_turbine.RPM_BAND then
+      at_target = at_target + 1
+    end
+  end
+
+  local peak = tonumber(previous and previous.max_output) or 0
+  if count ~= (tonumber(previous and previous.total_turbines) or 0) then peak = 0 end
+  if sum > peak then peak = sum end
+
+  local reason = "OBSERVED"
+  if count == 0 then
+    reason = "NO_TURBINES"
+  elseif peak <= 0 then
+    reason = "NO_OUTPUT"
+  end
+
+  return {
+    max_output = peak,
+    at_target = at_target,
+    total_turbines = count,
+    ready = peak > 0,
+    reason = reason,
+  }
+end
 
 function M.new(opts)
   opts = opts or {}
@@ -55,43 +85,26 @@ function M.new(opts)
     master_link = rt2_master_link.new({ timeout_ms = opts.master_timeout_ms }),
     manual_safety_trip = false,
     master_percent = 100,
-    -- EINE Kapazitaet fuer den ganzen Knoten: die Turbinen haengen alle am
-    -- selben Dampfnetz, also ist ihre Summe die Leistung dieses Knotens --
-    -- egal, wie viele Reaktoren sie speisen.
-    capacity = opts.initial_capacity or rt2_capacity.new_state(),
+    -- EINE Leistungsmeldung fuer den ganzen Knoten: die Turbinen haengen
+    -- alle am selben Dampfnetz, also ist ihre Summe die Leistung dieses
+    -- Knotens -- egal, wie viele Reaktoren sie speisen.
+    capacity = M.new_output_state(),
     rotation_offset = 0,
     last_rotate_ms = 0,
     reactors = {},
     -- Je Turbine, nach NAME (die Reihenfolge der Flotte ist nicht stabil):
-    -- das gelernte Streckenmodell, der laufende Messzustand und wann
-    -- zuletzt gestellt wurde. Siehe rt2_turbine_model.lua.
-    turbine_models = opts.turbine_models or {},
-    turbine_model_state = {},
+    -- wann zuletzt gestellt wurde.
     turbine_last_change_ms = {},
     -- Was zuletzt WIRKLICH gestellt wurde. Ohne das ist der Regler auf
     -- den Rueckmesswert der Hardware angewiesen -- und wenn der fehlt,
     -- hat er gar keinen Bezugspunkt mehr (siehe rt2_turbine.lua).
     turbine_last_flow = {},
-    -- Seit wann eine vom Modell gefuehrte Turbine ihr Ziel verfehlt.
-    turbine_model_doubt = {},
-    -- In DIESEM Takt verworfene Kennlinien -- rt2_engine meldet sie und
-    -- schreibt die Datei neu.
-    dropped_turbine_models = {},
-    -- Letzte Drehzahlmessung je Turbine, um daraus abzuleiten, wie schnell
-    -- der Rotor gerade steigt oder faellt.
-    turbine_rpm_trace = {},
-    -- Profile, die in DIESEM Takt neu entstanden sind -- rt2_engine
-    -- schreibt sie weg und meldet sie einmal.
-    new_turbine_models = {},
-    -- Anlagenprofile je Reaktorname, damit ein Reaktor, der erst spaeter
-    -- dazukommt, sein gemessenes Profil trotzdem bekommt.
-    reactor_tuning_profiles = opts.tuning_profiles or {},
-    -- Einheiten nach Name, damit eine Turbine... pardon, ein Reaktor bei
-    -- einer geaenderten Reihenfolge seinen Messzustand behaelt.
+    -- Einheiten nach Name, damit ein Reaktor bei einer geaenderten
+    -- Reihenfolge seinen Messzustand behaelt.
     reactors_by_name = {},
   }
 
-  -- opts.reactors: { { name = <Peripheriename>, tuning_profile = ... }, ... }
+  -- opts.reactors: { { name = <Peripheriename> }, ... }
   local function add_unit(spec)
     local unit = rt2_unit.new(spec)
     self.reactors[#self.reactors + 1] = unit
@@ -101,7 +114,7 @@ function M.new(opts)
 
   for _, spec in ipairs(opts.reactors or {}) do add_unit(spec) end
   if #self.reactors == 0 then
-    add_unit({ name = opts.reactor_name, tuning_profile = opts.tuning_profile })
+    add_unit({ name = opts.reactor_name })
   end
 
   -- Die Einheitenliste an die Reaktoren angleichen, die dieser Takt
@@ -133,10 +146,7 @@ function M.new(opts)
       if ri.name then
         local unit = self.reactors_by_name[ri.name]
         if not unit then
-          unit = rt2_unit.new({
-            name = ri.name,
-            tuning_profile = self.reactor_tuning_profiles[ri.name],
-          })
+          unit = rt2_unit.new({ name = ri.name })
           self.reactors_by_name[ri.name] = unit
         end
         seen[ri.name] = true
@@ -191,13 +201,7 @@ function M.new(opts)
 
   -- Die Rotation existiert einzig dafuer, dass unter MASTER nicht immer
   -- dieselben Turbinen im AUS-Slot sitzen. In jedem anderen Zustand
-  -- verdreht sie nur die Zuordnung -- und waehrend des gestaffelten
-  -- Einlernens ist das direkt schaedlich: rt2_capacity misst die ersten
-  -- `released` Turbinen in LESEREIHENFOLGE, freigegeben wird aber nach
-  -- SLOT. Rotiert der Slot, laeuft Turbine 25 und gemessen wird Turbine 1
-  -- -- der Suchlauf sieht dann nie eine tragende Stufe und kommt nie vom
-  -- Fleck. Ausserdem soll waehrend der Suche ohnehin dieselbe Turbine
-  -- oben bleiben, waehrend die naechste dazukommt.
+  -- verdreht sie nur die Zuordnung.
   local function rotated_slot(index, count, now_ms, state)
     if count <= 1 then return index end
     -- Die Rotation existiert nur dafuer, dass unter MASTER nicht immer
@@ -232,8 +236,7 @@ function M.new(opts)
     reconcile(reactor_inputs)
 
     -- Erst messen, DANN den Zustand entscheiden -- mit den Messwerten
-    -- desselben Takts. Andersherum verliesse eine fertig eingelernte
-    -- Flotte die Lernphase einen Takt zu spaet.
+    -- desselben Takts.
     local tripped = 0
     for index, unit in ipairs(self.reactors) do
       local ri = reactor_inputs[index] or {}
@@ -247,39 +250,17 @@ function M.new(opts)
     -- als Ganzes auf SAFE und stellt auch die Turbinen ab.
     local all_tripped = #self.reactors > 0 and tripped == #self.reactors
 
-    local current_state = self.machine.current()
-    if current_state ~= rt2_state.states.SAFE then
-      self.capacity = rt2_capacity.update(self.capacity, input.turbines, { now_ms = now_ms })
-    end
-
     local state = self.machine.tick({
       hardware_ready   = input.hardware_ready,
-      capacity_ready   = self.capacity.ready,
       master_connected = self.master_link.is_connected(now_ms),
       safety_tripped   = all_tripped or self.manual_safety_trip,
     })
 
-    -- Selbstvermessung der Turbinen -- rein beobachtend, aus den
-    -- Messwerten DIESES Takts, und nur solange die Turbine noch kein
-    -- Profil hat. Waehrend SAFE nicht: der Durchfluss ist dort erzwungen
-    -- 0, die Paare beschrieben also nicht die Strecke.
-    self.new_turbine_models = {}
-    self.dropped_turbine_models = {}
+    -- Leistungsmeldung mitschreiben. Waehrend SAFE nicht: der Durchfluss
+    -- ist dort erzwungen 0, was die Flotte dann liefert, beschreibt ihre
+    -- Leistung nicht.
     if state ~= rt2_state.states.SAFE then
-      for _, t in ipairs(input.turbines or {}) do
-        local name = t.name
-        if name and not self.turbine_models[name] then
-          local measured = rt2_turbine_model.observe(self.turbine_model_state[name], {
-            now_ms = now_ms, flow = t.current_flow, rpm = t.rpm, coil_engaged = t.coil_engaged,
-          })
-          self.turbine_model_state[name] = measured
-          local profile = rt2_turbine_model.derive(measured)
-          if profile then
-            self.turbine_models[name] = profile
-            self.new_turbine_models[#self.new_turbine_models + 1] = { name = name, profile = profile }
-          end
-        end
-      end
+      self.capacity = observe_output(self.capacity, input.turbines)
     end
 
     local reactor_decisions = {}
@@ -293,41 +274,36 @@ function M.new(opts)
     -- Die Flotte: EINE Entscheidung je Turbine, aus dem Zustand des
     -- Knotens. Ein ausgeloester Einzelreaktor aendert daran nichts.
     local count = #(input.turbines or {})
-    local max_active
-    if state ~= rt2_state.states.LEARNING
-        and self.capacity.ready and (self.capacity.sustainable_turbines or 0) > 0 then
-      max_active = self.capacity.sustainable_turbines
-    end
+
+    -- Solange der Knoten noch keine Leistung gemeldet hat, gilt die
+    -- Vorgabe von MASTER NICHT -- die ganze Flotte laeuft.
+    --
+    -- Sonst schliesst sich ein Kreis, aus dem der Knoten nicht mehr
+    -- herauskommt: MASTER teilt seinen Bedarf gegen capacity_max auf, das
+    -- ist beim Start 0, also kommt eine Vorgabe von 0 % an, also laeuft
+    -- keine Turbine, also fliesst kein Ausstoss, also bleibt capacity_max
+    -- 0. Frueher hielt die Lernphase diesen Kreis auf; die ist weg, also
+    -- steht die Bedingung jetzt hier -- an der einen Stelle, die sie
+    -- braucht.
+    local percent = input.master_percent or self.master_percent
+    if not self.capacity.ready then percent = 100 end
 
     local turbine_results = {}
     for index, t in ipairs(input.turbines or {}) do
       local target_rpm = rt2_turbine.compute_target_rpm(state, {
         turbine_count = count,
         slot_index = rotated_slot(index, count, now_ms, state),
-        power_percent = input.master_percent or self.master_percent,
-        max_active = max_active,
+        power_percent = percent,
       })
       local name = t.name
-      -- Drehzahlaenderung seit der letzten Messung dieser Turbine.
-      local rpm_rate
-      local rpm_now = tonumber(t.rpm)
-      if name and rpm_now and now_ms then
-        local trace = self.turbine_rpm_trace[name]
-        if trace and trace.ms and now_ms > trace.ms then
-          rpm_rate = (rpm_now - trace.rpm) / ((now_ms - trace.ms) / 1000)
-        end
-        self.turbine_rpm_trace[name] = { rpm = rpm_now, ms = now_ms }
-      end
       local flow_decision = rt2_turbine.compute_flow_decision({
         rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
-        rpm_rate = rpm_rate,
         coil_engaged = t.coil_engaged == true,
         -- Das Stellintervall braucht beide Zeiten; ohne sie faellt
         -- compute_flow_decision auf sein altes Verhalten zurueck.
         now_ms = now_ms,
         last_change_ms = name and self.turbine_last_change_ms[name] or nil,
         last_commanded_flow = name and self.turbine_last_flow[name] or nil,
-        model = name and self.turbine_models[name] or nil,
       })
       -- Steht die Vorgabe schon so an, muss sie nicht erneut geschrieben
       -- werden. Das ist der Normalfall -- eine eingeschwungene Turbine
@@ -361,32 +337,6 @@ function M.new(opts)
       if name and flow_decision.unchanged ~= true then
         self.turbine_last_flow[name] = flow_decision.flow
       end
-
-      -- Wirkungspruefung der Kennlinie (siehe MODEL_DISTRUST_MS).
-      if name and self.turbine_models[name] then
-        local rpm_value = tonumber(t.rpm)
-        -- Der IST-Wert entscheidet, nicht die Entscheidung: laeuft die
-        -- Turbine bereits auf vollem Durchfluss und ist trotzdem zu
-        -- langsam, fehlt Dampf. Was das Modell in diesem Takt vorgibt,
-        -- sagt darueber nichts -- es koennte gerade heruntersteuern.
-        local flow_now = tonumber(t.current_flow) or tonumber(flow_decision.flow) or 0
-        local saturated = flow_now >= rt2_turbine.MAX_FLOW * M.MODEL_SATURATION_FRACTION
-        local on_target = target_rpm <= 0 or rpm_value == nil
-          or math.abs(target_rpm - rpm_value) <= rt2_turbine.RPM_BAND
-        if on_target or saturated then
-          self.turbine_model_doubt[name] = nil
-        elseif now_ms then
-          local since = self.turbine_model_doubt[name]
-          if not since then
-            self.turbine_model_doubt[name] = now_ms
-          elseif now_ms - since >= M.MODEL_DISTRUST_MS then
-            self.turbine_models[name] = nil
-            self.turbine_model_state[name] = nil
-            self.turbine_model_doubt[name] = nil
-            self.dropped_turbine_models[#self.dropped_turbine_models + 1] = name
-          end
-        end
-      end
       turbine_results[#turbine_results + 1] = {
         name = name,
         target_rpm = target_rpm,
@@ -408,18 +358,16 @@ function M.new(opts)
       -- Oberflaeche zeigte stattdessen v1's nie gefuellten Sollwert (also
       -- dauerhaft 0 %), waehrend der Knoten in Wahrheit auf 100 % regelte.
       master_percent = input.master_percent or self.master_percent,
+      -- Was in DIESEM Takt wirklich gegolten hat. Weicht es von
+      -- master_percent ab, laeuft die Flotte voll, weil noch keine
+      -- Leistung gemeldet ist (siehe oben).
+      effective_percent = percent,
       reactors = reactor_decisions,
       -- Ein-Reaktor-Sicht, unveraendert fuer alle bestehenden Leser.
       reactor_decision = first,
       turbines = turbine_results,
       capacity = self.capacity,
-      max_active = max_active,
-      turbine_models = self.turbine_models,
-      new_turbine_models = self.new_turbine_models,
-      dropped_turbine_models = self.dropped_turbine_models,
       tripped_reactors = tripped,
-      tuning = self.reactors[1] and self.reactors[1].tuning_profile or nil,
-      tuning_samples = self.reactors[1] and self.reactors[1].tuning_state.n or 0,
     }
   end
 

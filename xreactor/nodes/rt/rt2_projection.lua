@@ -38,11 +38,10 @@ local M = {}
 -- the existing node_states vocabulary has, and it is what MASTER's alerting
 -- already understands.
 M.NODE_STATE = {
-  INIT     = "STARTUP",
-  LEARNING = "STARTUP",
-  MASTER   = "RUNNING",
-  AUTONOM  = "AUTONOM",
-  SAFE     = "EMERGENCY",
+  INIT    = "STARTUP",
+  MASTER  = "RUNNING",
+  AUTONOM = "AUTONOM",
+  SAFE    = "EMERGENCY",
 }
 
 -- Module states use v1's module vocabulary (OFF/STARTING/STABLE/ERROR),
@@ -93,7 +92,7 @@ end
 function M.reactor_state(reactor_reading, node_state, tripped)
   if node_state == rt2_state.states.SAFE or tripped then return M.MODULE.ERROR end
   if not (reactor_reading and reactor_reading.active == true) then return M.MODULE.OFF end
-  if node_state == rt2_state.states.INIT or node_state == rt2_state.states.LEARNING then
+  if node_state == rt2_state.states.INIT then
     return M.MODULE.STARTING
   end
   return M.MODULE.STABLE

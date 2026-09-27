@@ -47,63 +47,24 @@ M.MIN_FLOW = 0
 M.MAX_FLOW = 2000
 M.TRIM_STEP = 35
 
--- Unterhalb dieses Vorsteuerwerts gilt eine Kennlinie als unbrauchbar:
--- eine Turbine, die ihre Zieldrehzahl mit so wenig Dampf halten soll,
--- beschreibt keine reale Anlage. Siehe die Begruendung bei der Pruefung
--- in compute_flow_decision().
-M.MODEL_MIN_OPERATING_FLOW = 10
-
--- So lange bleibt eine Durchflussvorgabe stehen, bevor die naechste
--- kommt.
+-- So lange bleibt eine Durchflussvorgabe stehen, bevor die naechste kommt.
 --
 -- Der Regler lief bisher in jedem Takt -- mehrmals pro Sekunde -- gegen
--- einen Rotor, der Sekunden braucht, um auf eine Verstellung zu
--- antworten. Er hat also immer wieder auf eine Drehzahl reagiert, die
--- seine vorherige Verstellung noch gar nicht enthielt, und entsprechend
--- ueberzogen: hoch, drueber, runter, drunter. Genau das ist das gemeldete
--- Pendeln, und es hat nichts mit der Schrittweite zu tun -- ein
--- Integrator, der schneller stellt als die Strecke antwortet, kann nicht
--- stabil werden.
+-- einen Rotor, der Sekunden braucht, um auf eine Verstellung zu antworten.
+-- Er hat also immer wieder auf eine Drehzahl reagiert, die seine vorherige
+-- Verstellung noch gar nicht enthielt, und entsprechend ueberzogen: hoch,
+-- drueber, runter, drunter. Ein Regler, der schneller stellt als die
+-- Strecke antwortet, kann nicht stabil werden -- unabhaengig von der
+-- Schrittweite.
 --
--- Der Wert hier gilt, solange die Turbine sich noch nicht selbst
--- vermessen hat; danach setzt rt2_turbine_model.derive() ihn aus der
--- tatsaechlich gemessenen Einschwingzeit (profile.min_adjust_interval_ms).
---
--- Schutzentscheidungen (fehlende Drehzahl, Ueberdrehzahl, AUS-Slot)
+-- Schutzentscheidungen (fehlende Drehzahl, Ueberdrehzahl, AUS-Platz)
 -- warten NICHT darauf -- sie greifen im selben Takt.
 M.MIN_ADJUST_INTERVAL_MS = 600
 
--- Ausserhalb des Bandes, ohne Modell: dort wird hochgefahren, nicht
--- gehalten. Ueberziehen kann man nur in der Naehe des Ziels.
-M.RAMP_INTERVAL_MS = 200
-
--- Beim Hochfahren: reicht die Drehzahl, die der Rotor GERADE aufnimmt,
--- aus, um das Ziel innerhalb dieser Zeit zu erreichen, wird nicht weiter
--- aufgemacht.
---
--- Das ist der Grund, warum der alte Regler ueberhaupt erst ueberschwingen
--- MUSSTE: er hat den Durchfluss so lange weiter erhoeht, wie die Drehzahl
--- unter dem Ziel lag -- und weil der Rotor der Vorgabe um Sekunden
--- hinterherhaengt, stand am Band-Rand laengst viel zu viel Dampf an. Der
--- Ueberschwinger danach war kein Regelfehler, sondern der aufgestaute
--- Dampf. Wer bremst, bevor er an der Ampel ist, muss hinterher nicht
--- zurueckstossen.
-M.RAMP_LOOKAHEAD_S = 3
-
--- Mit Profil: innerhalb dieser Abweichung wird gar nicht mehr gestellt.
--- Ein Regler ohne Ruhezone stellt auch dann noch, wenn er am Ziel ist,
--- und pendelt dadurch um genau diesen Rest.
+-- Innerhalb dieser Abweichung wird gar nicht mehr gestellt. Ein Regler
+-- ohne Ruhezone stellt auch dann noch, wenn er am Ziel ist, und pendelt
+-- dadurch um genau diesen Rest.
 M.SETTLE_BAND_RPM = 4
-
--- Mit Profil: wieviel von der rechnerisch noetigen Korrektur in einem
--- Schritt gefahren wird. Unter 1, weil das Modell die Strecke nur
--- annaehert -- der Rest kommt im naechsten Schritt.
-M.MODEL_DAMPING = 0.7
-
--- ...und wie gross ein einzelner Schritt hoechstens sein darf, gemessen
--- am Betriebspunkt der Turbine selbst. Skaliert sich damit mit, statt
--- eine feste Zahl fuer alle Anlagengroessen zu raten.
-M.MODEL_MAX_STEP_FRACTION = 0.35
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end
@@ -113,156 +74,114 @@ end
 
 -- ── Target RPM ───────────────────────────────────────────────────────────
 --
--- Spec (confirmed with the operator, 2026-09-18):
---   - LEARNING: every turbine targets the fixed FULL_TARGET_RPM,
---     unconditionally -- this must never depend on MASTER presence.
---   - AUTONOM (capacity known, no MASTER): turbines still target the
---     fixed FULL_TARGET_RPM. The reactor -- not the turbines -- is what
---     regulates independently from the steam tank in this mode (see
---     rt2_reactor.lua).
---   - MASTER: split the fleet by the master-requested power percentage
---     into VOLLAST (full target) / PUFFER (one partial-RPM turbine) / AUS
---     (0 RPM) slots, rotating which slots are AUS/PUFFER over time so no
---     turbine sits cold forever (rotation is the caller's job -- this
---     function takes the already-rotated slot_index).
---   - SAFE: 0 for everyone.
--- opts.max_active: wieviele Turbinen ueberhaupt laufen duerfen.
+-- Vorgabe (bestaetigt):
+--   - AUTONOM (kein MASTER): jede Turbine faehrt die feste
+--     FULL_TARGET_RPM. Geregelt wird in diesem Zustand der REAKTOR aus
+--     seinem Dampftank, nicht die Turbine (siehe rt2_reactor.lua).
+--   - MASTER: die Leistungsvorgabe in Prozent bestimmt, WIEVIELE Turbinen
+--     laufen. Die laufen dann auf der festen FULL_TARGET_RPM, der Rest
+--     steht. Welche Plaetze stehen, wandert mit der Zeit, damit keine
+--     Turbine dauerhaft kalt bleibt (das Drehen ist Sache des Aufrufers --
+--     diese Funktion bekommt den bereits gedrehten slot_index).
+--   - SAFE: 0 fuer alle.
+-- Wieviele Turbinen laufen bei dieser Leistungsvorgabe?
 --
--- Das ist der eine Begriff, der in JEDEM Zustand gilt -- waehrend des
--- Einlernens die aktuell freigegebene Stufe (rt2_capacity staffelt sie
--- hoch), danach die gelernte tragbare Anzahl. Ohne ihn setzt jeder Zustand
--- ausser MASTER alle Turbinen auf das volle Ziel, und eine dampfbegrenzte
--- Anlage reisst sich dabei selbst den Dampf weg: keine Turbine erreicht
--- die Zieldrehzahl, weil alle gleichzeitig daran ziehen.
+-- Ohne Kapazitaetsmessung ist die Rechnung so einfach wie moeglich: die
+-- Vorgabe ist ein Anteil der FLOTTE, nicht eines gelernten Wertes. 60 % von
+-- 50 Turbinen heisst 30 Turbinen auf Zieldrehzahl, 20 aus. Kein Teillast-
+-- Platz mit krummer Zieldrehzahl mehr: eine Turbine laeuft oder sie steht.
 --
--- nil bedeutet "keine Grenze bekannt" -- dann verhaelt sich alles wie
--- frueher und jede Turbine bekommt ihr volles Ziel.
-local function active_limit(opts, turbine_count)
-  local limit = tonumber(opts.max_active)
-  if not limit then return turbine_count end
-  if limit < 0 then return 0 end
-  if limit > turbine_count then return turbine_count end
-  return math.floor(limit)
+-- Das ist bewusst grob. Eine Turbine ausserhalb ihres Auslegungspunkts
+-- liefert unverhaeltnismaessig wenig, deshalb ist "weniger Turbinen, alle
+-- auf 900" die bessere Aufteilung als "alle Turbinen, alle zu langsam".
+local function running_count(percent, turbine_count)
+  if turbine_count <= 0 then return 0 end
+  local pct = clamp(tonumber(percent) or 100, 0, 100)
+  if pct <= 0 then return 0 end
+  local count = math.floor(pct / 100 * turbine_count + 0.5)
+  if count < 1 then count = 1 end          -- ueber 0 % laeuft mindestens eine
+  if count > turbine_count then count = turbine_count end
+  return count
 end
 
 function M.compute_target_rpm(state, opts)
   opts = opts or {}
-  if state == "SAFE" then
-    return 0
-  end
+  if state == "SAFE" then return 0 end
 
   local n = tonumber(opts.turbine_count) or 0
   local slot_index = tonumber(opts.slot_index) or 1
 
-  if state == "LEARNING" or state == "AUTONOM" then
-    if n > 0 and slot_index > active_limit(opts, n) then return 0 end
+  -- Ohne Master-Vorgabe faehrt die ganze Flotte auf Zieldrehzahl.
+  if state ~= "MASTER" then
     return M.FULL_TARGET_RPM
   end
 
-  if state == "MASTER" then
-    if n <= 0 then return M.FULL_TARGET_RPM end
-    local max_active = active_limit(opts, n)
-    -- Jenseits der tragbaren Anzahl bleibt eine Turbine immer aus -- die
-    -- Leistungsvorgabe wird NUR auf den tragbaren Teil der Flotte verteilt.
-    -- Sonst bedeutet "100 %" wieder "alle 25 gleichzeitig", was diese
-    -- Anlage gerade nicht kann, und die Vorgabe liesse sich nie erfuellen.
-    if max_active <= 0 or slot_index > max_active then return 0 end
-
-    local percent = clamp(tonumber(opts.power_percent) or 100, 0, 100)
-    local exact = percent / 100 * max_active
-    local full = math.floor(exact)
-    local remainder = exact - full
-    local has_partial = remainder > 0.001 and full < max_active
-    local partial_rpm = has_partial and math.max(1, math.floor(M.FULL_TARGET_RPM * remainder + 0.5)) or 0
-    local off_count = max_active - full - (has_partial and 1 or 0)
-
-    if slot_index <= off_count then
-      return 0
-    elseif has_partial and slot_index == off_count + 1 then
-      return partial_rpm
-    else
-      return M.FULL_TARGET_RPM
-    end
-  end
+  if n <= 0 then return M.FULL_TARGET_RPM end
+  if slot_index > running_count(opts.power_percent, n) then return 0 end
   return M.FULL_TARGET_RPM
 end
 
 -- ── Flow decision ────────────────────────────────────────────────────────
 --
--- target_rpm <= 0 (AUS slot, or SAFE) and genuine overspeed (rpm far above
--- target) are handled by the SAME "cut flow to zero now" rule -- the old
--- code treated target<=0 as a reason to skip protection entirely, which is
--- exactly what let an AUS-slot turbine spin at thousands of RPM on full
--- flow (reported 2026-09-18, node-101/102/103 screenshots).
+-- Ein einziges Regelgesetz: Drehzahl-Abweichung -> Durchfluss-Schritt.
 --
--- FIXED 2026-09-23: the overspeed cut used to fire at target+RPM_BAND,
--- which is the EXACT same condition as the RAMP_DOWN branch below
--- (error_rpm < -band  <=>  rpm > target + band). The cut came first, so
--- RAMP_DOWN was unreachable dead code -- proven by sweeping rpm 0..3000 at
--- target 900: RAMP_DOWN was hit zero times while 2060 of 3001 samples
--- slammed the flow to 0. The turbine therefore had no proportional
--- downward control at all: below the band it ramped +TRIM_STEP, inside it
--- trimmed by 1, and one RPM above the band it dropped straight to zero and
--- had to climb all the way back. That bang-bang sawtooth is both the
--- "controller too aggressive" behaviour reported from the plant and a
--- plausible reason capacity learning struggled to catch every turbine
--- inside its 900 +/- 15 measurement window at the same moment.
+-- Vorher lagen hier vier Verfahren nebeneinander -- Rampe, Feintrimmung,
+-- Streckenmodell aus gelernten Kennlinien und eine Vorausschau auf die
+-- Rotor-Beschleunigung. Sie haben sich gegenseitig abgeloest, und welches
+-- gerade griff, war von aussen nicht zu sehen. Eine Feldaufzeichnung vom
+-- 2026-09-27 zeigte 26 von 40 Turbinen oberhalb des Zielbands mit
+-- Durchfluss 0 im Auslauf, waehrend keine einzige Kennlinie in Gebrauch war.
 --
--- Now the two cases are actually distinct: OVERSPEED_RPM marks a real
--- runaway worth cutting to zero for, and everything between the band and
--- that limit ramps down proportionally like any normal controller.
+-- Was bleibt:
+--   1. Keine Drehzahlmessung  -> Dampf aus. Unbekannt ist nicht "0 RPM".
+--   2. Ziel 0 (Turbine steht) -> Dampf aus.
+--   3. Echte Ueberdrehzahl    -> Dampf aus.
+--   4. Nah genug am Ziel      -> nichts stellen (Ruhezone).
+--   5. Stellintervall nicht um-> nichts stellen (die letzte Verstellung
+--                                muss erst wirken koennen).
+--   6. sonst: Schritt proportional zur Abweichung, gedeckelt auf TRIM_STEP.
+--
+-- Die Verstaerkung ist so gewaehlt, dass genau am Rand des Zielbands ein
+-- voller TRIM_STEP herauskommt und der Schritt mit der Abweichung gegen
+-- null geht. Damit gibt es keine Kante zwischen "weit weg" und "fast da" --
+-- und genau diese Kante war das alte Sprungverhalten.
 function M.compute_flow_decision(input)
-  -- Keine Drehzahlmessung -> kein Dampf. Vorher wurde ein fehlender Wert
-  -- wie "0 RPM" behandelt, und das ist genau die falsche Richtung: der
-  -- Regler haelt die Turbine fuer stehend, faehrt den Flow aufs Maximum
-  -- hoch und laesst die Spule getrennt -- volle Foerderung ohne Last und
-  -- ohne Rueckmeldung, also der Zustand, gegen den die
-  -- Ueberdrehzahl-Abschaltung eigentlich schuetzen soll. Der Reaktor
-  -- faellt bei einem fehlenden Dampfwert laengst auf die sichere Seite
-  -- (NO_STEAM_READING -> Staebe 100); die Turbine tut es jetzt auch.
+  -- Keine Drehzahlmessung -> kein Dampf. Ein fehlender Wert wie "0 RPM" zu
+  -- behandeln ist die falsche Richtung: der Regler haelt die Turbine dann
+  -- fuer stehend, faehrt den Durchfluss hoch und laesst die Spule getrennt
+  -- -- volle Foerderung ohne Last, also genau der Zustand, gegen den die
+  -- Ueberdrehzahl-Abschaltung schuetzen soll.
   if tonumber(input.rpm) == nil then
     return { flow = 0, reason = "NO_RPM_READING" }
   end
   local rpm = tonumber(input.rpm) or 0
   local target_rpm = tonumber(input.target_rpm) or 0
+
   -- Der Rueckmesswert darf NICHT auf 0 vorbelegt werden.
   --
-  -- adapters/turbine.lua liefert seit v738 ausdruecklich nil, wenn der
-  -- Durchfluss nicht lesbar ist ("nil heisst jetzt nil, und der Aufrufer
-  -- muss damit umgehen") -- und genau hier wurde daraus wieder eine 0.
-  -- Damit war derselbe Fehler eine Ebene tiefer zurueck, und er wirkte
-  -- schlimmer als das Original: JEDER Halte-Zweig (SETTLED, SETTLING,
-  -- HOLD, *_COASTING) gibt current_flow zurueck, entschied also 0. Die
-  -- Oberflaeche zeigt die ENTSCHEIDUNG, nicht den Messwert -- deshalb
-  -- stand dort "FLOW 0.0", waehrend Drehzahl, Reaktor und MASTER in
-  -- Ordnung waren. Und die Schmutzpruefung im Orchestrator kann eine
-  -- solche 0 nicht unterdruecken (sie hat ja keinen Messwert zum
-  -- Vergleichen), also wurde sie tatsaechlich geschrieben.
-  --
-  -- Was der Regler stattdessen nimmt: seinen EIGENEN zuletzt gestellten
-  -- Wert. Den kennt der Orchestrator, und er ist die einzige belastbare
-  -- Auskunft, solange die Hardware keine gibt.
+  -- adapters/turbine.lua liefert ausdruecklich nil, wenn der Durchfluss
+  -- nicht lesbar ist -- daraus hier wieder eine 0 zu machen hiesse, jeden
+  -- Halte-Zweig 0 entscheiden zu lassen. Die Oberflaeche zeigt die
+  -- ENTSCHEIDUNG, nicht den Messwert; so stand dort "FLOW 0.0", waehrend
+  -- Drehzahl, Reaktor und MASTER in Ordnung waren. Was der Regler
+  -- stattdessen nimmt: seinen EIGENEN zuletzt gestellten Wert.
   local readback = tonumber(input.current_flow)
   local last_commanded = tonumber(input.last_commanded_flow)
   local current_flow = readback or last_commanded or 0
   local flow_known = readback ~= nil or last_commanded ~= nil
 
-  -- Jeder Zweig, der "so lassen wie es ist" bedeutet, geht hier durch.
-  --
-  -- Ist der aktuelle Durchfluss UNBEKANNT, gibt es nichts zu halten -- und
-  -- die richtige Antwort ist dann nicht "0 stellen", sondern GAR NICHT
-  -- stellen. unchanged=true laesst rt2_adapter den Schreibbefehl
-  -- ueberspringen; die Hardware behaelt, was sie hat, bis wieder ein
-  -- Messwert da ist. Schutzentscheidungen (Drehzahl fehlt, Ueberdrehzahl,
-  -- Ziel 0) liegen oberhalb und sind davon nicht beruehrt -- eine Bremsung
-  -- darf nie unterbleiben.
+  -- Jeder Zweig, der "so lassen wie es ist" bedeutet, geht hier durch. Ist
+  -- der Durchfluss UNBEKANNT, gibt es nichts zu halten -- die richtige
+  -- Antwort ist dann nicht "0 stellen", sondern GAR NICHT stellen.
+  -- Schutzentscheidungen liegen oberhalb und sind davon nicht beruehrt:
+  -- eine Bremsung darf nie unterbleiben.
   local function hold(reason)
     return { flow = current_flow, reason = reason, unchanged = (not flow_known) or nil }
   end
+
   local min_flow = tonumber(input.min_flow) or M.MIN_FLOW
   local max_flow = tonumber(input.max_flow) or M.MAX_FLOW
   local band = tonumber(input.band) or M.RPM_BAND
-
   local overspeed_rpm = tonumber(input.overspeed_rpm) or M.OVERSPEED_RPM
 
   if target_rpm <= 0 then
@@ -273,166 +192,38 @@ function M.compute_flow_decision(input)
   end
 
   -- ── Ab hier wird geregelt, nicht mehr geschuetzt ──────────────────────
-  --
-  -- Stellintervall: erst nachsehen, ob die letzte Verstellung ueberhaupt
-  -- schon wirken konnte. Ohne Uhrangabe (Modultests, Altaufrufer) entfaellt
-  -- die Sperre und alles verhaelt sich wie zuvor.
   local error_rpm = target_rpm - rpm
-  local now_ms = tonumber(input.now_ms)
-  local last_change_ms = tonumber(input.last_change_ms)
-  local model = type(input.model) == "table" and input.model or nil
-  local interval_ms = tonumber(input.min_adjust_interval_ms)
-    or (model and tonumber(model.min_adjust_interval_ms))
-    or M.MIN_ADJUST_INTERVAL_MS
-  -- Weit weg vom Ziel und ohne Modell darf zuegiger gestellt werden: dort
-  -- geht es ums Hochfahren, nicht ums Halten, und ueberziehen kann man
-  -- nur in der Naehe des Ziels. Sonst braeuchte eine Turbine aus dem
-  -- Stand Dutzende Stellintervalle, bis sie ueberhaupt in die Naehe der
-  -- Zieldrehzahl kommt.
-  if not model and math.abs(error_rpm) > band then
-    interval_ms = math.min(M.RAMP_INTERVAL_MS, interval_ms)
-  end
-  if now_ms and last_change_ms and (now_ms - last_change_ms) < interval_ms then
-    return hold("SETTLING")
-  end
 
-  -- Wie schnell der Rotor gerade steigt oder faellt (RPM je Sekunde).
-  -- Ohne Angabe verhaelt sich alles wie zuvor.
-  local rpm_rate = tonumber(input.rpm_rate)
-  local lookahead_s = tonumber(input.ramp_lookahead_s) or M.RAMP_LOOKAHEAD_S
-  local function coasting()
-    if not rpm_rate or rpm_rate == 0 then return false end
-    -- Nur wenn sich der Rotor in Richtung Ziel bewegt.
-    if (error_rpm > 0) ~= (rpm_rate > 0) then return false end
-    return (error_rpm / rpm_rate) <= lookahead_s
-  end
-
-  -- ── Ruhezone ──────────────────────────────────────────────────────────
-  --
-  -- Nah genug am Ziel wird gar nicht mehr gestellt. Ohne diese Zone
-  -- stellt der Regler AUCH DANN noch, wenn er angekommen ist: die
-  -- In-Band-Korrektur unten hat eine Mindestschrittweite von 1 mB/t, und
-  -- dieses eine mB/t ist auf einer grossen Turbine schon mehr als die
-  -- verbleibende Abweichung. Das Ergebnis ist ein endloses
-  -- +1/-1/+1/-1 -- das gemeldete "hoch runter hoch runter" in seiner
-  -- kleinsten Form.
-  --
-  -- Es kostet nichts: 4 RPM sind ein Viertel dessen, was das Einlernen
-  -- als "am Ziel" akzeptiert (900 +/- 15).
-  --
-  -- Und es ist die Voraussetzung dafuer, dass sich die Turbine ueberhaupt
-  -- vermessen laesst: rt2_turbine_model.lua braucht Betriebspunkte, also
-  -- Zeitraeume, in denen der Durchfluss STILLSTEHT.
+  -- Ruhezone: nah genug am Ziel wird gar nicht gestellt. Ohne sie stellt
+  -- der Regler auch dann noch, wenn er angekommen ist -- die kleinste
+  -- Schrittweite ist auf einer grossen Turbine schon mehr als die
+  -- verbleibende Abweichung, und das Ergebnis ist ein endloses +1/-1.
   local settle_band = tonumber(input.settle_band_rpm) or M.SETTLE_BAND_RPM
   if math.abs(error_rpm) <= settle_band then
     return hold("SETTLED")
   end
 
-  -- ── Mit Streckenmodell ────────────────────────────────────────────────
-  --
-  -- Die Turbine hat sich selbst vermessen (rt2_turbine_model.lua), also
-  -- ist bekannt, wieviel Drehzahl ein mB/t wert ist. Dann muss sich der
-  -- Regler nicht mehr in festen Schritten herantasten: eine Abweichung
-  -- von x RPM verlangt x/slope mB/t. Das ist weiter eine schrittweise
-  -- Korrektur (und behaelt damit ihre Integralwirkung, falls das Modell
-  -- etwas daneben liegt), nur mit der richtigen Schrittweite -- sie geht
-  -- mit der Abweichung gegen null, statt immer TRIM_STEP zu bleiben.
-  --
-  -- Nur mit gekuppelter Spule: die Kennlinie wurde unter Last gemessen
-  -- und gilt auch nur dort. Ohne Last traegt derselbe Durchfluss deutlich
-  -- mehr Drehzahl -- wer beim Hochfahren den Lastwert vorgibt, schiesst
-  -- ueber und faengt sich erst an der Ueberdrehzahl-Abschaltung. Solange
-  -- die Spule offen ist, bleibt es deshalb bei der Rampe, die dank der
-  -- Vorausschau oben ohnehin nicht mehr ueberschwingt.
-  local slope = model and tonumber(model.slope)
-  local operating = slope and slope > 0
-    and ((target_rpm - (tonumber(model.intercept) or 0)) / slope) or nil
-  if operating and operating < 0 then operating = max_flow end
-
-  -- Sicherheitsnetz gegen eine unbrauchbare Kennlinie.
-  --
-  -- Behauptet sie, die Zieldrehzahl sei mit (fast) keinem Dampf zu
-  -- halten, ist sie falsch -- und sie stellt dann Durchfluss 0 und haelt
-  -- ihn fuer richtig. Genau so stand der Knoten im Betrieb: LEARNING,
-  -- Spule eingehaengt, Drehzahl unter Ziel, Durchfluss auf der ganzen
-  -- Flotte 0.
-  --
-  -- rt2_turbine_model verwirft so eine Kennlinie inzwischen schon beim
-  -- Ableiten UND beim Laden. Das hier deckt den Rest ab: eine Kennlinie,
-  -- die auf anderem Weg hereinkommt, darf die Turbine nicht abwuergen.
-  -- Dann gilt wieder die Rampe -- die braucht kein Modell und kommt
-  -- langsamer, aber sicher ans Ziel.
-  if operating and target_rpm > 0 and operating < M.MODEL_MIN_OPERATING_FLOW then
-    slope = nil
+  -- Stellintervall: erst nachsehen, ob die letzte Verstellung ueberhaupt
+  -- schon wirken konnte. Der Rotor haengt der Vorgabe um Sekunden
+  -- hinterher; ohne diese Sperre stapelt der Regler Schritte auf eine
+  -- Wirkung, die noch gar nicht eingetreten ist. Ohne Uhrangabe
+  -- (Modultests, Altaufrufer) entfaellt die Sperre.
+  local now_ms = tonumber(input.now_ms)
+  local last_change_ms = tonumber(input.last_change_ms)
+  local interval_ms = tonumber(input.min_adjust_interval_ms) or M.MIN_ADJUST_INTERVAL_MS
+  if now_ms and last_change_ms and (now_ms - last_change_ms) < interval_ms then
+    return hold("SETTLING")
   end
 
-  if slope and slope > 0 and input.coil_engaged == true then
-
-    -- Grosse Abweichung -- typisch: MASTER hat die Vorgabe verschoben.
-    -- Die Kennlinie kennt den Durchfluss, der die neue Drehzahl traegt,
-    -- also wird er in EINEM Zug gestellt statt in Schritten von
-    -- TRIM_STEP angefahren. Das ist kein Sprung ins Ungewisse: es ist
-    -- genau der Beharrungswert, den die Turbine selbst gemessen hat --
-    -- ueberschwingen kann sie dabei nicht, weil sie ihn nicht
-    -- ueberschreitet. Liegt die Kennlinie etwas daneben, raeumt die
-    -- schrittweise Korrektur darunter den Rest weg.
-    if math.abs(error_rpm) > band then
-      local want = clamp(math.floor(operating + 0.5), min_flow, max_flow)
-      if want ~= current_flow then
-        return { flow = want, reason = "MODEL_FEEDFORWARD" }
-      end
-    end
-
-    -- Der richtige Durchfluss steht bereits an und der Rotor ist auf dem
-    -- Weg dorthin -- dann ist jede weitere Verstellung eine Reaktion auf
-    -- einen Zustand, den die vorige schon beseitigt. Genau so entsteht
-    -- das Ueberziehen, das diese Aenderung beenden soll.
-    if coasting() then return hold("MODEL_COASTING") end
-
-    local max_step = math.max(5, math.floor(operating * M.MODEL_MAX_STEP_FRACTION))
-    local step = clamp(M.MODEL_DAMPING * error_rpm / slope, -max_step, max_step)
-    local next_flow = clamp(math.floor(current_flow + step + 0.5), min_flow, max_flow)
-    if next_flow == current_flow then
-      return hold("SETTLED")
-    end
-    return { flow = next_flow, reason = error_rpm > 0 and "MODEL_UP" or "MODEL_DOWN" }
+  -- Proportionalschritt, gedeckelt. Am Bandrand genau TRIM_STEP, naeher am
+  -- Ziel entsprechend weniger, mindestens aber 1 -- sonst bliebe eine
+  -- kleine Abweichung ewig stehen.
+  local step = M.TRIM_STEP * math.abs(error_rpm) / band
+  step = math.max(1, math.min(M.TRIM_STEP, math.floor(step + 0.5)))
+  if error_rpm > 0 then
+    return { flow = clamp(current_flow + step, min_flow, max_flow), reason = "TRIM_UP" }
   end
-
-  if error_rpm > band then
-    -- well under target: open up, but never overshoot straight to max in
-    -- one step (the physical rotor takes time to respond).
-    if coasting() then return hold("RAMP_COASTING") end
-    return { flow = clamp(current_flow + M.TRIM_STEP, min_flow, max_flow), reason = "RAMP_UP" }
-  end
-  if error_rpm < -band then
-    if coasting() then return hold("RAMP_COASTING") end
-    return { flow = clamp(current_flow - M.TRIM_STEP, min_flow, max_flow), reason = "RAMP_DOWN" }
-  end
-  -- Inside the band: trim toward the exact target, proportionally.
-  --
-  -- FIXED 2026-09-23: this used to be a flat +/-1 per tick regardless of
-  -- how far off the turbine actually was -- 35x weaker than the RAMP
-  -- branches it takes over from, with a cliff right at the band edge. That
-  -- matters most at exactly the wrong moment: when the coil engages, the
-  -- load step needs a LARGE flow correction, and a 1-unit trim takes
-  -- hundreds of ticks to deliver it. The rotor sagged out of the band,
-  -- RAMP_UP slammed +35 back in, and the turbine sawtoothed across the
-  -- 900 +/- 15 measurement window instead of settling inside it.
-  --
-  -- The step now scales with the error, so it joins the ramp branches
-  -- continuously (at |error| == band it is exactly TRIM_STEP) and shrinks
-  -- to 1 right at the target. Simulated over a 25-turbine fleet this cut
-  -- the time to complete capacity learning from 126 to 77 ticks.
-  if band > 0 and error_rpm ~= 0 then
-    local step = math.max(1, math.floor(M.TRIM_STEP * math.abs(error_rpm) / band + 0.5))
-    if error_rpm > 0 and current_flow < max_flow then
-      return { flow = clamp(current_flow + step, min_flow, max_flow), reason = "HOLD_TRIM_UP" }
-    end
-    if error_rpm < 0 and current_flow > min_flow then
-      return { flow = clamp(current_flow - step, min_flow, max_flow), reason = "HOLD_TRIM_DOWN" }
-    end
-  end
-  return hold("HOLD")
+  return { flow = clamp(current_flow - step, min_flow, max_flow), reason = "TRIM_DOWN" }
 end
 
 -- ── Coil decision ────────────────────────────────────────────────────────
@@ -488,7 +279,21 @@ function M.compute_coil_decision(input)
   local engage_rpm = M.COIL_ENGAGE_RPM * scale
   local disengage_rpm = M.COIL_DISENGAGE_RPM * scale
 
-  if not currently_engaged and rpm >= engage_rpm then
+  -- Angekommen heisst gekuppelt -- auch wenn die Schwelle oben noch ein
+  -- paar Drehzahlen weiter liegt.
+  --
+  -- Der Regler hat eine Ruhezone um das Ziel (SETTLE_BAND_RPM): bei 897
+  -- gegen ein Ziel von 900 stellt er nichts mehr. Die Kupplungsschwelle lag
+  -- aber genau AUF 900. Eine Turbine, die dort einschwang, kuppelte also
+  -- nie ein -- und eine ungekuppelte Turbine liefert nichts. Der Rotor
+  -- drehte, der Reaktor lieferte Dampf, die Anzeige sah gesund aus, und der
+  -- Knoten meldete dauerhaft 0 RF/t. Im Zwillingstest blieb die ganze
+  -- Flotte so bei 897 RPM stehen.
+  --
+  -- Die Ruhezone des Reglers und die Kupplungsschwelle muessen sich also
+  -- ueberlappen: was der Regler als "am Ziel" ansieht, gilt hier auch so.
+  local settle_band = tonumber(input.settle_band_rpm) or M.SETTLE_BAND_RPM
+  if not currently_engaged and (rpm >= engage_rpm or rpm >= target_rpm - settle_band) then
     return { engaged = true, reason = "ENGAGE_THRESHOLD" }
   end
   if currently_engaged and rpm <= disengage_rpm then

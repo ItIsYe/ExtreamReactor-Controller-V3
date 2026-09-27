@@ -35,7 +35,7 @@ end
 local handlers = {}
 
 -- SET_SETPOINTS { power_target_percent } -- only meaningful while the
--- node is actually in MASTER state. If it isn't (still LEARNING, in
+-- node is actually in MASTER state. If it isn't (still INIT, in
 -- AUTONOM because MASTER only just reconnected and the link hasn't
 -- caught up yet, or SAFE), reject explicitly with a real reason_code --
 -- the old false-success bug (nil return silently became {ok=true}) has

@@ -9,30 +9,28 @@
 -- both, etc. There is now exactly one state, exactly one place that
 -- decides the next state, and exactly one thing every other module reads.
 --
--- Required behaviour (explicit product spec):
---   1. On boot the node ALWAYS learns its turbine capacity first --
---      completely independent of whether a MASTER is present. Reactor and
---      turbines ramp to the fixed target RPM (900) during this phase.
---   2. Once learning is complete, the node checks whether a MASTER is
---      connected:
---        - MASTER present  -> turbine RPM targets follow MASTER's
---          requested power split (VOLLAST/PUFFER/AUS).
---        - MASTER absent   -> AUTONOM: turbines still target the fixed
---          RPM, but the REACTOR regulates independently from the internal
---          steam tank fill level (see rt2_reactor.lua) instead of a
---          MASTER-driven percentage.
---   3. A safety trip (temperature/coolant) always wins, from any state,
---      and recovery returns to MASTER or AUTONOM directly (capacity is
---      already known -- no need to relearn).
+-- Vorgabe (bestaetigt): der Knoten LERNT NICHTS MEHR. Es gab einen
+-- Zustand LEARNING, in dem eine Kapazitaetsmessung lief, bevor der Knoten
+-- ueberhaupt auf MASTER hoerte -- mit eigenem Suchlauf, eigener
+-- Zwischendatei und einer Menge Wege, auf denen er haengenbleiben konnte.
+-- Geregelt wird jetzt schlicht auf Drehzahl gegen Drehzahlvorgabe, und
+-- dafuer muss nichts vermessen werden.
+--
+-- Damit bleiben:
+--   1. Sobald Hardware da ist, arbeitet der Knoten. Ist ein MASTER
+--      verbunden, folgen die Turbinenvorgaben dessen Leistungsvorgabe;
+--      ist keiner da (AUTONOM), fahren alle Turbinen die feste Drehzahl
+--      und der REAKTOR regelt sich aus seinem Dampftank (rt2_reactor.lua).
+--   2. Eine Sicherheitsausloesung gewinnt immer, aus jedem Zustand, und
+--      die Erholung geht direkt zurueck nach MASTER oder AUTONOM.
 
 local M = {}
 
 M.states = {
-  INIT     = "INIT",     -- boot, hardware not yet discovered/confirmed
-  LEARNING = "LEARNING", -- capacity not yet known; reactor+turbines ramp to fixed target RPM
-  MASTER   = "MASTER",   -- capacity known, MASTER connected and driving setpoints
-  AUTONOM  = "AUTONOM",  -- capacity known, no MASTER; steam-tank-driven reactor control
-  SAFE     = "SAFE",     -- safety trip; rods full insertion, turbines flow-zeroed
+  INIT    = "INIT",    -- boot, hardware not yet discovered/confirmed
+  MASTER  = "MASTER",  -- MASTER connected and driving setpoints
+  AUTONOM = "AUTONOM", -- no MASTER; steam-tank-driven reactor control
+  SAFE    = "SAFE",    -- safety trip; rods full insertion, turbines flow-zeroed
 }
 
 local VALID_STATES = {}
@@ -45,7 +43,6 @@ for _, name in pairs(M.states) do VALID_STATES[name] = true end
 --
 -- inputs:
 --   hardware_ready    -- discovery has found at least one reactor+turbine
---   capacity_ready    -- capacity_learning.ready == true
 --   master_connected  -- comms peer-liveness for the MASTER role
 --   safety_tripped    -- true while ANY active safety condition holds
 --                         (temperature limit, coolant low, etc.)
@@ -56,65 +53,20 @@ function M.decide_next_state(current, inputs)
     return M.states.SAFE
   end
 
-  if current == M.states.INIT then
-    if inputs.hardware_ready then
-      return M.states.LEARNING
-    end
+  if current == M.states.INIT and not inputs.hardware_ready then
     return M.states.INIT
   end
 
-  if current == M.states.LEARNING then
-    if not inputs.capacity_ready then
-      return M.states.LEARNING
-    end
-    if inputs.master_connected then
-      return M.states.MASTER
-    end
-    return M.states.AUTONOM
+  -- INIT (mit Hardware), SAFE-Erholung und der laufende Betrieb landen
+  -- alle bei derselben Frage -- es gibt keinen Zwischenzustand mehr:
+  -- haengt ein MASTER dran oder nicht?
+  --
+  -- Keine Hysterese noetig: comms.lua's Lebendigkeitspruefung (Entprellung
+  -- und Nachlauf) glaettet das Signal, bevor es hier ankommt.
+  if inputs.master_connected then
+    return M.states.MASTER
   end
-
-  if current == M.states.SAFE then
-    -- Recovery: safety_tripped is already false here (checked above), so
-    -- it is safe to leave SAFE.
-    --
-    -- A trip that happened DURING the learning phase leaves capacity
-    -- unlearned -- going straight to MASTER/AUTONOM there would run the
-    -- node on a capacity_max of 0 (MASTER would split power against a
-    -- capacity it never measured). Rule 1 of the spec is that learning
-    -- always completes first, so an unlearned node resumes LEARNING.
-    if not inputs.capacity_ready then
-      return M.states.LEARNING
-    end
-    if inputs.master_connected then
-      return M.states.MASTER
-    end
-    return M.states.AUTONOM
-  end
-
-  -- MASTER <-> AUTONOM: a live decision every tick, purely driven by
-  -- current MASTER connectivity. No hysteresis needed here -- comms.lua's
-  -- own peer-liveness tracking (debounce/grace) already smooths this
-  -- signal before it reaches this function.
-  if current == M.states.MASTER or current == M.states.AUTONOM then
-    -- A turbine added or removed at runtime invalidates the learned
-    -- capacity (rt2_capacity keys invalidation on the fleet COUNT), and
-    -- without this branch there was no way back: MASTER/AUTONOM only ever
-    -- looked at connectivity, and the fleet is running split targets in
-    -- those states, so the measurement can never succeed again either.
-    -- The node stayed MASTER with capacity_ready=false and max_output=0 --
-    -- MASTER splitting power against a capacity it no longer had -- until
-    -- someone rebooted the computer. Rule 1 of the spec is that learning
-    -- always completes first, so an invalidated node relearns.
-    if not inputs.capacity_ready then
-      return M.states.LEARNING
-    end
-    if inputs.master_connected then
-      return M.states.MASTER
-    end
-    return M.states.AUTONOM
-  end
-
-  return current
+  return M.states.AUTONOM
 end
 
 function M.new(initial)

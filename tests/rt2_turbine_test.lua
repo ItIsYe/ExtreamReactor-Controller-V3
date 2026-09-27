@@ -7,33 +7,69 @@ local function assert_true(v, m) if not v then error(m or 'assert_true failed') 
 
 -- ── compute_target_rpm ───────────────────────────────────────────────────
 
-assert_eq(rt2_turbine.compute_target_rpm("LEARNING", {}), 900, 'LEARNING always targets the fixed RPM')
-assert_eq(rt2_turbine.compute_target_rpm("LEARNING", { power_percent = 0 }), 900, 'LEARNING ignores any power_percent input -- unconditional')
-assert_eq(rt2_turbine.compute_target_rpm("AUTONOM", { power_percent = 0 }), 900, 'AUTONOM turbines still target the fixed RPM (reactor handles independence, not turbines)')
+assert_eq(rt2_turbine.compute_target_rpm("AUTONOM", { power_percent = 0 }), 900,
+  'AUTONOM turbines target the fixed RPM (the reactor handles independence, not the turbines)')
 assert_eq(rt2_turbine.compute_target_rpm("SAFE", {}), 0, 'SAFE targets 0 for every turbine')
+assert_eq(rt2_turbine.compute_target_rpm("INIT", { power_percent = 0 }), 900,
+  'any non-MASTER state targets the fixed RPM')
 
--- MASTER split: reproduces the worked examples from the old design doc,
--- now backed by tests instead of only a comment.
+-- MASTER: die Vorgabe in Prozent bestimmt, WIEVIELE Turbinen laufen. Es
+-- gibt keinen Teillast-Platz mehr -- eine Turbine laeuft auf 900 oder sie
+-- steht.
 do
-  -- 50% of 25 turbines: 12 full, 1 partial at 450, 12 off.
-  local full, partial, off = 0, 0, 0
+  local full, off, other = 0, 0, 0
   for slot = 1, 25 do
-    local target = rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 25, slot_index = slot, power_percent = 50 })
+    local target = rt2_turbine.compute_target_rpm("MASTER",
+      { turbine_count = 25, slot_index = slot, power_percent = 50 })
     if target == 900 then full = full + 1
     elseif target == 0 then off = off + 1
-    else partial = partial + 1; assert_eq(target, 450, 'the single partial turbine must target exactly half RPM at 50%') end
+    else other = other + 1 end
   end
-  assert_eq(full, 12, '50% of 25 turbines: 12 full-load turbines expected')
-  assert_eq(partial, 1, '50% of 25 turbines: exactly one partial turbine expected')
-  assert_eq(off, 12, '50% of 25 turbines: 12 off turbines expected')
+  assert_eq(full, 13, '50% of 25 turbines: 13 run (12.5 rounded up)')
+  assert_eq(off, 12, '50% of 25 turbines: 12 stand')
+  assert_eq(other, 0, 'no turbine gets a partial target any more')
 end
 
--- Single-turbine fleet must still scale with power_percent (regression:
--- the old n<=1 shortcut ignored power_percent entirely and always
--- returned the full 900 RPM).
-assert_eq(rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 1, slot_index = 1, power_percent = 20 }), 180, 'single turbine at 20% must target 180 RPM')
-assert_eq(rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 1, slot_index = 1, power_percent = 50 }), 450, 'single turbine at 50% must target 450 RPM')
-assert_eq(rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 1, slot_index = 1, power_percent = 100 }), 900, 'single turbine at 100% must target the full RPM')
+do
+  local full, off = 0, 0
+  for slot = 1, 50 do
+    local target = rt2_turbine.compute_target_rpm("MASTER",
+      { turbine_count = 50, slot_index = slot, power_percent = 60 })
+    if target == 900 then full = full + 1 else off = off + 1 end
+  end
+  assert_eq(full, 30, '60% of 50 turbines: 30 run')
+  assert_eq(off, 20, '60% of 50 turbines: 20 stand')
+end
+
+-- 100 % heisst die ganze Flotte, 0 % heisst keine einzige.
+do
+  for slot = 1, 10 do
+    assert_eq(rt2_turbine.compute_target_rpm("MASTER",
+      { turbine_count = 10, slot_index = slot, power_percent = 100 }), 900,
+      'at 100% every turbine runs')
+    assert_eq(rt2_turbine.compute_target_rpm("MASTER",
+      { turbine_count = 10, slot_index = slot, power_percent = 0 }), 0,
+      'at 0% no turbine runs')
+  end
+end
+
+-- Eine Vorgabe ueber 0 laesst immer mindestens eine Turbine laufen --
+-- sonst faellt eine grosse Flotte bei kleinem Bedarf ganz aus.
+do
+  assert_eq(rt2_turbine.compute_target_rpm("MASTER",
+    { turbine_count = 50, slot_index = 1, power_percent = 1 }), 900,
+    'above 0% at least one turbine runs')
+  assert_eq(rt2_turbine.compute_target_rpm("MASTER",
+    { turbine_count = 50, slot_index = 2, power_percent = 1 }), 0,
+    'and only that one')
+end
+
+-- Ein-Turbinen-Flotte: entweder sie laeuft auf 900 oder sie steht. Eine
+-- krumme Zieldrehzahl gibt es nicht mehr.
+do
+  assert_eq(rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 1, slot_index = 1, power_percent = 20 }), 900)
+  assert_eq(rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 1, slot_index = 1, power_percent = 0 }), 0)
+end
 
 -- ── compute_flow_decision ────────────────────────────────────────────────
 
@@ -43,82 +79,105 @@ assert_eq(rt2_turbine.compute_target_rpm("MASTER", { turbine_count = 1, slot_ind
 -- 2.0k-3.0k flow at 1000-3200 RPM while the "ON" ones correctly throttled).
 do
   local d = rt2_turbine.compute_flow_decision({ rpm = 2866, target_rpm = 0, current_flow = 2000, max_flow = 2000 })
-  assert_eq(d.flow, 0, 'AUS-slot turbine massively overspeeding must be forced to flow=0 immediately, not ramped down')
-  assert_eq(d.reason, 'TARGET_ZERO', 'reason must reflect the target-zero rule, not a generic ramp')
+  assert_eq(d.flow, 0, 'AUS-slot turbine massively overspeeding must be forced to flow=0 immediately')
+  assert_eq(d.reason, 'TARGET_ZERO', 'reason must reflect the target-zero rule')
 end
 
 -- A real overspeed case (positive target, RPM far above it) must also be
 -- forced to 0 immediately -- same outcome, different reason, so a caller
--- can tell "parked" apart from "braking" if it needs to (e.g. for coil
--- engagement decisions elsewhere).
+-- can tell "parked" apart from "braking".
 do
   local d = rt2_turbine.compute_flow_decision({ rpm = 2000, target_rpm = 900, current_flow = 2000, max_flow = 2000 })
   assert_eq(d.flow, 0, 'genuine overspeed must be forced to flow=0')
   assert_eq(d.reason, 'OVERSPEED', 'reason must reflect genuine overspeed, distinct from TARGET_ZERO')
 end
 
--- The overspeed cut is an ABSOLUTE machine limit, not a margin on top of
--- the target: a PUFFER-slot turbine holding 450 has exactly the same
--- physical limit as one at full load. Getting back down to the target is
--- RAMP_DOWN's job, so everything between the band and the limit ramps.
+-- Eine fehlende Drehzahlmessung ist nicht "0 RPM": ohne Messwert kein Dampf.
 do
-  local limit = rt2_turbine.OVERSPEED_RPM
-  for _, target in ipairs({ 900, 450, 180 }) do
-    local below = rt2_turbine.compute_flow_decision({ rpm = limit - 1, target_rpm = target, current_flow = 1000 })
-    assert_eq(below.reason, 'RAMP_DOWN', 'below the machine limit a turbine ramps down toward target ' .. target)
-    local above = rt2_turbine.compute_flow_decision({ rpm = limit + 1, target_rpm = target, current_flow = 1000 })
-    assert_eq(above.reason, 'OVERSPEED', 'the same absolute limit applies at target ' .. target)
-    assert_eq(above.flow, 0)
-  end
+  local d = rt2_turbine.compute_flow_decision({ rpm = nil, target_rpm = 900, current_flow = 1500 })
+  assert_eq(d.flow, 0, 'an unreadable RPM must cut the steam, not raise it')
+  assert_eq(d.reason, 'NO_RPM_READING')
 end
 
--- The RAMP_DOWN branch must stay reachable. It was dead code once before:
--- the overspeed cut fired at target+band, which is the exact condition of
--- the RAMP_DOWN test below it, so the cut always won and the turbine had
--- no proportional downward control at all.
+-- Die Ueberdrehzahl-Abschaltung ist eine ABSOLUTE Maschinengrenze, kein
+-- Zuschlag auf das Ziel. Darunter regelt der Regler ganz normal herunter.
+do
+  local limit = rt2_turbine.OVERSPEED_RPM
+  local below = rt2_turbine.compute_flow_decision({ rpm = limit - 1, target_rpm = 900, current_flow = 1000 })
+  assert_eq(below.reason, 'TRIM_DOWN', 'below the machine limit a turbine trims down toward its target')
+  local above = rt2_turbine.compute_flow_decision({ rpm = limit + 1, target_rpm = 900, current_flow = 1000 })
+  assert_eq(above.reason, 'OVERSPEED', 'at the limit the steam is cut')
+  assert_eq(above.flow, 0)
+end
+
+-- Es gibt genau EIN Regelgesetz, und jeder seiner Zweige muss erreichbar
+-- bleiben. Vorher lagen hier vier Verfahren nebeneinander (Rampe,
+-- Feintrimmung, Kennlinie, Vorausschau), von denen eines schon einmal
+-- vollstaendig unerreichbar war.
 do
   local reached = {}
   for rpm = 0, 3000 do
     reached[rt2_turbine.compute_flow_decision({ rpm = rpm, target_rpm = 900, current_flow = 1000 }).reason] = true
   end
-  assert_true(reached.RAMP_DOWN, 'RAMP_DOWN must be reachable -- the overspeed cut must not swallow it')
-  assert_true(reached.RAMP_UP and reached.HOLD_TRIM_UP and reached.HOLD_TRIM_DOWN and reached.OVERSPEED,
-    'every other flow branch must stay reachable too')
+  assert_true(reached.TRIM_UP, 'TRIM_UP must be reachable')
+  assert_true(reached.TRIM_DOWN, 'TRIM_DOWN must be reachable')
+  assert_true(reached.SETTLED, 'SETTLED must be reachable')
+  assert_true(reached.OVERSPEED, 'OVERSPEED must be reachable')
+  local count = 0
+  for _ in pairs(reached) do count = count + 1 end
+  assert_eq(count, 4, 'and nothing else -- one control law, four outcomes')
 end
 
--- Well under target: ramp up, not directly to max.
+-- Der Schritt ist PROPORTIONAL zur Abweichung: winzig nah am Ziel, ein
+-- voller TRIM_STEP am Rand des Zielbands. Kein Sprung dazwischen.
 do
-  local d = rt2_turbine.compute_flow_decision({ rpm = 100, target_rpm = 900, current_flow = 500, max_flow = 2000 })
-  assert_true(d.flow > 500 and d.flow < 2000, 'well under target must ramp up gradually, not jump to max')
+  local near = rt2_turbine.compute_flow_decision({ rpm = 894, target_rpm = 900, current_flow = 1200, band = 40 })
+  assert_eq(near.reason, 'TRIM_UP')
+  assert_true(near.flow - 1200 <= 6, 'close to the target the step stays small, got ' .. tostring(near.flow - 1200))
+
+  local far = rt2_turbine.compute_flow_decision({ rpm = 860, target_rpm = 900, current_flow = 1200, band = 40 })
+  assert_true(far.flow - 1200 > near.flow - 1200, 'further from the target the step must be larger')
+  assert_eq(far.flow - 1200, rt2_turbine.TRIM_STEP, 'at the band edge exactly one full step')
+
+  local beyond = rt2_turbine.compute_flow_decision({ rpm = 100, target_rpm = 900, current_flow = 1200, band = 40 })
+  assert_eq(beyond.flow - 1200, rt2_turbine.TRIM_STEP, 'and never more than one full step, however far off')
 end
 
--- Inside the band the trim is PROPORTIONAL: tiny right at the target,
--- growing toward the band edge. It used to be a flat +/-1 regardless of
--- the error -- 35x weaker than the ramp branches it takes over from -- so
--- a turbine knocked off target by the coil engaging needed hundreds of
--- ticks to recover and sawtoothed across the measurement window instead.
+-- Ruhezone: nah genug am Ziel wird gar nicht mehr gestellt.
 do
-  local near = rt2_turbine.compute_flow_decision({ rpm = 901, target_rpm = 900, current_flow = 1200, band = 40 })
-  assert_true(math.abs(near.flow - 1200) <= 2, 'right at the target the trim stays tiny')
-
-  local far = rt2_turbine.compute_flow_decision({ rpm = 870, target_rpm = 900, current_flow = 1200, band = 40 })
-  assert_true(far.flow - 1200 > near.flow - 1200,
-    'further from the target inside the band, the trim must be larger')
-  assert_true(far.flow < 1200 + rt2_turbine.TRIM_STEP,
-    'but never larger than a full ramp step')
+  local d = rt2_turbine.compute_flow_decision({ rpm = 898, target_rpm = 900, current_flow = 1200 })
+  assert_eq(d.reason, 'SETTLED')
+  assert_eq(d.flow, 1200, 'inside the settle band the commanded flow does not move')
 end
 
--- The trim must join the ramp branches CONTINUOUSLY: one RPM either side of
--- the band edge must not produce a cliff in the commanded flow. The old
--- flat trim had a 34-unit jump there, which is precisely what made the
--- turbine oscillate around the edge.
+-- Stellintervall: die letzte Verstellung muss erst wirken koennen.
 do
-  local inside = rt2_turbine.compute_flow_decision({ rpm = 861, target_rpm = 900, current_flow = 1000, band = 40 })
-  local outside = rt2_turbine.compute_flow_decision({ rpm = 859, target_rpm = 900, current_flow = 1000, band = 40 })
-  assert_eq(outside.reason, 'RAMP_UP')
-  assert_true(math.abs(outside.flow - inside.flow) <= 1,
-    'the flow command must be continuous across the band edge, got '
-      .. tostring(inside.flow) .. ' vs ' .. tostring(outside.flow))
+  local d = rt2_turbine.compute_flow_decision({
+    rpm = 700, target_rpm = 900, current_flow = 1200,
+    now_ms = 10000, last_change_ms = 9800,
+  })
+  assert_eq(d.reason, 'SETTLING', 'within the adjust interval nothing is commanded')
+  assert_eq(d.flow, 1200)
+
+  local due = rt2_turbine.compute_flow_decision({
+    rpm = 700, target_rpm = 900, current_flow = 1200,
+    now_ms = 10000, last_change_ms = 9000,
+  })
+  assert_eq(due.reason, 'TRIM_UP', 'once the interval has passed the regulator acts')
+end
+
+-- Ohne jeden Bezugspunkt (kein Rueckmesswert, kein zuletzt gestellter
+-- Wert) gibt es nichts zu halten -- dann darf gar nicht gestellt werden.
+do
+  local d = rt2_turbine.compute_flow_decision({ rpm = 900, target_rpm = 900, current_flow = nil })
+  assert_eq(d.reason, 'SETTLED')
+  assert_eq(d.unchanged, true, 'an unknown flow must not be written as 0')
+
+  local known = rt2_turbine.compute_flow_decision({
+    rpm = 900, target_rpm = 900, current_flow = nil, last_commanded_flow = 1400,
+  })
+  assert_eq(known.flow, 1400, 'the regulator falls back on its own last command')
+  assert_true(not known.unchanged)
 end
 
 -- ── compute_coil_decision ────────────────────────────────────────────────

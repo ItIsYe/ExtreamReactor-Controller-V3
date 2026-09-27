@@ -15,126 +15,47 @@
 local orchestrator = require("nodes.rt.rt2_orchestrator")
 local adapter = require("nodes.rt.rt2_adapter")
 local rt2_state = require("nodes.rt.rt2_state")
-local rt2_capacity = require("nodes.rt.rt2_capacity")
 local rt2_safety = require("nodes.rt.rt2_safety")
 local rt2_projection = require("nodes.rt.rt2_projection")
-local rt2_tuning = require("nodes.rt.rt2_tuning")
-local rt2_turbine_model = require("nodes.rt.rt2_turbine_model")
-local rt2_turbine = require("nodes.rt.rt2_turbine")
 local rt2_reactor = require("nodes.rt.rt2_reactor")
-local utils = require("core.utils")
 
 local M = {}
 
--- Deliberately a SEPARATE file from CONFIG.CAPACITY_CACHE_PATH (v1's
--- cache): the persisted shape differs (count-keyed, no per-turbine
--- identity signature -- see rt2_capacity.lua's header on why) and the
--- two engines must never read each other's cache.
-M.CACHE_PATH = "/xreactor_config/rt2_capacity_cache.lua"
--- The measured reactor plant profile (see rt2_tuning.lua). Separate file
--- from the capacity cache: it is derived from entirely different readings
--- and stays valid when the turbine count changes, which invalidates the
--- capacity but says nothing about how the steam tank responds.
-M.TUNING_PATH = "/xreactor_config/rt2_reactor_tuning.lua"
--- Die Kennlinien der einzelnen Turbinen (siehe rt2_turbine_model.lua).
--- Wieder eine eigene Datei: sie beschreiben die Turbinen, nicht den
--- Reaktor, und sie ueberleben einen Umbau am Reaktor unveraendert.
-M.TURBINE_MODEL_PATH = "/xreactor_config/rt2_turbine_model.lua"
-
 local engine
 local last_result
-local cache_path
 local last_logged_capacity_diag
-local last_logged_safety_reason
 local last_projection
-local tuning_path
-local turbine_model_path
--- Je Reaktor (Schluessel: Name): Sicherheitszustand, letzte gemeldete
--- Sicherheitslage, ob sein Anlagenprofil schon geschrieben wurde.
+-- Je Reaktor (Schluessel: Name): Sicherheitszustand und letzte gemeldete
+-- Sicherheitslage.
 local reactor_state = {}
-local last_saved_max_output
 
 -- Die Reaktoren dieses Knotens (Peripherienamen). Die Turbinen bleiben
 -- EINE Flotte: sie haengen alle am selben Dampfnetz, und jeder Reaktor
 -- regelt sich unabhaengig aus seinem eigenen Tank.
 local reactor_names = {}
 
-local function read_config(path)
-  return (utils.load_config(path, {}))
-end
-
-local function write_config(path, data)
-  return (utils.write_config(path, data))
-end
-
--- opts.turbine_count: how many turbines discovery just found -- required
--- to validate (or reject) a persisted cache from a genuinely different
--- fleet size. opts.cache_path overrides M.CACHE_PATH (mainly for tests).
 function M.init(opts)
   opts = opts or {}
-  cache_path = opts.cache_path or M.CACHE_PATH
-  tuning_path = opts.tuning_path or M.TUNING_PATH
-  turbine_model_path = opts.turbine_model_path or M.TURBINE_MODEL_PATH
 
   reactor_names = {}
   for _, name in ipairs((opts.config and opts.config.reactors) or {}) do
     reactor_names[#reactor_names + 1] = name
   end
 
-  -- Kapazitaet: EINE fuer den Knoten, wie bisher.
-  local loaded, load_err = rt2_capacity.load({
-    path = cache_path, read_config = read_config, turbine_count = opts.turbine_count,
-  })
-  last_saved_max_output = loaded and loaded.max_output or nil
-  if type(opts.log) == "function" then
-    if loaded then
-      opts.log("INFO", string.format("v2 Kapazitaet aus Cache: max_output=%.0f", loaded.max_output))
-    elseif load_err then
-      opts.log("INFO", "v2 Kapazitaets-Cache nicht genutzt: " .. tostring(load_err))
-    end
-  end
-
-  -- Anlagenprofil: je Reaktor, denn jeder hat seinen eigenen Dampftank.
-  local profiles = rt2_tuning.load_units({ path = tuning_path, read_config = read_config })
-
   reactor_state = {}
   local specs = {}
   for index, name in ipairs(reactor_names) do
     local key = name or ("reactor" .. index)
-    local tuned = profiles[key]
-    reactor_state[key] = { safety = rt2_safety.new_state(), tuning_saved = tuned ~= nil }
-    specs[#specs + 1] = { name = name, tuning_profile = tuned }
-    if tuned and type(opts.log) == "function" then
-      opts.log("INFO", string.format(
-        "v2 Reaktorprofil fuer %s aus Messung geladen: max_step=%d Stellintervall=%dms",
-        key, tuned.max_step, tuned.min_adjust_interval_ms))
-    end
+    reactor_state[key] = { safety = rt2_safety.new_state() }
+    specs[#specs + 1] = { name = name }
   end
 
-  -- Turbinenkennlinien: je Turbine, ueberdauert Neustarts. Ohne sie faengt
-  -- jede Turbine wieder mit dem tastenden Regler an.
-  local turbine_models = rt2_turbine_model.load_units({
-    path = turbine_model_path, read_config = read_config,
-  })
-  local modelled = 0
-  for _ in pairs(turbine_models) do modelled = modelled + 1 end
-  if modelled > 0 and type(opts.log) == "function" then
-    opts.log("INFO", string.format("v2 Turbinenkennlinien geladen: %d Turbine(n)", modelled))
-  end
-
-  last_logged_safety_reason = nil
   last_logged_capacity_diag = nil
   last_projection = nil
   engine = orchestrator.new({
     initial_state = opts.initial_state,
     master_timeout_ms = opts.master_timeout_ms,
-    initial_capacity = loaded,
     reactors = specs,
-    -- Auch fuer Reaktoren, die die Discovery erst NACH init() bindet --
-    -- der Orchestrator baut deren Einheit dann selbst und holt sich das
-    -- gemessene Profil hier ab.
-    tuning_profiles = profiles,
-    turbine_models = turbine_models,
   })
   last_result = nil
   return engine
@@ -160,97 +81,6 @@ end
 --   ctx.config.turbines / ctx.config.reactors -- discovered peripheral names
 --   ctx.adapters.turbine / ctx.adapters.reactor -- adapters/turbine.lua, adapters/reactor.lua
 --   ctx.CONFIG.LOG_PREFIX
--- Selbstpruefung auf einen Widerspruch, der im Betrieb wiederholt
--- gemeldet wurde und den der Code nicht zulaesst.
---
--- Gemeldet: Kopfzeile LEARNING, Drehzahl lesbar, Matrix nicht voll -- und
--- der Durchfluss steht auf der ganzen Flotte auf 0. Die Oberflaeche zeigt
--- unter 100 mit einer Nachkommastelle, "0.0" heisst also wirklich null.
---
--- Im Einlernen setzt rt2_turbine.compute_target_rpm() aber fuer JEDE
--- Turbine 900 RPM: max_active ist dort nicht gesetzt, die einzige
--- Null-Verzweigung (slot_index > active_limit) kann nicht greifen. Ein
--- Ziel von 0 ist im Einlernen damit ausgeschlossen -- und trotzdem war es
--- da. Eine meiner Annahmen ueber den laufenden Knoten stimmt also nicht.
---
--- Statt weiter zu raten, meldet der Knoten den Widerspruch mit seinen
--- EIGENEN Zahlen. Das kostet nichts, solange er nicht eintritt.
-local contradiction_said = nil
-
-local function check_learning_contradiction(ctx, result)
-  local turbines = result.turbines or {}
-  local total = #turbines
-
-  -- Zwei Lagen, die im Betrieb als "der Flow-Regler tut nichts" ankommen:
-  --
-  --   abgestellt  Ziel 0 -- die Turbine SOLL stehen. Im Einlernen darf das
-  --               gar nicht vorkommen (dort bekommt jede Turbine 900), im
-  --               Betrieb ist es die Leistungsaufteilung.
-  --   stumm       Ziel > 0, aber der Regler rechnet Durchfluss 0. DAS ist
-  --               der eigentliche Fehlerfall -- eine Turbine, die laufen
-  --               soll und trotzdem keinen Dampf bekommt.
-  --
-  -- Die RT-Logs halten Turbinen-Stellbefehle nicht fest; im Moment des
-  -- Ausfalls stand deshalb nirgends etwas. Genau diese Luecke schliesst
-  -- das hier, und nur fuer den Fehlerfall.
-  local parked, silent, example_parked, example_silent = 0, 0, nil, nil
-  for _, t in ipairs(turbines) do
-    local target = tonumber(t.target_rpm) or 0
-    local flow = t.flow_decision and tonumber(t.flow_decision.flow) or nil
-    if target <= 0 then
-      parked = parked + 1
-      example_parked = example_parked or t
-    elseif flow ~= nil and flow <= 0 then
-      silent = silent + 1
-      example_silent = example_silent or t
-    end
-  end
-
-  local learning = result.state == rt2_state.states.LEARNING
-  -- Abgestellte Turbinen sind nur IM EINLERNEN ein Widerspruch.
-  local report_parked = learning and parked > 0
-  if not report_parked and silent == 0 then
-    contradiction_said = nil
-    return
-  end
-
-  local cap = result.capacity or {}
-  local key = string.format("%s|%d|%d|%s|%s", tostring(result.state), parked, silent,
-    tostring(result.max_active), tostring(cap.ready))
-  if contradiction_said == key then return end
-  contradiction_said = key
-
-  local function describe(t)
-    if not t then return "-" end
-    return string.format("%s: Ziel=%s Drehzahl=%s Durchfluss=%s Grund=%s",
-      tostring(t.name), tostring(t.target_rpm), tostring(t.rpm),
-      tostring(t.flow_decision and t.flow_decision.flow),
-      tostring(t.flow_decision and t.flow_decision.reason))
-  end
-
-  local head
-  if report_parked and silent > 0 then
-    head = string.format("%d von %d Turbinen abgestellt (im EINLERNEN unmoeglich)"
-      .. " und %d weitere ohne Durchfluss trotz Ziel", parked, total, silent)
-  elseif report_parked then
-    head = string.format("%d von %d Turbinen haben Ziel 0 -- das darf im Einlernen"
-      .. " nicht vorkommen", parked, total)
-  else
-    head = string.format("%d von %d Turbinen sollen laufen, bekommen aber Durchfluss 0",
-      silent, total)
-  end
-
-  local msg = string.format(
-    "v2 TURBINEN-BEFUND: %s. Zustand=%s, max_active=%s, Vorgabe=%s%%,"
-      .. " Kapazitaet bereit=%s, tragbar=%s, Flotte=%s. Abgestellt %s | Ohne Durchfluss %s",
-    head, tostring(result.state), tostring(result.max_active),
-    tostring(result.master_percent), tostring(cap.ready),
-    tostring(cap.sustainable_turbines), tostring(cap.total_turbines),
-    describe(example_parked), describe(example_silent))
-  ctx.log("ERROR", msg)
-  pcall(print, "[RT] " .. msg)
-end
-
 function M.tick(ctx)
   if not engine then return nil end
   local now_ms = os.epoch and os.epoch("utc") or 0
@@ -335,113 +165,24 @@ function M.tick(ctx)
     end
   end
 
-  check_learning_contradiction(ctx, result)
-
-  -- Einlernen sichtbar machen.
+  -- Die gemeldete Leistung sichtbar machen, wenn sie sich aendert.
   local cap = result.capacity
-  local waiting = (cap.max_output or 0) <= 0
-  local diag = string.format("%s|%d|%s|%s", tostring(cap.reason),
-    math.floor((cap.max_output or 0) / 1000), tostring(cap.ready), tostring(waiting))
-  do
+  local diag = string.format("%s|%d|%d", tostring(cap.reason),
+    math.floor((cap.max_output or 0) / 1000), cap.total_turbines or 0)
+  if diag ~= last_logged_capacity_diag then
+    last_logged_capacity_diag = diag
     local msg
-    if cap.reason == "MEASURING" then
-      msg = string.format("v2 Einlernen laeuft: bisher %.0f RF/t gemessen (%d von %d Turbinen am Ziel)",
-        cap.max_output or 0, cap.at_target or 0, cap.total_turbines or 0)
-    elseif cap.reason == "MEASURED" then
-      msg = string.format("v2 Einlernen FERTIG: %.0f RF/t aus %d Turbinen gemessen",
-        cap.max_output or 0, cap.sustainable_turbines or 0)
-      if (cap.sustainable_turbines or 0) < (cap.total_turbines or 0) then
-        msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig am Ziel",
-          (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
-      end
-    elseif cap.reason == "FLOW_SATURATED" then
-      msg = string.format(
-        "v2 Einlernen: %d Turbine(n) fahren VOLLEN Flow (%d) und erreichen trotzdem keine %d RPM"
-        .. " -- im Zielbereich %d von %d, noetig %d.",
-        cap.saturated or 0, rt2_turbine.MAX_FLOW, rt2_capacity.TARGET_RPM,
-        cap.at_target or 0, cap.total_turbines or 0, cap.required_at_target or 0)
-    elseif cap.reason == "BELOW_FRACTION" and waiting then
-      msg = string.format(
-        "v2 Einlernen wartet: %d von %d Turbinen im Zielbereich (%d RPM +/- %d), noetig sind %d",
-        cap.at_target or 0, cap.total_turbines or 0, rt2_capacity.TARGET_RPM,
-        rt2_capacity.TOLERANCE_RPM, cap.required_at_target or 0)
-    elseif cap.reason == "TOPOLOGY_CHANGED" then
-      msg = string.format("v2 Turbinenzahl geaendert (%d) -- Anlage wird neu vermessen", cap.total_turbines or 0)
-    elseif cap.reason == "NO_TURBINES" then
-      msg = waiting and "v2 noch keine Turbine gefunden -- warte auf Discovery"
-        or "v2 keine Turbine lesbar -- gelernter Wert bleibt erhalten"
+    if cap.reason == "NO_TURBINES" then
+      msg = "v2 noch keine Turbine gefunden -- warte auf Discovery"
+    elseif cap.reason == "NO_OUTPUT" then
+      msg = string.format("v2 %d Turbine(n) gefunden, noch kein Ausstoss --"
+        .. " bis dahin laeuft die ganze Flotte", cap.total_turbines or 0)
+    else
+      msg = string.format("v2 Leistung gemeldet: %.0f RF/t aus %d Turbinen (%d am Ziel)",
+        cap.max_output or 0, cap.total_turbines or 0, cap.at_target or 0)
     end
-    -- Den Schluessel nur fortschreiben, wenn auch gemeldet wurde.
-    if msg and diag ~= last_logged_capacity_diag then
-      last_logged_capacity_diag = diag
-      ctx.log("INFO", msg)
-      pcall(print, "[RT] " .. msg)
-    end
-  end
-
-  if cap.ready and cap.max_output ~= last_saved_max_output then
-    if rt2_capacity.save(cap, { path = cache_path, write_config = write_config }) then
-      last_saved_max_output = cap.max_output
-      ctx.log("INFO", string.format("v2 Kapazitaet gesichert: max_output=%.0f", cap.max_output))
-    end
-  end
-
-  -- Anlagenprofile: je Reaktor, einmalig geschrieben.
-  local profiles, tuning_changed = {}, false
-  for index, unit in ipairs(engine.reactors) do
-    local key = unit.name or ("reactor" .. index)
-    if unit.tuning_profile then
-      profiles[key] = unit.tuning_profile
-      local st = reactor_state[key]
-      if st and not st.tuning_saved then
-        st.tuning_saved = true
-        tuning_changed = true
-        local msg = string.format(
-          "v2 Reaktor %s selbst vermessen: %d Messwerte -> max_step=%d, Stellintervall=%dms",
-          key, unit.tuning_profile.samples or 0, unit.tuning_profile.max_step,
-          unit.tuning_profile.min_adjust_interval_ms)
-        ctx.log("INFO", msg)
-        pcall(print, "[RT] " .. msg)
-      end
-    end
-  end
-  if tuning_changed then
-    rt2_tuning.save_units(profiles, { path = tuning_path, write_config = write_config })
-  end
-
-  -- Turbinenkennlinien: je Turbine einmalig, sobald sie entstanden ist.
-  -- result.new_turbine_models enthaelt nur die in DIESEM Takt neuen, also
-  -- wird nur dann geschrieben und nur dann gemeldet.
-  if #(result.new_turbine_models or {}) > 0 then
-    for _, entry in ipairs(result.new_turbine_models) do
-      local msg = string.format(
-        "v2 Turbine %s selbst vermessen: %d Betriebspunkte -> %.2f RPM je mB/t"
-          .. " (%.0f mB/t fuer 900 RPM), Stellintervall=%dms",
-        tostring(entry.name), entry.profile.samples or 0, entry.profile.slope,
-        rt2_turbine_model.flow_for(entry.profile, 900) or -1,
-        entry.profile.min_adjust_interval_ms)
-      ctx.log("INFO", msg)
-      pcall(print, "[RT] " .. msg)
-    end
-    rt2_turbine_model.save_units(result.turbine_models,
-      { path = turbine_model_path, write_config = write_config })
-  end
-
-  -- Eine Kennlinie, die ihre Turbine nachweislich nicht ans Ziel bringt,
-  -- wurde verworfen (rt2_orchestrator's Wirkungspruefung). Das gehoert
-  -- gemeldet UND weggeschrieben -- sonst kaeme sie beim naechsten Start
-  -- aus der Datei zurueck und legte die Turbine erneut still.
-  if #(result.dropped_turbine_models or {}) > 0 then
-    local names = result.dropped_turbine_models
-    local msg = string.format(
-      "v2 Kennlinie verworfen fuer %d Turbine(n) (z.B. %s): sie hielt ihr Ziel"
-        .. " ueber %.0fs nicht, ohne dass der Durchfluss am Anschlag war."
-        .. " Diese Turbinen fahren wieder auf der Rampe und vermessen sich neu.",
-      #names, tostring(names[1]), orchestrator.MODEL_DISTRUST_MS / 1000)
-    ctx.log("WARN", msg)
+    ctx.log("INFO", msg)
     pcall(print, "[RT] " .. msg)
-    rt2_turbine_model.save_units(result.turbine_models,
-      { path = turbine_model_path, write_config = write_config })
   end
 
   -- Jeder Reaktor wird nach seinem eigenen Messwert und seiner eigenen
@@ -476,11 +217,7 @@ function M.status_fields()
     return { mode = M.current_state(), node_state = rt2_projection.node_state(M.current_state()) }
   end
   local turbines = {}
-  local models = last_result.turbine_models or {}
-  local modelled = 0
   for _, t in ipairs(last_result.turbines) do
-    local model = t.name and models[t.name] or nil
-    if model then modelled = modelled + 1 end
     turbines[#turbines + 1] = {
       id = t.name,
       target_rpm = t.target_rpm,
@@ -490,7 +227,6 @@ function M.status_fields()
       -- nicht unterscheiden, ob eine Turbine ruhig steht (SETTLED)
       -- oder nur gerade wartet (SETTLING).
       flow_reason = t.flow_decision and t.flow_decision.reason or nil,
-      model_slope = model and model.slope or nil,
     }
   end
   return {
@@ -500,23 +236,16 @@ function M.status_fields()
     node_state = last_projection and last_projection.node_state
       or rt2_projection.node_state(last_result.state),
     capacity_ready = last_result.capacity.ready,
-    -- Der Zweck des ganzen Einlernens: wieviel RF/t dieser Knoten
-    -- tatsaechlich liefern kann. MASTER teilt seinen Bedarf gegen genau
-    -- diese Zahl auf (rt_sync.node_capacity -> uniform_pct), also muss sie
-    -- gemessen und nicht hochgerechnet sein -- siehe rt2_capacity.
+    -- Wieviel RF/t dieser Knoten nachweislich liefert. MASTER teilt seinen
+    -- Bedarf gegen genau diese Zahl auf (rt_sync.node_capacity ->
+    -- uniform_pct), also ist es der hoechste Ausstoss, der wirklich schon
+    -- geflossen ist -- nichts Hochgerechnetes (siehe rt2_orchestrator).
     capacity_max = last_result.capacity.max_output,
     capacity_total_turbines = last_result.capacity.total_turbines,
-    -- MASTER liest diese beiden Namen (message_handlers.lua) und baut
-    -- daraus seine Lernanzeige. v2 schickte stattdessen capacity_at_target
-    -- und capacity_reason -- also Felder, die MASTER gar nicht kennt. Auf
-    -- dem MASTER-Schirm stand deshalb waehrend des gesamten Einlernens
-    -- "LEARNING 0/25 Turbinen stabil", egal wie weit der Knoten war.
+    -- MASTER liest diese beiden Namen (message_handlers.lua).
     capacity_stable_turbines = last_result.capacity.at_target,
     capacity_source = last_result.capacity.reason,
-    -- Neu: wieviele Turbinen diese Anlage nachweislich traegt. Damit kann
-    -- MASTER den Fortschritt des Suchlaufs zeigen und erkennen, dass ein
-    -- Knoten seine Flotte bewusst nur teilweise fahren kann.
-    capacity_sustainable_turbines = last_result.capacity.sustainable_turbines,
+    capacity_sustainable_turbines = last_result.capacity.total_turbines,
     -- Aliase unter den alten v2-Namen beibehalten: die RT-eigene UI und
     -- der Integrationstest lesen sie.
     capacity_at_target = last_result.capacity.at_target,
@@ -526,12 +255,9 @@ function M.status_fields()
     -- sie las bisher v1's ctx.targets, das unter v2 niemand mehr fuellt,
     -- und zeigte deshalb dauerhaft "SOLL 0.0 / MASTER % 0.0".
     master_percent = last_result.master_percent,
-    power_target = (last_result.capacity.ready and last_result.capacity.max_output or 0)
-      * ((tonumber(last_result.master_percent) or 0) / 100),
+    power_target = (last_result.capacity.max_output or 0)
+      * ((tonumber(last_result.effective_percent or last_result.master_percent) or 0) / 100),
     turbines = turbines,
-    -- Wieviele Turbinen sich schon selbst vermessen haben. Solange das
-    -- unter der Flottengroesse liegt, tasten sich die uebrigen noch heran.
-    turbines_modelled = modelled,
     control_rod_level = last_result.reactor_decision and last_result.reactor_decision.rods or nil,
     -- Je Reaktor, weil ein Knoten mehrere haben kann und sie unabhaengig
     -- regeln -- control_rod_level allein zeigte nur den ersten.

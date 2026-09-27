@@ -147,8 +147,8 @@ function M.compute_rod_level(input)
   -- Proportional: how far past the deadband edge are we, relative to the
   -- proportional band? Right at the edge that is 0 -> MIN_STEP; at or beyond
   -- the band it saturates at MAX_STEP.
-  -- max_step may be overridden by a measured plant profile (see
-  -- rt2_tuning.lua) -- passed in rather than stored, so this stays pure.
+  -- max_step kann vom Aufrufer vorgegeben werden -- uebergeben statt
+  -- gespeichert, damit diese Funktion rein bleibt.
   local max_step = tonumber(input.max_step) or M.MAX_STEP
   local excess = math.abs(error_fill) - M.DEADBAND
   local ratio = M.PROPORTIONAL_BAND > 0 and (excess / M.PROPORTIONAL_BAND) or 1

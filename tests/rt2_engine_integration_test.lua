@@ -189,21 +189,20 @@ local rt2_state = require('nodes.rt.rt2_state')
 local function assert_eq(a, e, m) if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end end
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
 
-rt2_engine.init({ cache_path = '/xreactor_config/rt2_integration_cache.lua', turbine_count = TURBINE_COUNT, log = ctx.log })
+rt2_engine.init({ log = ctx.log })
 
 -- Run the loop the way main.lua's control_tick() does. Every tick must
 -- complete without raising -- a raise here is exactly the "crashes every
 -- control tick, nothing ever regulates" failure mode that service_manager's
 -- pcall would otherwise hide behind a generic retry message.
 local last
-local reached_learning, reached_operational = false, false
+local reached_operational = false
 for tick = 1, 3000 do
   local ok, err = pcall(rt2_engine.tick, ctx)
   if not ok then
     error(string.format('v2 tick %d raised: %s', tick, tostring(err)), 0)
   end
   last = err
-  if last.state == rt2_state.states.LEARNING then reached_learning = true end
   if last.state == rt2_state.states.MASTER or last.state == rt2_state.states.AUTONOM then
     reached_operational = true
   end
@@ -212,14 +211,13 @@ for tick = 1, 3000 do
   if os.getenv('TRACE') and tick % 100 == 0 then
     local t1 = last.turbines[1]
     local p1 = plant.turbines[turbine_names[1]]
-    print(string.format('tick %4d  state=%-9s max_active=%s  T1: ziel=%s rpm=%.0f flow=%s coil=%s  %s',
-      tick, tostring(last.state), tostring(last.max_active),
+    print(string.format('tick %4d  state=%-9s  T1: ziel=%s rpm=%.0f flow=%s coil=%s  %s',
+      tick, tostring(last.state),
       tostring(t1 and t1.target_rpm), p1.rpm or -1, tostring(p1.flow), tostring(p1.coil),
       tostring(last.capacity.reason)))
   end
 end
 
-assert_true(reached_learning, 'the node must pass through LEARNING after discovery')
 assert_true(plant.reactor.active, 'the reactor must have been switched on by the engine')
 
 local active_turbines = 0
@@ -227,16 +225,15 @@ for _, t in pairs(plant.turbines) do if t.active then active_turbines = active_t
 assert_eq(active_turbines, TURBINE_COUNT, 'every discovered turbine must have been switched on by the engine')
 
 assert_true(last.capacity.total_turbines == TURBINE_COUNT,
-  'capacity must see all 25 turbines, not a truncated/empty fleet -- got '
+  'the reported figure must see all 25 turbines, not a truncated/empty fleet -- got '
     .. tostring(last.capacity.total_turbines))
 
 assert_true(reached_operational, string.format(
-  'the node must leave LEARNING within 3000 ticks -- stuck in %s with capacity %s/%s (%s), max_output=%s',
-  tostring(last.state), tostring(last.capacity.at_target), tostring(last.capacity.total_turbines),
-  tostring(last.capacity.reason), tostring(last.capacity.max_output)))
+  'the node must become operational within 3000 ticks -- stuck in %s (%s)',
+  tostring(last.state), tostring(last.capacity.reason)))
 
-assert_true(last.capacity.ready, 'capacity must be learned')
-assert_true((last.capacity.max_output or 0) > 0, 'a learned capacity must carry a positive max_output')
+assert_true(last.capacity.ready, 'a producing fleet must report a usable figure')
+assert_true((last.capacity.max_output or 0) > 0, 'and it must be positive')
 
 -- ── Module-state projection ──────────────────────────────────────────────
 --
@@ -254,14 +251,10 @@ end
 assert_eq(off_modules, 0, 'no module may still sit at its boot state "OFF" once the node is running')
 assert_true(stable_turbines > 0, 'turbines at target must be reported STABLE so MASTER can advance its sequencer')
 
--- Diese Anlage hat genug Dampf fuer ihre ganze Flotte -- dann muss das
--- Einlernen das auch so messen und darf nichts deckeln.
-local sustainable = last.capacity.sustainable_turbines
-assert_eq(sustainable, TURBINE_COUNT,
-  'eine Anlage mit genug Dampf muss alle Turbinen gleichzeitig gemessen haben')
-assert_eq(stable_turbines, TURBINE_COUNT, 'und alle laufen')
-assert_true(last.max_active == nil or last.max_active >= TURBINE_COUNT,
-  'und nichts wird gedeckelt')
+-- Diese Anlage hat genug Dampf fuer ihre ganze Flotte, also muss sie auch
+-- vollstaendig laufen -- nichts deckelt sie mehr ein.
+assert_eq(stable_turbines, TURBINE_COUNT, 'alle Turbinen laufen')
+assert_eq(last.capacity.at_target, TURBINE_COUNT, 'und stehen alle am Ziel')
 assert_true(last.capacity.max_output > 0, 'mit einem positiven, gemessenen Gesamtausstoss')
 assert_eq(modules_registry['reactor:' .. REACTOR_NAME].state, 'STABLE', 'a running reactor must be reported STABLE')
 
@@ -285,65 +278,43 @@ assert_eq(math.floor(fields.power_target + 0.5),
   math.floor(fields.capacity_max * fields.master_percent / 100 + 0.5),
   'der angezeigte Sollwert muss genau der Anteil der gemessenen Kapazitaet sein')
 
--- ── Turbinenkennlinien ueberdauern den Neustart ──────────────────────────
+-- ── Der Regler kennt nur ein Gesetz ─────────────────────────────────────
 --
--- rt2_turbine_model.lua misst je Turbine, wieviel Drehzahl ein mB/t wert
--- ist. Das nuetzt nur, wenn die gemessene Kennlinie beim naechsten Start
--- auch wieder da ist und der Regler sie dann wirklich benutzt -- sonst
--- taestet sich jede Turbine nach jedem Neustart von vorne heran.
-
+-- Vorher lagen hier vier Verfahren nebeneinander -- Rampe, Feintrimmung,
+-- gelernte Kennlinie je Turbine und eine Vorausschau auf die
+-- Rotorbeschleunigung. Welches gerade griff, war von aussen nicht zu sehen,
+-- und die Kennlinien mussten dafuer auch noch in einer eigenen Datei
+-- ueberleben. Eine Turbine weit unter ihrem Ziel wird jetzt einfach
+-- schrittweise hochgefahren, und die einzigen Gruende, die dabei
+-- vorkommen koennen, sind die des einen Regelgesetzes.
 do
-  local rt2_turbine_model = require('nodes.rt.rt2_turbine_model')
-  local utils = require('core.utils')
-  local MODEL_PATH = '/xreactor_config/rt2_integration_turbine_model.lua'
-
-  -- Eine gemessene Kennlinie, wie sie im Betrieb entstanden waere: genau
-  -- die Strecke, die step_physics() oben nachbildet.
-  local profiles = {}
-  for _, name in ipairs(turbine_names) do
-    profiles[name] = {
-      slope = RPM_PER_FLOW, intercept = 0,
-      min_adjust_interval_ms = 800, samples = 12, flow_spread = 300,
-    }
-  end
-  assert_true(rt2_turbine_model.save_units(profiles, {
-    path = MODEL_PATH,
-    write_config = function(path, data) return utils.write_config(path, data) end,
-  }), 'die Kennlinien muessen sich schreiben lassen')
-  assert_true(files[MODEL_PATH] ~= nil, 'und dabei wirklich auf der Platte landen')
-
-  local loaded_msg = nil
-  rt2_engine.init({
-    cache_path = '/xreactor_config/rt2_integration_cache.lua',
-    turbine_model_path = MODEL_PATH,
-    turbine_count = TURBINE_COUNT,
-    log = function(level, msg)
-      ctx.log(level, msg)
-      if tostring(msg):find('Turbinenkennlinien geladen') then loaded_msg = msg end
-    end,
-  })
-  assert_true(loaded_msg ~= nil, 'der Neustart muss die Kennlinien laden und das auch sagen')
-  assert_true(loaded_msg:find(tostring(TURBINE_COUNT)) ~= nil,
-    'und zwar alle: ' .. tostring(loaded_msg))
-
-  -- Und sie muessen auch wirklich regeln: eine Turbine weit unter ihrem
-  -- Ziel bekommt jetzt den Durchfluss, den die Kennlinie dafuer nennt --
-  -- in einem Zug, statt in Schritten von TRIM_STEP.
   for _, t in pairs(plant.turbines) do t.rpm = 300; t.coil = true end
-  local first
+  local allowed = {
+    TRIM_UP = true, TRIM_DOWN = true, SETTLED = true, SETTLING = true,
+    OVERSPEED = true, TARGET_ZERO = true, NO_RPM_READING = true,
+  }
+  local seen_trim_up = false
+  local r
   for _ = 1, 40 do
-    first = rt2_engine.tick(ctx)
+    r = rt2_engine.tick(ctx)
+    step_physics()
     clock_ms = clock_ms + 500
-    local reason = first.turbines[1].flow_decision.reason
-    if reason == 'MODEL_FEEDFORWARD' then break end
+    for _, t in ipairs(r.turbines) do
+      local reason = t.flow_decision.reason
+      assert_true(allowed[reason], 'unbekannter Reglergrund: ' .. tostring(reason))
+      if reason == 'TRIM_UP' then seen_trim_up = true end
+    end
   end
-  assert_eq(first.turbines[1].flow_decision.reason, 'MODEL_FEEDFORWARD',
-    'mit geladener Kennlinie muss der Regler sie auch benutzen')
-  assert_true(math.abs(first.turbines[1].flow_decision.flow - 900 / RPM_PER_FLOW) <= 5,
-    'und genau den Durchfluss stellen, den sie fuer 900 RPM nennt -- war '
-      .. tostring(first.turbines[1].flow_decision.flow))
-  assert_eq(rt2_engine.status_fields().turbines_modelled, TURBINE_COUNT,
-    'die Statusfelder muessen melden, dass die ganze Flotte vermessen ist')
+  assert_true(seen_trim_up, 'eine Turbine weit unter ihrem Ziel muss hochgefahren werden')
+  -- Und sie kommt dort auch an.
+  for _ = 1, 400 do
+    r = rt2_engine.tick(ctx)
+    step_physics()
+    clock_ms = clock_ms + 100
+    if r.capacity.at_target == TURBINE_COUNT then break end
+  end
+  assert_eq(r.capacity.at_target, TURBINE_COUNT,
+    'und das eine Regelgesetz bringt die ganze Flotte zurueck ans Ziel')
 end
 
 -- ── Safety trip ──────────────────────────────────────────────────────────

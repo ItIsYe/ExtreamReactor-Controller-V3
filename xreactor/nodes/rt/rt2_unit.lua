@@ -12,24 +12,26 @@
 -- Turbine an welchem Reaktor haengt.
 --
 -- Diese Datei haelt also alles, wovon es PRO REAKTOR eines gibt:
--- Stellrate und Trendabtastung, das gemessene Anlagenprofil und die
--- Sicherheitslage. Turbinen, Kapazitaet und Betriebszustand gehoeren
--- dagegen dem Knoten und liegen beim Orchestrator.
+-- Stellrate, letzter Messwert und Sicherheitslage. Turbinen und
+-- Betriebszustand gehoeren dagegen dem Knoten und liegen beim
+-- Orchestrator.
+--
+-- Was hier NICHT mehr passiert: ein gemessenes Anlagenprofil ableiten.
+-- rt2_tuning hat aus dem Tankverlauf Stellweite und Stellintervall
+-- gelernt und damit die Reaktorregelung von Lauf zu Lauf veraendert. Die
+-- Regelung arbeitet jetzt mit den festen Werten aus rt2_reactor.lua --
+-- eine Vorgabe, keine Vermutung.
 
 local rt2_reactor = require('nodes.rt.rt2_reactor')
-local rt2_tuning = require('nodes.rt.rt2_tuning')
 local rt2_state = require('nodes.rt.rt2_state')
 
 local M = {}
 
--- opts.name           -- Peripheriename (Schluessel fuer Profil und Diagnose)
--- opts.tuning_profile -- gemessenes Anlagenprofil dieses Reaktors
+-- opts.name -- Peripheriename (Schluessel fuer Diagnose)
 function M.new(opts)
   opts = opts or {}
   local self = {
     name = opts.name,
-    tuning_state = rt2_tuning.new_state(),
-    tuning_profile = opts.tuning_profile,
     last_rod_change_ms = 0,
     last_rod_fill = nil,
     safety_tripped = false,
@@ -44,18 +46,6 @@ function M.new(opts)
     -- was dort gemessen wuerde, beschriebe keine Regelung.
     if self.safety_tripped then return self end
 
-    local fill = input.reactor and input.reactor.fill_ratio or nil
-    if not fill then return self end
-
-    self.tuning_state = rt2_tuning.observe(self.tuning_state, {
-      now_ms = input.now_ms, fill = fill,
-      rods = input.reactor and input.reactor.current_rods or nil,
-    })
-    if not self.tuning_profile then
-      local profile = rt2_tuning.derive(self.tuning_state,
-        { proportional_band = rt2_reactor.PROPORTIONAL_BAND })
-      if profile then self.tuning_profile = profile end
-    end
     return self
   end
 
@@ -71,9 +61,7 @@ function M.new(opts)
     local override = self.safety_tripped or node_state == rt2_state.states.SAFE
     local fill = input.reactor and input.reactor.fill_ratio or nil
 
-    local tuned_interval = self.tuning_profile and self.tuning_profile.min_adjust_interval_ms
-      or rt2_reactor.MIN_ADJUST_INTERVAL_MS
-    local adjust_due = (now_ms or 0) - self.last_rod_change_ms >= tuned_interval
+    local adjust_due = (now_ms or 0) - self.last_rod_change_ms >= rt2_reactor.MIN_ADJUST_INTERVAL_MS
 
     local decision = rt2_reactor.compute_rod_level({
       fill_ratio = fill,
@@ -81,7 +69,6 @@ function M.new(opts)
       current_rods = input.reactor and input.reactor.current_rods or nil,
       safety_override = override,
       previous_fill = adjust_due and self.last_rod_fill or nil,
-      max_step = self.tuning_profile and self.tuning_profile.max_step or nil,
     })
 
     -- Nur die gewoehnliche Tankregelung wird verzoegert; eine Ausloesung

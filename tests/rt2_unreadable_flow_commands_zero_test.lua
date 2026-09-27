@@ -2,8 +2,8 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 -- Aus dem Betrieb, ueber Stunden und mehrere Fehlversuche verfolgt:
 --
---   Drehzahl liest sich sauber, der Reaktor arbeitet, MASTER ist
---   unbeteiligt (Einlernen) -- und der Durchfluss steht auf 0.0.
+--   Drehzahl liest sich sauber, der Reaktor arbeitet -- und der
+--   Durchfluss steht auf 0.0.
 --
 -- Die Kette, die das erzeugt:
 --
@@ -12,7 +12,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 --      ("nil heisst jetzt nil, und der Aufrufer muss damit umgehen").
 --   2. compute_flow_decision() machte daraus sofort wieder eine 0.
 --   3. JEDER Halte-Zweig gibt current_flow zurueck -- entschied also 0:
---      SETTLED, SETTLING, HOLD, RAMP_COASTING, MODEL_COASTING.
+--      SETTLED und SETTLING.
 --   4. Die Oberflaeche zeigt die ENTSCHEIDUNG, nicht den Messwert.
 --      Deshalb stand dort "FLOW 0.0".
 --   5. Die Schmutzpruefung im Orchestrator kann diese 0 nicht
@@ -87,7 +87,7 @@ do
   local ramping = rt2_turbine.compute_flow_decision({
     rpm = 400, target_rpm = 900, current_flow = 300, coil_engaged = false,
   })
-  assert_eq(ramping.reason, 'RAMP_UP')
+  assert_eq(ramping.reason, 'TRIM_UP')
   assert_eq(ramping.flow, 300 + rt2_turbine.TRIM_STEP)
 
   -- Ein echter Rueckmesswert von 0 ist etwas anderes als "unbekannt" und

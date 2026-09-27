@@ -11,7 +11,6 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 local orchestrator = require('nodes.rt.rt2_orchestrator')
 local rt2_state = require('nodes.rt.rt2_state')
-local rt2_capacity = require('nodes.rt.rt2_capacity')
 local rt2_reactor = require('nodes.rt.rt2_reactor')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 
@@ -73,30 +72,26 @@ do
   assert_eq(#r.turbines, 30, 'alle Turbinen werden als eine Flotte entschieden')
   for _, t in ipairs(r.turbines) do
     assert_eq(t.target_rpm, rt2_turbine.FULL_TARGET_RPM,
-      'beim Einlernen bekommt jede Turbine das volle Ziel')
+      'ohne MASTER bekommt jede Turbine das volle Ziel')
     assert_true(t.unit == nil, 'eine Zuordnung zu einem Reaktor gibt es bewusst nicht')
   end
 end
 
--- ── Eingelernt wird EINMAL, fuer den ganzen Knoten ───────────────────────
+-- ── Gemeldet wird EINE Leistung, fuer den ganzen Knoten ──────────────────
 
 do
   local o = new_node()
-  local now, r = 1000, nil
-  for _ = 1, 6 do
-    r = o.tick({
-      now_ms = now, hardware_ready = true,
-      turbines = fleet(30, 900, 100),
-      reactors = reactors(0.5, 0.5),
-    })
-    now = now + rt2_capacity.STABLE_MS
-  end
-  assert_true(r.capacity.ready, 'die Flotte muss sich ausmessen lassen')
-  -- 30 Turbinen x 100 RF/t, abzueglich 5 % Reserve -- unabhaengig davon,
-  -- wie viele Reaktoren den Dampf dafuer liefern.
-  assert_eq(r.capacity.max_output, 3000 * (1 - rt2_capacity.SAFETY_MARGIN))
+  local r = o.tick({
+    now_ms = 1000, hardware_ready = true,
+    turbines = fleet(30, 900, 100),
+    reactors = reactors(0.5, 0.5),
+  })
+  assert_true(r.capacity.ready, 'die Flotte liefert, also gibt es etwas zu melden')
+  -- 30 Turbinen x 100 RF/t -- unabhaengig davon, wie viele Reaktoren den
+  -- Dampf dafuer liefern.
+  assert_eq(r.capacity.max_output, 3000)
   assert_eq(r.capacity.total_turbines, 30)
-  assert_eq(r.state, rt2_state.states.AUTONOM, 'und danach laeuft der Knoten')
+  assert_eq(r.state, rt2_state.states.AUTONOM, 'und der Knoten laeuft')
 end
 
 -- ── Ein Ausloeser faehrt NUR seinen eigenen Reaktor ein ──────────────────
@@ -110,7 +105,7 @@ do
       turbines = fleet(20, 900, 100),
       reactors = reactors(0.5, 0.5, trip_a),
     })
-    now = now + rt2_capacity.STABLE_MS
+    now = now + 1000
     return r
   end
   for _ = 1, 6 do step(false) end
@@ -163,42 +158,34 @@ do
   end
 end
 
--- ── Jeder Reaktor vermisst sich selbst ───────────────────────────────────
+-- ── Jeder Reaktor regelt aus SEINEM eigenen Tank ─────────────────────────
 
 do
-  -- Zwei verschieden traege Anlagen an einem Knoten: die Selbstvermessung
-  -- muss je Reaktor laufen, sonst bekaeme der eine die Stellwerte des
-  -- anderen.
+  -- Zwei Reaktoren am selben Dampfnetz, zwei verschiedene Tankstaende im
+  -- selben Takt. Jeder muss die Entscheidung bekommen, die SEIN Messwert
+  -- verlangt -- sonst bekaeme der eine die Stellwerte des anderen.
+  --
+  -- Selbst vermessen sich die Reaktoren nicht mehr: rt2_tuning hat aus dem
+  -- Tankverlauf Stellweite und Stellintervall gelernt und damit die
+  -- Regelung von Lauf zu Lauf veraendert. Es gelten jetzt die festen Werte
+  -- aus rt2_reactor.lua.
   local o = new_node()
-  local now = 1000
-  local fill_a, fill_b = 0.5, 0.5
-  -- Die Staebe muessen jeweils ein paar Takte STILLSTEHEN -- nur dann
-  -- entsteht ueberhaupt ein Messwert (rt2_tuning misst die Fuellrate bei
-  -- konstanter Stabstellung).
-  for i = 1, 200 do
-    local level = math.floor((i - 1) / 4) % 12
-    local rods_a = 78 + level
-    local rods_b = 78 + level
-    o.tick({
-      now_ms = now, hardware_ready = true,
-      turbines = fleet(20, 900, 100),
-      reactors = {
-        { name = 'R_A', reactor = { fill_ratio = fill_a, current_rods = rods_a, active = true } },
-        { name = 'R_B', reactor = { fill_ratio = fill_b, current_rods = rods_b, active = true } },
-      },
-    })
-    -- A reagiert zehnmal traeger als B.
-    fill_a = math.max(0.05, math.min(0.95, fill_a + (85 - rods_a) * 0.0006))
-    fill_b = math.max(0.05, math.min(0.95, fill_b + (85 - rods_b) * 0.006))
-    now = now + 1000
-  end
-  local a, b = o.reactors[1].tuning_profile, o.reactors[2].tuning_profile
-  assert_true(a ~= nil and b ~= nil, 'beide Reaktoren muessen sich vermessen lassen')
-  assert_true(b.gain > a.gain,
-    'die flinkere Anlage muss die groessere Verstaerkung messen: A=' ..
-    string.format('%.5f', a.gain) .. ' B=' .. string.format('%.5f', b.gain))
-  assert_true(a.min_adjust_interval_ms >= b.min_adjust_interval_ms,
-    'und die traegere ein laengeres Stellintervall bekommen')
+  local r = o.tick({
+    now_ms = 1000, hardware_ready = true,
+    turbines = fleet(20, 900, 100),
+    reactors = {
+      { name = 'R_A', reactor = { fill_ratio = 0.10, current_rods = 90, active = true } },
+      { name = 'R_B', reactor = { fill_ratio = 0.95, current_rods = 90, active = true } },
+    },
+  })
+  assert_eq(r.reactors[1].name, 'R_A')
+  assert_eq(r.reactors[2].name, 'R_B')
+  assert_true(r.reactors[1].rods < 90,
+    'A hat einen leeren Tank -> Staebe ausfahren, mehr Leistung: ' .. tostring(r.reactors[1].rods))
+  assert_true(r.reactors[2].rods > 90,
+    'B hat einen vollen Tank -> Staebe einfahren, weniger Leistung: ' .. tostring(r.reactors[2].rods))
+  assert_true(r.reactors[1].rods ~= r.reactors[2].rods,
+    'eine gemeinsame Entscheidung fuer beide waere genau der Fehler')
 end
 
 print('rt2_two_reactor_test.lua: ok')
