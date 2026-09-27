@@ -23,6 +23,8 @@ local rt2_tuning = require("nodes.rt.rt2_tuning")
 local rt2_turbine_model = require("nodes.rt.rt2_turbine_model")
 local rt2_turbine = require("nodes.rt.rt2_turbine")
 local utils = require("core.utils")
+local rt2_trace = require("nodes.rt.rt2_trace")
+local rt2_trace_writer = require("nodes.rt.rt2_trace_writer")
 
 local M = {}
 
@@ -58,6 +60,12 @@ local last_saved_max_output
 -- EINE Flotte: sie haengen alle am selben Dampfnetz, und jeder Reaktor
 -- regelt sich unabhaengig aus seinem eigenen Tank.
 local reactor_names = {}
+-- Aufzeichnung: siehe nodes/rt/rt2_trace.lua. Standardmaessig AN, aber
+-- eng begrenzt (Sammelzeile je Sekunde, Turbinenzeilen nur bei Aenderung,
+-- Datei rotiert bei 48 KB). Abschalten in /xreactor_config/rt.lua:
+--     trace = { enabled = false },
+local trace_writer = nil
+local tick_counter = 0
 
 local function read_config(path)
   return (utils.load_config(path, {}))
@@ -79,6 +87,28 @@ function M.init(opts)
   reactor_names = {}
   for _, name in ipairs((opts.config and opts.config.reactors) or {}) do
     reactor_names[#reactor_names + 1] = name
+  end
+
+  tick_counter = 0
+  trace_writer = nil
+  local trace_cfg = (opts.config and opts.config.trace) or {}
+  if trace_cfg.enabled ~= false then
+    local writer_opts = {}
+    for k, v in pairs(trace_cfg) do writer_opts[k] = v end
+    writer_opts.enabled = nil
+    writer_opts.node_id = opts.node_id or (opts.config and opts.config.node_id)
+    -- Standardziel ist das Log-Verzeichnis des Knotens (bei dieser Anlage
+    -- auf der Diskette, siehe nodes/rt/config.lua's log_dir) -- dort holt
+    -- der Betreiber die Dateien schon fuer alles andere ab.
+    -- Default ist der Rechnerspeicher, NICHT config.log_dir: das zeigt bei
+    -- dieser Anlage auf die Diskette, und eine CC-Diskette hat 125 KB fuer
+    -- alles zusammen. Siehe rt2_trace_writer.lua's DEFAULTS.
+    writer_opts.dir = trace_cfg.dir or rt2_trace_writer.defaults().dir
+    trace_writer = rt2_trace_writer.new(writer_opts)
+    if type(opts.log) == "function" then
+      opts.log("INFO", "v2 Aufzeichnung aktiv: " .. trace_writer.path())
+    end
+    pcall(print, "[RT] Aufzeichnung: " .. trace_writer.path())
   end
 
   -- Kapazitaet: EINE fuer den Knoten, wie bisher.
@@ -160,6 +190,91 @@ end
 --   ctx.config.turbines / ctx.config.reactors -- discovered peripheral names
 --   ctx.adapters.turbine / ctx.adapters.reactor -- adapters/turbine.lua, adapters/reactor.lua
 --   ctx.CONFIG.LOG_PREFIX
+-- Stellt den Takt fuer die Aufzeichnung zusammen: Messwert, Entscheidung
+-- und Schreib-Ergebnis je Geraet, in EINER Zeile nebeneinander. Genau diese
+-- Zusammenstellung fehlte -- die Logzeilen zeigten jeweils nur ein Drittel
+-- davon, und die drei Drittel liessen sich nicht gegeneinander pruefen.
+--
+-- Fehler hier duerfen die Regelung nicht anfassen: der ganze Block laeuft
+-- in pcall, und ein Fehlschlag kostet genau diese eine Zeile.
+local function write_trace(ctx, now_ms, result, turbine_readings, reactor_inputs,
+    turbine_writes, reactor_writes)
+  if not trace_writer then return end
+  if not trace_writer.due(now_ms) then return end
+  local ok, err = pcall(function()
+    local readings_by_name = {}
+    for _, r in ipairs(turbine_readings or {}) do
+      if r.name then readings_by_name[r.name] = r end
+    end
+    local models = result.turbine_models or {}
+
+    local turbines = {}
+    for _, t in ipairs(result.turbines or {}) do
+      local reading = readings_by_name[t.name] or {}
+      local write = turbine_writes[t.name or ""] or {}
+      local flow = t.flow_decision or {}
+      local coil = t.coil_decision or {}
+      turbines[#turbines + 1] = {
+        name = t.name,
+        rpm = reading.rpm,                 -- leer = nicht lesbar, nicht 0
+        flow_is = reading.current_flow,    -- ebenso
+        target_rpm = t.target_rpm,
+        flow_cmd = flow.flow,
+        reason = flow.reason,
+        unchanged = flow.unchanged == true,
+        coil_is = reading.coil_engaged,
+        coil_cmd = coil.engaged,
+        model = models[t.name] ~= nil,
+        write_ok = write.flow_ok,
+        write_err = write.flow_err,
+        coil_ok = write.coil_ok,
+        coil_err = write.coil_err,
+      }
+    end
+
+    local reactors = {}
+    for index, decision in ipairs(result.reactors or {}) do
+      local name = decision.name or reactor_names[index]
+      local input = reactor_inputs[index] or {}
+      local reading = input.reactor or {}
+      local write = reactor_writes[name or ""] or {}
+      reactors[#reactors + 1] = {
+        name = name,
+        fill = reading.fill_ratio,
+        rods_is = reading.current_rods,
+        rods_cmd = decision.rods,
+        reason = decision.reason,
+        temp = reading.temperature,
+        coolant = reading.coolant_ratio,
+        tripped = input.safety_tripped == true,
+        write_ok = write.ok,
+        write_err = write.err,
+      }
+    end
+
+    local full_sweep = trace_writer.sweep_due(now_ms)
+    local rows = rt2_trace.format_rows({
+      ms = now_ms,
+      tick = tick_counter,
+      state = result.state,
+      master_pct = result.master_percent,
+      max_active = result.max_active,
+      capacity = result.capacity,
+      reactors = reactors,
+      turbines = turbines,
+      dropped = result.dropped_turbine_models,
+    }, {
+      full_sweep = full_sweep,
+      max_turbine_rows = trace_writer.max_turbine_rows,
+    }, trace_writer.memory)
+    if full_sweep then trace_writer.note_sweep(now_ms) end
+    trace_writer.append(rows, now_ms)
+  end)
+  if not ok then
+    ctx.warn_once("trace_failed", "Aufzeichnung fehlgeschlagen: " .. tostring(err))
+  end
+end
+
 -- Selbstpruefung auf einen Widerspruch, der im Betrieb wiederholt
 -- gemeldet wurde und den der Code nicht zulaesst.
 --
@@ -254,6 +369,7 @@ end
 function M.tick(ctx)
   if not engine then return nil end
   local now_ms = os.epoch and os.epoch("utc") or 0
+  tick_counter = tick_counter + 1
 
   -- Discovery laeuft nach init(), deshalb die Reaktorliste hier frisch
   -- nehmen. Die Turbinen bleiben EINE Flotte.
@@ -320,9 +436,17 @@ function M.tick(ctx)
     reactors = reactor_inputs,
   })
 
+  -- Die Rueckgabe von apply_turbine()/apply_reactor() sagt, ob das
+  -- Schreiben ueberhaupt losgegangen ist. Bis v779 wurde sie verworfen --
+  -- damit war von aussen nicht unterscheidbar, ob eine Turbine falsch
+  -- steht, weil der Regler falsch entschied, oder weil der Schreibaufruf
+  -- nie ankam. Jetzt geht sie in die Aufzeichnung.
+  local turbine_writes = {}
   for _, t in ipairs(result.turbines) do
-    adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
+    turbine_writes[t.name or ""] =
+      adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
   end
+  local reactor_writes = {}
   for index, decision in ipairs(result.reactors) do
     -- Der Name aus der Entscheidung selbst, nicht ueber die Position:
     -- die Einheitenliste wird je Takt an die gemeldeten Reaktoren
@@ -331,9 +455,13 @@ function M.tick(ctx)
     -- einem Reaktor die Staebe des anderen zu stellen.
     local name = decision.name or reactor_names[index]
     if name then
-      adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
+      reactor_writes[name] =
+        adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
     end
   end
+
+  write_trace(ctx, now_ms, result, turbine_readings, reactor_inputs,
+    turbine_writes, reactor_writes)
 
   check_learning_contradiction(ctx, result)
 

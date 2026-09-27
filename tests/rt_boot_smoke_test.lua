@@ -420,4 +420,54 @@ for name, sim in pairs(REACTOR_SIM) do
       :format(name, sim.rods))
 end
 
+-- ── 8. Die Aufzeichnung schreibt brauchbare Daten ────────────────────────
+--
+-- Sie ist das Werkzeug, mit dem im Feld nachgesehen wird, wenn der Regler
+-- spinnt. Eine Aufzeichnung, die beim Boot leer bleibt oder die Spalten
+-- verschiebt, ist schlimmer als keine: man glaubt ihr.
+
+do
+  local path
+  for name in pairs(FILES) do
+    if name:find('rt_trace', 1, true) then path = name end
+  end
+  assert(path, 'die Aufzeichnung hat keine Datei angelegt')
+
+  local content = FILES[path]
+  assert(content:find('# xreactor rt trace', 1, true) == 1,
+    'die Datei muss ihre Spaltenkoepfe tragen')
+
+  local kinds, fields = {}, {}
+  for line in content:gmatch('[^\n]+') do
+    if line:sub(1, 1) ~= '#' then
+      local kind = line:match('^(%a),')
+      assert(kind, 'unlesbare Zeile: ' .. line)
+      kinds[kind] = (kinds[kind] or 0) + 1
+      local count = 1
+      for _ in line:gmatch(',') do count = count + 1 end
+      fields[kind] = fields[kind] or count
+      assert(fields[kind] == count,
+        ('Spaltenzahl in %s-Zeilen schwankt (%d vs %d): %s')
+          :format(kind, fields[kind], count, line))
+    end
+  end
+
+  assert((kinds.T or 0) > 0, 'keine Sammelzeile aufgezeichnet')
+  assert((kinds.R or 0) > 0, 'keine Reaktorzeile aufgezeichnet')
+  assert((kinds.U or 0) > 0, 'keine Turbinenzeile aufgezeichnet')
+
+  -- Und sie muss den Zustandswechsel enthalten, um den es geht: aus dem
+  -- Einlernen in den Regelbetrieb.
+  assert(content:find(',LEARNING,', 1, true), 'das Einlernen fehlt in der Aufzeichnung')
+  assert(content:find(',AUTONOM,', 1, true), 'der Regelbetrieb fehlt in der Aufzeichnung')
+
+  -- Der Platzbedarf bleibt gedeckelt.
+  local total = 0
+  for name, text in pairs(FILES) do
+    if name:find('rt_trace', 1, true) then total = total + #text end
+  end
+  assert(total <= 4 * 64 * 1024,
+    'die Aufzeichnung muss ihren Platz deckeln, belegt aber ' .. total)
+end
+
 print('rt_boot_smoke_test.lua: ok')

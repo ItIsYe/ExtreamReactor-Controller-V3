@@ -37,6 +37,34 @@ return {
   reset_log_on_start = true,
   log_dir = "/disk/xreactor_logs",
 
+  -- Aufzeichnung dessen, was der Regler tut (nodes/rt/rt2_trace.lua).
+  -- Sie schreibt eine CSV-Datei NEBEN die Logs, lokal auf dem Knoten:
+  --     <log_dir>/rt_trace_<node_id>.csv
+  --
+  -- Was drin steht: je Takt eine Sammelzeile, je Reaktor eine Zeile, und
+  -- Turbinenzeilen nur dann, wenn sich an einer Turbine etwas GEAENDERT
+  -- hat (Grund, Sollwert, Schreibfehler) -- eine eingeschwungene Flotte
+  -- erzeugt also fast nichts. Alle full_sweep_ms kommt zusaetzlich ein
+  -- vollstaendiger Abdruck aller Turbinen.
+  --
+  -- Die Datei ist auf max_bytes begrenzt und rotiert dann (keep Dateien).
+  -- Der Platzbedarf ist damit nach oben gedeckelt -- wichtig, weil eine
+  -- vollgelaufene Platte auf diesem Knoten schon einmal ein Update
+  -- verhindert hat.
+  -- Sie liegt bewusst im Speicher des RECHNERS (/xreactor_logs), nicht auf
+  -- der Diskette: eine CC-Diskette hat 125 KB fuer alles zusammen. Wer die
+  -- Dateien lieber von der Diskette abholt, setzt dir und senkt max_bytes.
+  trace = {
+    enabled = true,
+    interval_ms = 2000,     -- Sammelzeile: so oft
+    full_sweep_ms = 60000,  -- voller Turbinen-Abdruck: so oft
+    flush_ms = 2000,        -- Datei anfassen: hoechstens so oft
+    max_bytes = 65536,      -- 64 KB, dann rotieren
+    keep = 3,               -- so viele Dateien (also hoechstens 192 KB)
+    max_turbine_rows = 12,  -- aenderungsgetriebene Zeilen je Takt
+    -- dir = "/disk/xreactor_logs",
+  },
+
   wireless_modem = nil,
   wired_modem = nil,
   modem = nil,

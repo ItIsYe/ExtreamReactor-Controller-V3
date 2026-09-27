@@ -174,6 +174,58 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## Regler-Aufzeichnung auf dem Knoten (v779)
+
+Betreiberauftrag: "Der Regler spinnt immer noch rum -- lege ein Logging vom
+Regler und von den Turbinen lokal auf der Node ab, um endgueltig zu sehen,
+was da los ist."
+
+**Datei:** `/xreactor_logs/rt_trace_<node_id>.csv` auf dem **Rechner**, nicht
+auf der Diskette (eine CC-Diskette hat 125 KB fuer alles zusammen). Rotiert
+bei 64 KB, drei Dateien, also hoechstens 192 KB. Abschalten:
+`trace = { enabled = false }` in `/xreactor_config/rt.lua`.
+
+**Was drinsteht — die Kette, die bisher fehlte.** Logzeilen und Schirm
+zeigten je ein Drittel: entweder einen Messwert, oder eine Entscheidung,
+oder ein Ergebnis. Nie alle drei nebeneinander, also nie gegeneinander
+pruefbar. Jetzt pro Zeile: Messwert → Entscheidung → Schreibaufruf →
+Rueckmeldung.
+
+Zwei Felder, die es vorher nirgends gab:
+* **`unchanged`** — der Regler schreibt NICHT, wenn der zurueckgelesene Wert
+  schon der gewuenschte ist. Luegt der Rueckmesswert, steht die Turbine fuer
+  immer falsch, ohne eine einzige Fehlermeldung. Das ist die
+  wahrscheinlichste Erklaerung fuer "Flow 0 auf der ganzen Flotte", und sie
+  war bisher unsichtbar.
+* **die Rueckgabe von `rt2_adapter.apply_turbine()`** (`write_ok`/`write_err`,
+  `coil_ok`/`coil_err`) — sie sagt, ob der Schreibaufruf losging.
+  `rt2_engine` hat sie bis v779 verworfen.
+
+**Leer heisst unbekannt, 0 heisst null.** Genau diese Verwechslung hat einen
+ganzen Tag gekostet. In der Datei sind sie unterscheidbar.
+
+**Datenmenge.** Bei 50 Turbinen und 10 Hz waeren es 500 Zeilen je Sekunde.
+Deshalb: Sammelzeile je 2 s, Reaktorzeilen dazu, Turbinenzeilen **nur bei
+Aenderung** (Grund, Sollwert, Schreibfehler) — eine eingeschwungene Flotte
+schreibt fast nichts, eine zappelnde genau ihre Zappler. Immer geschrieben
+werden ausserdem ein fehlgeschlagenes Schreiben und ein Durchfluss 0 trotz
+vorgegebenem Ziel: gerade das Verharren ist der Befund. Alle 60 s ein
+vollstaendiger Abdruck aller Turbinen als Grundwahrheit — der wird NICHT
+gekappt, ihn zu kuerzen hiesse, ihn nicht zu machen.
+
+**Bauform:** `rt2_trace.lua` ist rein (Zeilen bauen, testbar ohne
+Dateisystem), `rt2_trace_writer.lua` macht die Datei-Arbeit. Jeder
+Dateizugriff laeuft in `pcall` und schlaegt still fehl — eine volle Platte
+kostet eine Zeile, nie einen Regeltakt. Gepuffert wird, damit bei 10 Hz
+nicht zehnmal je Sekunde eine Datei geoeffnet wird.
+
+Tests: `rt2_trace_format_test.lua` (Unbekannt vs. 0, Unterdrueckung von
+Wiederholungen, Befunde trotzdem, Zaehler, Kommas im Fehlertext),
+`rt2_trace_writer_test.lua` (Kopfzeile, Flush-Takt, Rotation deckelt,
+kaputte Platte schlaegt nicht durch), und `rt_boot_smoke_test.lua` prueft im
+echten Lauf, dass die Datei entsteht, die Spaltenzahl je Zeilenart konstant
+bleibt und der Wechsel LEARNING → AUTONOM darin auftaucht.
+
 ## MASTERs Startup-Sequencer: Ursache gefunden (v777/v778)
 
 **Der Timeout.** Im Feld: `Timeout stage=WAITING_ACK elapsed=60.2s`,
