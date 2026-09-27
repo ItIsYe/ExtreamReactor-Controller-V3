@@ -172,4 +172,69 @@ do
   assert_true(w2.sweep_due(5000), 'der Turbinen-Durchgang laeuft unabhaengig weiter')
 end
 
+-- ── 6. Die Freiplatz-Bremse ─────────────────────────────────────────────
+--
+-- Die eigentliche Absicherung. Die Installation belegt allein rund 730 KB,
+-- und installer/auto_update.lua's ensure_temp_space() LOESCHT
+-- /xreactor_logs, wenn ein Update Platz braucht. Eine Aufzeichnung, die
+-- den letzten freien Platz verbraucht, verhindert damit genau das Update,
+-- mit dem man den Fehler beheben wollte. Im Feld gemeldet: 968 Bytes frei.
+
+do
+  local files, _, fs = fake_fs()
+  local free = 1024 * 1024
+  fs.getFreeSpace = function() return free end
+
+  local w = writer_lib.new({
+    fs_impl = fs, dir = '/logs', flush_ms = 0, min_free_bytes = 256 * 1024,
+  })
+
+  w.append({ 'T,1' }, 1)
+  assert_true(files[w.path()] ~= nil, 'bei viel Platz wird geschrieben')
+  local before = #files[w.path()]
+
+  -- Jetzt wird es eng.
+  free = 100 * 1024
+  w.append({ 'T,2,sollte-nicht-erscheinen' }, 2)
+  assert_eq(#files[w.path()], before,
+    'unterhalb der Reserve darf NICHTS mehr geschrieben werden')
+  assert_true(w.paused_for_space, 'und der Halt muss vermerkt sein')
+
+  -- Der Puffer darf dabei nicht anwachsen -- sonst wandert das
+  -- Platzproblem nur in den Hauptspeicher.
+  assert_eq(#w.buffer, 0, 'der Puffer muss verworfen werden, nicht wachsen')
+
+  -- Und sie gibt ihren eigenen Platz her: die Vorgaengerdateien zuerst.
+  assert_eq(files[w.rotated_path(1)], nil, 'alte Trace-Dateien muessen weichen')
+
+  -- Ist wieder Platz da, laeuft sie weiter.
+  free = 1024 * 1024
+  w.append({ 'T,3,wieder-da' }, 3)
+  assert_true(files[w.path()]:find('wieder-da', 1, true) ~= nil,
+    'mit wieder freiem Platz muss sie weiterschreiben')
+  assert_eq(w.paused_for_space, false, 'und den Halt aufheben')
+end
+
+-- ── 7. Ohne getFreeSpace bleibt es beim bisherigen Verhalten ─────────────
+
+do
+  local files, _, fs = fake_fs()
+  fs.getFreeSpace = nil
+  local w = writer_lib.new({ fs_impl = fs, dir = '/logs', flush_ms = 0 })
+  w.append({ 'T,1' }, 1)
+  assert_true(files[w.path()] ~= nil,
+    'ist der freie Platz nicht feststellbar, wird wie bisher geschrieben')
+end
+
+-- ── 8. "unlimited" ist kein Platzmangel ──────────────────────────────────
+
+do
+  local files, _, fs = fake_fs()
+  fs.getFreeSpace = function() return 'unlimited' end
+  local w = writer_lib.new({ fs_impl = fs, dir = '/logs', flush_ms = 0 })
+  w.append({ 'T,1' }, 1)
+  assert_true(files[w.path()] ~= nil,
+    'ein unbegrenztes Laufwerk darf die Aufzeichnung nicht anhalten')
+end
+
 print('rt2_trace_writer_test.lua: ok')

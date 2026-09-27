@@ -228,7 +228,12 @@ if term and term.setCursorPos and not _G.__xreactor_remote_update then
   local feature_names = collect_optional_feature_names(manifest, role.label)
   if #feature_names > 0 then
     p("")
-    p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
+    -- Nicht mehr nur Peripherie: regler_trace ist ein Diagnosewerkzeug.
+    -- Der Zusatz in Klammern bleibt, weil die Mehrzahl der Eintraege
+    -- weiter Hardware braucht -- und weil "nur wenn gebraucht" fuer beide
+    -- gilt. Auf einem Rechner, dem der Platz knapp wird, ist jedes
+    -- nicht installierte Modul echter Gewinn.
+    p("Optionale Erweiterungen (nur installieren wenn gebraucht):")
     for _, fname in ipairs(feature_names) do
       local already = selected_features[fname] == true
       io.write("  " .. fname .. " installieren? [j/N" .. (already and ", bereits aktiv" or "") .. "]: ")

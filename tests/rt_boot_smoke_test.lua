@@ -427,15 +427,27 @@ end
 -- verschiebt, ist schlimmer als keine: man glaubt ihr.
 
 do
-  local path
+  -- ALLE Trace-Dateien zusammen, nicht eine beliebige: seit die Rotation
+  -- frueher greift, liegt der Anfang des Laufs in der Vorgaengerdatei. Wer
+  -- sich hier eine herausgreift, prueft je nach Zufall die falsche.
+  local paths, current = {}, nil
   for name in pairs(FILES) do
-    if name:find('rt_trace', 1, true) then path = name end
+    if name:find('rt_trace', 1, true) then
+      paths[#paths + 1] = name
+      if not name:find('%.%d+$') then current = name end
+    end
   end
-  assert(path, 'die Aufzeichnung hat keine Datei angelegt')
+  assert(#paths > 0, 'die Aufzeichnung hat keine Datei angelegt')
+  assert(current, 'es muss eine aktuelle (unrotierte) Datei geben')
+  table.sort(paths)
 
-  local content = FILES[path]
-  assert(content:find('# xreactor rt trace', 1, true) == 1,
-    'die Datei muss ihre Spaltenkoepfe tragen')
+  local parts = {}
+  for _, name in ipairs(paths) do
+    assert(FILES[name]:find('# xreactor rt trace', 1, true) == 1,
+      'jede Datei muss ihre Spaltenkoepfe tragen: ' .. name)
+    parts[#parts + 1] = FILES[name]
+  end
+  local content = table.concat(parts, '\n')
 
   local kinds, fields = {}, {}
   for line in content:gmatch('[^\n]+') do
@@ -456,10 +468,12 @@ do
   assert((kinds.R or 0) > 0, 'keine Reaktorzeile aufgezeichnet')
   assert((kinds.U or 0) > 0, 'keine Turbinenzeile aufgezeichnet')
 
-  -- Und sie muss den Zustandswechsel enthalten, um den es geht: aus dem
-  -- Einlernen in den Regelbetrieb.
-  assert(content:find(',LEARNING,', 1, true), 'das Einlernen fehlt in der Aufzeichnung')
-  assert(content:find(',AUTONOM,', 1, true), 'der Regelbetrieb fehlt in der Aufzeichnung')
+  -- Der zuletzt gefahrene Zustand MUSS drinstehen. Bewusst nicht auch das
+  -- Einlernen: die Historie ist durch die Rotation begrenzt (auf diesen
+  -- Rechnern absichtlich eng, ~3 Minuten), ein frueher Abschnitt darf also
+  -- herausgefallen sein. Wer hier den Anfang des Laufs verlangt, verlangt
+  -- eine unbegrenzte Datei.
+  assert(content:find(',AUTONOM,', 1, true), 'der zuletzt gefahrene Zustand fehlt')
 
   -- Der Platzbedarf bleibt gedeckelt. Die Zusicherung ist bewusst an die
   -- Rotation gebunden statt an eine feste Zahl: hoechstens keep+1 Dateien,

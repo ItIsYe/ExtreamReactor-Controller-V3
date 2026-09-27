@@ -174,6 +174,59 @@ vereinfachtes Anlagenmodell. Ob v2 v1 ersetzt, ist NICHT beschlossen.
   (`python3 scripts/manifest_sync.py --write`) — CI prüft nur (`--check`),
   aktualisiert aber nichts automatisch.
 
+## Speicher: die RT-Rolle passte nicht mehr (v783)
+
+Feldmeldung des Installers: *"benoetigt werden etwa 727692 Bytes,
+verfuegbar sind 682337 (968 frei + 681369 aus der alten Installation). Es
+fehlen 45355 Bytes."* Die Node konnte nicht mehr installieren.
+
+**Meine Rechnung, offen:** die RT-Rolle wuchs von 770.968 B (v777, lief)
+auf 799.719 B (v782). Davon gehen **29 KB auf die Aufzeichnung**, die ich
+als Pflichtbestandteil ausgeliefert hatte. Ein Diagnosewerkzeug als
+Pflichtgepaeck auf einem Rechner, dem der Platz ausgeht, ist genau das
+Falsche.
+
+**Behoben:** `rt2_trace.lua` und `rt2_trace_writer.lua` sind jetzt eine
+OPTIONALE Erweiterung (`optional=true, feature="regler_trace"`). Der
+Installer fragt danach wie bei `ampel`/`speaker_alarm` -- der Mechanismus
+war schon da, die Module mussten nur richtig deklariert werden.
+`rt2_engine.lua` laedt sie per `pcall(require, ...)` erst in `init()` und
+laeuft ohne sie normal weiter.
+
+Mit der echten Installer-Logik nachgerechnet (`files_for_role`):
+
+| | Dateien | Bytes | passt in 682.337? |
+|---|---|---|---|
+| RT ohne Zusatz | 62 | **671.758** | ja, 10.579 uebrig |
+| RT mit `regler_trace` | 64 | 691.550 | nein, 9.213 fehlen |
+
+Die Node laeuft also wieder -- **die Aufzeichnung passt aber nicht mit
+drauf.** Wer sie braucht, muss `computer_space_limit` in
+`serverconfig/computercraft-server.toml` anheben (der Installer sagt das
+selbst). Rund 10 KB mehr genuegen.
+
+**Und eine strukturelle Absicherung, unabhaengig von Zahlen:** der Writer
+hat jetzt eine harte Freiplatz-Bremse (`min_free_bytes`, 256 KB). Faellt
+der freie Platz darunter, schreibt die Aufzeichnung NICHTS mehr, loescht
+ihre eigenen Vorgaengerdateien und sagt es auf dem Schirm; ist wieder Platz
+da, laeuft sie weiter. Der Puffer wird dabei verworfen statt zu wachsen --
+sonst wandert das Platzproblem nur in den Hauptspeicher. Das ist wichtig,
+weil `installer/auto_update.lua`s `ensure_temp_space()` `/xreactor_logs`
+komplett LOESCHT, wenn ein Update Platz braucht: eine Aufzeichnung, die den
+letzten freien Platz verbraucht, verhindert genau das Update, mit dem man
+den Fehler beheben wollte.
+
+Dazu kleiner getaktet und kleiner gedeckelt: voller Durchgang alle 15 s
+statt 5 s (Aenderungen schreiben weiter sofort), 32 KB je Datei, eine
+Vorgaengerdatei -- rund 66 KB und etwa drei Minuten Historie.
+
+Ein Fehler dabei, vom Test gefangen: der erste Entwurf hatte im
+Fehlerzweig ein `return` -- das haette `init()` abgebrochen, noch vor
+Kapazitaets-Cache, Anlagenprofil und dem Zustand je Reaktor. Der Knoten
+waere ohne Regelung gestartet. `rt2_trace_optional_test.lua` faehrt jetzt
+einen kompletten `init()` + `tick()` OHNE die Module und prueft, dass
+beide Turbinen und der Reaktor Entscheidungen bekommen.
+
 ## Aufzeichnung v3: alle Reglerwerte (v782)
 
 Betreibervorgabe: alle Reglerwerte der Turbinen, dazu die Vorgabe von

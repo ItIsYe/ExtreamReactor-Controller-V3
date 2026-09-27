@@ -62,11 +62,16 @@ return {
     -- Takt, lueckenlos bei Aenderungen. Groesser stellen verlaengert die
     -- Historie, kleiner stellen kostet sie (50 Turbinen = ~5,5 KB je
     -- Durchgang).
-    full_sweep_ms = 5000,
+    full_sweep_ms = 15000,
     methods_ms = 60000,     -- Methodenzeilen (aendern sich nicht): so oft
     flush_ms = 2000,        -- Datei anfassen: hoechstens so oft
-    max_bytes = 131072,     -- 128 KB, dann rotieren
-    keep = 1,               -- eine Vorgaenger-Datei (also max ~260 KB)
+    -- Klein gehalten, weil der Platz auf diesen Rechnern knapp ist: die
+    -- Installation belegt allein rund 730 KB. Zusammen ~66 KB, das sind
+    -- etwa drei Minuten Historie. Wer mehr braucht UND Platz hat, stellt
+    -- max_bytes hoch -- min_free_bytes bremst ohnehin, bevor es eng wird.
+    max_bytes = 32768,      -- 32 KB, dann rotieren
+    keep = 1,               -- eine Vorgaenger-Datei (also max ~66 KB)
+    min_free_bytes = 262144, -- darunter wird gar nicht mehr geschrieben
     max_turbine_rows = 12,  -- Aenderungszeilen je Takt (Sturmbremse)
     -- dir = "/disk/xreactor_logs",
   },

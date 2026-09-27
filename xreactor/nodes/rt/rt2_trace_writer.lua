@@ -28,17 +28,35 @@ local DEFAULTS = {
   -- Durchgaengen schreibt jede VERAENDERTE Turbine sofort ihre Zeile --
   -- vollstaendig im festen Takt, lueckenlos bei Aenderungen.
   --
-  -- 50 Turbinen sind je Durchgang rund 5,5 KB. Bei 5 s sind das ~1,1 KB/s;
-  -- schneller getaktet passt die Historie nicht mehr auf eine
-  -- CC-Rechnerplatte (~1 MB fuer alles).
-  full_sweep_ms = 5000,
+  -- 50 Turbinen sind je Durchgang rund 5,5 KB. Bei 15 s sind das ~0,4 KB/s
+  -- -- mit max_bytes/keep unten ergibt das rund drei Minuten Historie.
+  --
+  -- Der Takt ist bewusst traege: auf einem Rechner, dem der Platz ausgeht
+  -- (diese Anlage meldete 968 Bytes frei), ist die LAENGE der Historie
+  -- mehr wert als die Aufloesung des Rundum-Abdrucks. Aufloesung geht
+  -- dadurch kaum verloren -- jede VERAENDERTE Turbine schreibt weiterhin
+  -- sofort, und genau die Aenderungen sind der Befund.
+  full_sweep_ms = 15000,
   -- Die Methodenzeilen (welche Peripherie-Methode gelesen/geschrieben wird)
   -- aendern sich im Betrieb nicht -- sie brauchen keinen 5s-Takt.
   methods_ms = 60000,
   flush_ms = 2000,          -- Datei anfassen: hoechstens so oft
-  max_bytes = 128 * 1024,   -- dann rotieren
-  keep = 1,                 -- eine Vorgaenger-Datei (also max ~260 KB)
+  max_bytes = 32 * 1024,    -- dann rotieren
+  keep = 1,                 -- eine Vorgaenger-Datei (also max ~66 KB)
   max_turbine_rows = 12,    -- Aenderungszeilen je Takt (Sturmbremse)
+  -- HARTE Freiplatz-Bremse. Unterhalb davon wird NICHTS mehr geschrieben.
+  --
+  -- Das ist die eigentliche Absicherung, nicht max_bytes: die Installation
+  -- belegt allein rund 1,9 MB, und installer/auto_update.lua's
+  -- ensure_temp_space() LOESCHT /xreactor_logs komplett, wenn ein Update
+  -- Platz braucht. Eine Aufzeichnung, die den letzten freien Platz
+  -- verbraucht, verhindert damit genau das Update, mit dem man den Fehler
+  -- beheben wollte -- und wird beim Aufraeumen selbst mit weggeworfen.
+  --
+  -- Der Reservewert liegt deutlich ueber dem, was ein Installer-Download
+  -- braucht (#body + 1024), damit die Aufzeichnung nie die Ursache eines
+  -- fehlgeschlagenen Updates sein kann.
+  min_free_bytes = 256 * 1024,
 }
 
 function M.defaults()
@@ -61,6 +79,7 @@ function M.new(opts)
     keep = math.max(1, tonumber(opts.keep) or DEFAULTS.keep),
     max_turbine_rows = tonumber(opts.max_turbine_rows) or DEFAULTS.max_turbine_rows,
     methods_ms = tonumber(opts.methods_ms) or DEFAULTS.methods_ms,
+    min_free_bytes = tonumber(opts.min_free_bytes) or DEFAULTS.min_free_bytes,
     node_id = opts.node_id,
     fs = opts.fs_impl or _G.fs,
     buffer = {},
@@ -72,6 +91,8 @@ function M.new(opts)
     last_flush_ms = nil,
     memory = { signatures = {} },
     dropped_writes = 0,
+    paused_for_space = false,
+    space_notices = 0,
   }
 
   function self.path()
@@ -154,9 +175,70 @@ function M.new(opts)
     self.file_bytes = 0
   end
 
+  -- Freier Platz auf dem Datentraeger, oder nil wenn nicht feststellbar.
+  local function free_bytes()
+    local fs = self.fs
+    if not fs or type(fs.getFreeSpace) ~= "function" then return nil end
+    local ok, free = pcall(fs.getFreeSpace, self.dir)
+    if not ok then
+      ok, free = pcall(fs.getFreeSpace, "/")
+    end
+    if not ok then return nil end
+    -- CC:Tweaked liefert fuer unbegrenzte Laufwerke "unlimited".
+    if type(free) == "string" then
+      if free:lower() == "unlimited" then return math.huge end
+      free = tonumber(free)
+    end
+    if type(free) ~= "number" then return nil end
+    return free
+  end
+
+  -- Darf ueberhaupt noch geschrieben werden? Sobald es knapp wird, gibt die
+  -- Aufzeichnung den Platz frei und haelt an -- sie ist Diagnose, nicht
+  -- Betrieb. Sie meldet sich wieder, wenn Platz da ist.
+  function self.space_ok()
+    local free = free_bytes()
+    if free == nil then return true end   -- nicht feststellbar: wie bisher
+    if free >= self.min_free_bytes then
+      if self.paused_for_space then
+        self.paused_for_space = false
+        pcall(print, "[RT] Aufzeichnung laeuft wieder (Platz frei)")
+      end
+      return true
+    end
+    if not self.paused_for_space then
+      self.paused_for_space = true
+      self.space_notices = self.space_notices + 1
+      -- Auf den Schirm, nicht in den Log-Collector: wer hier nachsieht,
+      -- steht vor dem Rechner.
+      pcall(print, string.format(
+        "[RT] Aufzeichnung ANGEHALTEN -- nur noch %d KB frei (Reserve %d KB)",
+        math.floor(free / 1024), math.floor(self.min_free_bytes / 1024)))
+      -- Den eigenen Platz sofort hergeben: die Vorgaengerdateien zuerst.
+      local fs = self.fs
+      if fs and type(fs.delete) == "function" then
+        for index = 1, self.keep do
+          pcall(function()
+            if type(fs.exists) == "function" and fs.exists(self.rotated_path(index)) then
+              fs.delete(self.rotated_path(index))
+            end
+          end)
+        end
+      end
+    end
+    return false
+  end
+
   -- Puffer auf die Platte. Rueckgabe: true wenn geschrieben wurde.
   function self.flush(now_ms)
     if #self.buffer == 0 then return false end
+    if not self.space_ok() then
+      -- Puffer verwerfen, nicht anwachsen lassen: ein wachsender Puffer
+      -- verschiebt das Platzproblem nur in den Hauptspeicher.
+      self.buffer, self.buffered_bytes = {}, 0
+      self.last_flush_ms = now_ms
+      return false
+    end
     local fs = self.fs
     if not fs or type(fs.open) ~= "function" then
       self.buffer, self.buffered_bytes = {}, 0

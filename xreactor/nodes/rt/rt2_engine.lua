@@ -23,8 +23,12 @@ local rt2_tuning = require("nodes.rt.rt2_tuning")
 local rt2_turbine_model = require("nodes.rt.rt2_turbine_model")
 local rt2_turbine = require("nodes.rt.rt2_turbine")
 local utils = require("core.utils")
-local rt2_trace = require("nodes.rt.rt2_trace")
-local rt2_trace_writer = require("nodes.rt.rt2_trace_writer")
+-- Die Aufzeichnung ist eine OPTIONALE Erweiterung (Manifest-Feature
+-- "regler_trace") und darf auf einem Knoten fehlen, dem der Platz knapp
+-- ist. Deshalb kein require() hier oben: das wuerde den ganzen Regler
+-- mitreissen, wenn die Dateien nicht installiert sind. Geladen wird erst
+-- in init(), und nur wenn die Aufzeichnung ueberhaupt gewollt ist.
+local rt2_trace, rt2_trace_writer
 
 local M = {}
 
@@ -93,22 +97,41 @@ function M.init(opts)
   trace_writer = nil
   local trace_cfg = (opts.config and opts.config.trace) or {}
   if trace_cfg.enabled ~= false then
-    local writer_opts = {}
-    for k, v in pairs(trace_cfg) do writer_opts[k] = v end
-    writer_opts.enabled = nil
-    writer_opts.node_id = opts.node_id or (opts.config and opts.config.node_id)
-    -- Standardziel ist das Log-Verzeichnis des Knotens (bei dieser Anlage
-    -- auf der Diskette, siehe nodes/rt/config.lua's log_dir) -- dort holt
-    -- der Betreiber die Dateien schon fuer alles andere ab.
-    -- Default ist der Rechnerspeicher, NICHT config.log_dir: das zeigt bei
-    -- dieser Anlage auf die Diskette, und eine CC-Diskette hat 125 KB fuer
-    -- alles zusammen. Siehe rt2_trace_writer.lua's DEFAULTS.
-    writer_opts.dir = trace_cfg.dir or rt2_trace_writer.defaults().dir
-    trace_writer = rt2_trace_writer.new(writer_opts)
-    if type(opts.log) == "function" then
-      opts.log("INFO", "v2 Aufzeichnung aktiv: " .. trace_writer.path())
+    -- Fehlen die Module, laeuft der Knoten ohne Aufzeichnung weiter. Das
+    -- ist der Normalfall auf einem Rechner, auf dem das Feature nicht
+    -- mitinstalliert wurde -- kein Fehler, aber es gehoert gesagt.
+    local ok_trace, mod = pcall(require, "nodes.rt.rt2_trace")
+    local ok_writer, writer_mod = pcall(require, "nodes.rt.rt2_trace_writer")
+    if ok_trace and ok_writer and type(mod) == "table" and type(writer_mod) == "table" then
+      rt2_trace, rt2_trace_writer = mod, writer_mod
+      local writer_opts = {}
+      for k, v in pairs(trace_cfg) do writer_opts[k] = v end
+      writer_opts.enabled = nil
+      writer_opts.node_id = opts.node_id or (opts.config and opts.config.node_id)
+      -- Default ist der Rechnerspeicher, NICHT config.log_dir: das zeigt
+      -- bei dieser Anlage auf die Diskette, und eine CC-Diskette hat
+      -- 125 KB fuer alles zusammen. Siehe rt2_trace_writer.lua's DEFAULTS.
+      writer_opts.dir = trace_cfg.dir or rt2_trace_writer.defaults().dir
+      trace_writer = rt2_trace_writer.new(writer_opts)
+      if type(opts.log) == "function" then
+        opts.log("INFO", "v2 Aufzeichnung aktiv: " .. trace_writer.path())
+      end
+      pcall(print, "[RT] Aufzeichnung: " .. trace_writer.path())
+    else
+      -- Fehlen die Module, laeuft der Knoten ohne Aufzeichnung weiter.
+      -- Das ist der Normalfall auf einem Rechner, auf dem das Feature
+      -- nicht mitinstalliert wurde -- kein Fehler, aber es gehoert gesagt.
+      --
+      -- Bewusst KEIN return: init() ist hier erst am Anfang, danach kommen
+      -- Kapazitaets-Cache, Anlagenprofil und der Zustand je Reaktor. Ein
+      -- return an dieser Stelle haette den Knoten ohne Regelung gestartet.
+      rt2_trace, rt2_trace_writer = nil, nil
+      if type(opts.log) == "function" then
+        opts.log("INFO", "v2 Aufzeichnung nicht installiert (Feature regler_trace)"
+          .. " -- der Regler laeuft normal weiter")
+      end
+      pcall(print, "[RT] Aufzeichnung nicht installiert (Feature regler_trace)")
     end
-    pcall(print, "[RT] Aufzeichnung: " .. trace_writer.path())
   end
 
   -- Kapazitaet: EINE fuer den Knoten, wie bisher.
