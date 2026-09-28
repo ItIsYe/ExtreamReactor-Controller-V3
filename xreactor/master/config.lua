@@ -40,7 +40,14 @@ local CONFIG = {
   DEFAULT_COMMS_DEDUPE_LIMIT = 200,
   DEFAULT_COMMS_PEER_TIMEOUT = 30.0,
   DEFAULT_NODE_OFFLINE_PURGE_AFTER_S = 120,    -- Sekunden bis ein offline Node aus dem managed-Set entfernt wird.
-  DEFAULT_SEQUENCER_SCRAM_TEMPERATURE = 950,   -- °C ab der Sequencer-Timeout als EMERGENCY gilt
+  -- °C, ab der ein Sequencer-Timeout als EMERGENCY statt LIMITED gilt.
+  --
+  -- Muss zur Ausloeseschwelle der RT-Node passen (nodes/rt/config.lua:
+  -- safety.max_temperature = 2000). Hier standen 950 -- und das liegt
+  -- UNTER der normalen Betriebstemperatur eines Extreme-Reactors-Reaktors
+  -- unter Last. Jeder Timeout wurde damit zur Uebertemperatur erklaert,
+  -- bei einem voellig gesunden Reaktor.
+  DEFAULT_SEQUENCER_SCRAM_TEMPERATURE = 2000,
   DEFAULT_COMMS_PEER_DOWN_GRACE = 5.0,
   DEFAULT_COMMS_PEER_DOWN_MIN_OBSERVATIONS = 2,
   DEFAULT_COMMS_PEER_UP_DEBOUNCE = 1.5,
@@ -133,6 +140,13 @@ return {
   matrix_warn_full_pct = CONFIG.DEFAULT_MATRIX_WARN_FULL_PCT,
   rpm_warn_low = CONFIG.DEFAULT_RPM_WARN_LOW,
   rpm_crit_high = CONFIG.DEFAULT_RPM_CRIT_HIGH,
+  -- Diese Zeile fehlte: startup_sequencer.lua liest config.scram_temperature,
+  -- die Konstante hiess aber nur DEFAULT_SEQUENCER_SCRAM_TEMPERATURE und
+  -- wurde nirgends auf diesen Schluessel gelegt. Der Sequencer fiel deshalb
+  -- IMMER auf seinen eingebauten Ersatzwert zurueck -- die Konstante war
+  -- toter Code, und ihr Kommentar ("aus config statt hardcodiert")
+  -- beschrieb etwas, das nie angekommen ist.
+  scram_temperature = CONFIG.DEFAULT_SEQUENCER_SCRAM_TEMPERATURE,
   rod_stuck_secs = CONFIG.DEFAULT_ROD_STUCK_SECS,
   steam_deficit_pct = CONFIG.DEFAULT_STEAM_DEFICIT_PCT,
   channels = { control = CONFIG.DEFAULT_COMMS_CHANNEL, status = CONFIG.DEFAULT_STATUS_CHANNEL },

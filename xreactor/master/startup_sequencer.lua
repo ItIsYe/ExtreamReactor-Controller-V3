@@ -102,8 +102,17 @@ local function should_emergency(node, config)
     return true
   end
   local snapshot = node.snapshot or {}
-  -- Fix 4: Temperatur-Schwelle aus config statt hardcodiert 950°C
-  local scram_temp = (config and config.scram_temperature) or 950
+  -- Die Schwelle, ab der ein Timeout als EMERGENCY statt LIMITED gilt.
+  --
+  -- Sie muss mindestens dort liegen, wo die RT-Node SELBST ausloest
+  -- (nodes/rt/config.lua: safety.max_temperature = 2000). Sonst erklaert
+  -- MASTER einen Reaktor fuer kritisch, den die Node voellig zu Recht
+  -- normal weiterfaehrt. Genau das war der Fall: hier standen 950, und ein
+  -- Extreme-Reactors-Reaktor laeuft unter Last darueber. Jeder
+  -- Sequencer-Timeout wurde damit zur Uebertemperatur -- und handle_timeout()
+  -- verwirft daraufhin die ganze Warteschlange, schickt MODE=EMERGENCY und
+  -- meldet einen CRITICAL-Alarm.
+  local scram_temp = tonumber(config and config.scram_temperature) or 2000
   if safety.should_scram({ temperature = snapshot.max_temp, max_temperature = scram_temp }) then
     return true
   end
