@@ -144,8 +144,11 @@ function layout.status_badges(opts)
   end
   if opts.capacity_ready ~= nil then
     badges[#badges + 1] = {
-      label = opts.capacity_ready and "CAP" or "LEARN",
-      short = opts.capacity_ready and "CAP" or "LRN",
+      -- "LEARN" hiess einmal "die Lernphase laeuft". Die gibt es nicht
+      -- mehr (seit v769); ohne capacity_ready hat der Knoten schlicht
+      -- nichts geliefert, was er melden koennte.
+      label = opts.capacity_ready and "CAP" or "0 RF/t",
+      short = opts.capacity_ready and "CAP" or "0RF",
       status = opts.capacity_status or (opts.capacity_ready and "OK" or "LIMITED"),
       priority = 3,
     }

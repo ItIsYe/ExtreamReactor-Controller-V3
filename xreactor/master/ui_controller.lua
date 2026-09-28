@@ -257,28 +257,16 @@ function M.new(opts)
         rt_node.capacity_total_turbines = rt_data.capacity_total_turbines or 0
         rt_node.capacity_source         = rt_data.capacity_source or "UNKNOWN"
         rt_node.capacity_sustainable_turbines = rt_data.capacity_sustainable_turbines
-        -- Learning-Meldung für die UI aufbauen
+        -- Kein Knoten LERNT mehr etwas ein: die Lernphase ist seit v769
+        -- entfernt. capacity_ready=false heisst jetzt genau eines -- diese
+        -- Flotte hat bisher keinen Ausstoss geliefert, den der Knoten
+        -- melden koennte. Das endet nicht von allein, es ist ein Befund.
         if not rt_node.capacity_ready then
-          -- Ein v2-Knoten sucht die tragbare Turbinenzahl stufenweise, statt
-          -- auf eine Mindestzahl gleichzeitig stabiler Turbinen zu warten.
-          -- Dafür ist "x/y stabil (z Samples)" die falsche Beschreibung --
-          -- der Fortschritt steckt in der erreichten Stufe. v1-Knoten
-          -- schicken capacity_sustainable_turbines nicht und behalten die
-          -- alte Meldung.
-          if rt_node.capacity_sustainable_turbines then
-            rt_node.learning_note = string.format(
-              "EINLERNEN: %d/%d Turbinen tragen",
-              rt_node.capacity_sustainable_turbines,
-              rt_node.capacity_total_turbines
-            )
-          else
-            rt_node.learning_note = string.format(
-              "LEARNING %d/%d Turbinen stabil (%d Samples)",
-              rt_node.capacity_stable_turbines,
-              rt_node.capacity_total_turbines,
-              rt_node.capacity_stable_samples
-            )
-          end
+          rt_node.learning_note = string.format(
+            "KEIN AUSSTOSS: %d/%d Turbinen am Ziel",
+            rt_node.capacity_stable_turbines or 0,
+            rt_node.capacity_total_turbines or 0
+          )
           rt.rt_learning = (rt.rt_learning or 0) + 1
         elseif rt_node.capacity_sustainable_turbines
             and rt_node.capacity_total_turbines > 0
@@ -374,10 +362,9 @@ function M.new(opts)
     overview.nodes_stale = overview.nodes_stale or 0
     energy.matrix_count = #energy.matrices
     overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d energy-matrix=%d src=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0, energy.matrix_count or 0, energy.matrix_sources or 0)
-    -- Learning-Meldung in rt_summary einbauen
     local learning_count = rt.rt_learning or 0
     local learning_hint = learning_count > 0
-      and string.format(" | LEARNING: %d Node(s) lernen noch ein", learning_count)
+      and string.format(" | OHNE AUSSTOSS: %d Node(s)", learning_count)
       or ""
     overview.rt_summary = string.format(
       "RT active=%d startup=%d shutdown=%d stale=%d assigned=%d unassigned=%d unavailable=%d master=%d local=%d%s",
