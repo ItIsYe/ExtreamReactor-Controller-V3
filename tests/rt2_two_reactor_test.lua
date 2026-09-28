@@ -81,15 +81,20 @@ end
 
 do
   local o = new_node()
-  local r = o.tick({
-    now_ms = 1000, hardware_ready = true,
-    turbines = fleet(30, 900, 100),
-    reactors = reactors(0.5, 0.5),
-  })
-  assert_true(r.capacity.ready, 'die Flotte liefert, also gibt es etwas zu melden')
-  -- 30 Turbinen x 100 RF/t -- unabhaengig davon, wie viele Reaktoren den
-  -- Dampf dafuer liefern.
-  assert_eq(r.capacity.max_output, 3000)
+  local r, now = nil, 1000
+  for _ = 1, 20 do
+    r = o.tick({
+      now_ms = now, hardware_ready = true,
+      turbines = fleet(30, 900, 100),
+      reactors = reactors(0.5, 0.5),
+    })
+    if r.capacity.ready then break end
+    now = now + 2000
+  end
+  assert_true(r.capacity.ready, 'die Anlage muss sich ausmessen lassen -- Grund: ' .. tostring(r.capacity.reason))
+  -- 30 Turbinen x 100 RF/t, abzueglich der Sicherheitsreserve -- unabhaengig
+  -- davon, wie viele Reaktoren den Dampf dafuer liefern.
+  assert_eq(r.capacity.max_output, math.floor(3000 * 0.95))
   assert_eq(r.capacity.total_turbines, 30)
   assert_eq(r.state, rt2_state.states.AUTONOM, 'und der Knoten laeuft')
 end

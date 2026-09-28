@@ -168,36 +168,57 @@ function M.tick(ctx)
 
   -- Die gemeldete Leistung sichtbar machen, wenn sie sich aendert.
   local cap = result.capacity
-  local diag = string.format("%s|%d|%d|%d", tostring(cap.reason),
-    math.floor((cap.max_output or 0) / 1000), cap.total_turbines or 0, cap.at_target or 0)
+  local diag = string.format("%s|%d|%d|%d|%d", tostring(cap.reason),
+    math.floor((cap.max_output or 0) / 1000), cap.total_turbines or 0,
+    cap.at_target or 0, cap.saturated or 0)
   if diag ~= last_logged_capacity_diag then
     last_logged_capacity_diag = diag
     local msg
     if cap.reason == "NO_TURBINES" then
       msg = "v2 noch keine Turbine gefunden -- warte auf Discovery"
+    elseif cap.reason == "TOPOLOGY_CHANGED" then
+      msg = string.format("v2 Turbinenzahl geaendert (%d) -- die Anlage wird neu vermessen",
+        cap.total_turbines or 0)
+    elseif cap.reason == "TOPOLOGY_PENDING" then
+      msg = "v2 Turbinenzahl schwankt -- der gelernte Wert bleibt vorerst stehen"
     elseif cap.reason == orchestrator.LEARNING then
-      msg = string.format(
-        "v2 EINLERNEN: %d von %d Turbinen im Zielband (%d RPM +/- %d), noetig sind %d."
-          .. " Die MASTER-Vorgabe ist so lange uebersteuert, die ganze Flotte faehrt.",
-        cap.at_target or 0, cap.total_turbines or 0, rt2_turbine.FULL_TARGET_RPM,
-        orchestrator.LEARN_TOLERANCE_RPM, cap.required_at_target or 0)
+      if (cap.saturated or 0) > 0 then
+        msg = string.format(
+          "v2 EINLERNEN: %d Turbine(n) fahren VOLLEN Durchfluss und erreichen trotzdem"
+            .. " keine %d RPM -- im Zielband %d von %d, noetig %d. Fehlt Dampf?",
+          cap.saturated, orchestrator.TARGET_RPM, cap.at_target or 0,
+          cap.total_turbines or 0, cap.required_at_target or 0)
+      elseif (cap.best_output or 0) > 0 then
+        msg = string.format(
+          "v2 EINLERNEN laeuft: bisher %.0f RF/t gemessen (%d von %d Turbinen im Zielband)",
+          cap.best_output or 0, cap.at_target or 0, cap.total_turbines or 0)
+      else
+        msg = string.format(
+          "v2 EINLERNEN wartet: %d von %d Turbinen im Zielband (%d RPM +/- %d), noetig sind %d."
+            .. " Die MASTER-Vorgabe ist so lange uebersteuert, die ganze Flotte faehrt.",
+          cap.at_target or 0, cap.total_turbines or 0, orchestrator.TARGET_RPM,
+          orchestrator.LEARN_TOLERANCE_RPM, cap.required_at_target or 0)
+      end
     elseif cap.reason == orchestrator.MEASURED then
       msg = string.format(
-        "v2 EINLERNEN FERTIG: %.0f RF/t fuer %d Turbinen (%.0f RF/t je Turbine,"
-          .. " gemessen an %d im Zielband). Normale Regelung nach MASTER-Vorgabe.",
-        cap.max_output or 0, cap.total_turbines or 0,
-        (cap.total_turbines or 0) > 0 and (cap.max_output / cap.total_turbines) or 0,
-        cap.at_target or 0)
+        "v2 EINLERNEN FERTIG: %.0f RF/t aus %d Turbinen gemessen (roh %.0f, abzueglich"
+          .. " %.0f %% Reserve). Normale Regelung nach MASTER-Vorgabe.",
+        cap.max_output or 0, cap.sustainable_turbines or 0, cap.best_output or 0,
+        orchestrator.LEARN_SAFETY_MARGIN * 100)
+      if (cap.sustainable_turbines or 0) < (cap.total_turbines or 0) then
+        msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig im Zielband",
+          (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
+      end
     else
       -- Notbremse gezogen: das Einlernen hat den Messpunkt nie erreicht.
       -- Das gehoert gesagt, sonst haelt man die Zahl fuer eine Messung.
       msg = string.format(
-        "v2 EINLERNEN ABGEBROCHEN nach %.0fs: nur %d von %d Turbinen kamen ins"
-          .. " Zielband (noetig %d). Es gilt der hoechste geflossene Ausstoss"
+        "v2 EINLERNEN ABGEBROCHEN nach %.0fs: es kamen nie %d von %d Turbinen"
+          .. " gleichzeitig ins Zielband. Es gilt der hoechste geflossene Ausstoss"
           .. " %.0f RF/t -- das ist zu wenig, MASTER teilt gegen eine zu kleine"
           .. " Zahl auf. Die normale Regelung laeuft wieder.",
-        orchestrator.LEARN_TIMEOUT_MS / 1000, cap.at_target or 0,
-        cap.total_turbines or 0, cap.required_at_target or 0, cap.max_output or 0)
+        orchestrator.LEARN_TIMEOUT_MS / 1000, cap.required_at_target or 0,
+        cap.total_turbines or 0, cap.max_output or 0)
     end
     ctx.log("INFO", msg)
     pcall(print, "[RT] " .. msg)
@@ -269,7 +290,9 @@ function M.status_fields()
     capacity_required_turbines = last_result.capacity.required_at_target,
     capacity_learning = last_result.capacity.learning == true,
     capacity_source = last_result.capacity.reason,
-    capacity_sustainable_turbines = last_result.capacity.total_turbines,
+    -- Wieviele Turbinen liefen, als der Hoechstwert floss. Traegt die
+    -- Anlage ihre ganze Flotte, ist das schlicht die Flottengroesse.
+    capacity_sustainable_turbines = last_result.capacity.sustainable_turbines,
     -- Aliase unter den alten v2-Namen beibehalten: die RT-eigene UI und
     -- der Integrationstest lesen sie.
     capacity_at_target = last_result.capacity.at_target,

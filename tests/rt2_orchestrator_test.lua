@@ -10,6 +10,21 @@ local function turbine(name, rpm, energy, coil_engaged, current_flow)
   return { name = name, rpm = rpm, energy = energy, coil_engaged = coil_engaged, current_flow = current_flow or 0 }
 end
 
+-- Das Einlernen braucht Zeit: ein tauglicher Takt legt nichts fest, erst
+-- wenn sich der Hoechstwert LEARN_STABLE_MS lang nicht mehr verbessert,
+-- ist die Anlage ausgemessen. Die meisten Bloecke hier pruefen das
+-- Verhalten DANACH, also wird es vorweg durchgefahren.
+local function learn(o, turbines, master_seen)
+  local ms = 1000
+  for _ = 1, 40 do
+    if master_seen then o.note_master_seen(ms) end
+    local r = o.tick({ now_ms = ms, hardware_ready = true, turbines = turbines, reactor = { fill_ratio = 0.5 } })
+    if r.capacity.ready then return ms end
+    ms = ms + 1000
+  end
+  error('das Einlernen wurde nicht fertig', 2)
+end
+
 -- Der Knoten lernt nichts mehr ein: mit Hardware und MASTER ist er im
 -- ersten Takt betriebsbereit.
 do
@@ -46,29 +61,30 @@ do
   local result = o.tick({ now_ms = 1000, hardware_ready = true,
     turbines = { turbine('T1', 100, 0, false), turbine('T2', 100, 0, false) }, reactor = {} })
   assert_true(not result.capacity.ready, 'waehrend des Einlernens meldet der Knoten nichts')
-  assert_eq(result.capacity.reason, 'LEARNING')
   assert_true(result.capacity.learning)
 
-  result = o.tick({ now_ms = 2000, hardware_ready = true,
-    turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 120, true) }, reactor = {} })
-  assert_true(result.capacity.ready, 'beide im Zielband -> das Einlernen ist durch')
-  assert_eq(result.capacity.max_output, 220,
-    'zwei Turbinen im Band, 220 RF/t -- auf eine Flotte von zwei hochgerechnet bleibt es 220')
+  -- Ein einzelner tauglicher Takt legt noch nichts fest -- erst wenn sich
+  -- der Hoechstwert eine Weile nicht mehr verbessert.
+  local fleet = { turbine('T1', 900, 100, true), turbine('T2', 900, 120, true) }
+  result = o.tick({ now_ms = 2000, hardware_ready = true, turbines = fleet, reactor = {} })
+  assert_true(result.capacity.learning, 'ein einzelner Messwert legt noch nichts fest')
+  assert_eq(result.capacity.reason, 'LEARNING')
+  assert_eq(result.capacity.best_output, 220, 'aber der Hoechstwert steht schon')
+
+  result = o.tick({ now_ms = 2000 + orchestrator.LEARN_STABLE_MS + 1, hardware_ready = true,
+    turbines = fleet, reactor = {} })
+  assert_true(result.capacity.ready, 'bleibt der Hoechstwert stehen, ist die Anlage ausgemessen')
   assert_eq(result.capacity.reason, 'MEASURED')
+  -- 220 abzueglich 5 % Sicherheitsreserve.
+  assert_eq(result.capacity.max_output, math.floor(220 * 0.95))
   assert_eq(result.capacity.at_target, 2)
   assert_true(not result.capacity.learning, 'und danach laeuft die normale Regelung')
 
-  -- Die gemessene Zahl steht. Ein schwaecherer Takt aendert sie nicht.
-  result = o.tick({ now_ms = 3000, hardware_ready = true,
+  -- Die gemessene Zahl steht. Ein schwaecherer Takt widerlegt sie nicht.
+  local measured = result.capacity.max_output
+  result = o.tick({ now_ms = 20000, hardware_ready = true,
     turbines = { turbine('T1', 900, 50, true), turbine('T2', 900, 50, true) }, reactor = {} })
-  assert_eq(result.capacity.max_output, 220, 'die Messung steht')
-
-  -- Eine geaenderte Turbinenzahl ist eine andere Anlage: neu einlernen.
-  result = o.tick({ now_ms = 4000, hardware_ready = true,
-    turbines = { turbine('T1', 900, 50, true) }, reactor = {} })
-  assert_true(result.capacity.learning ~= true or result.capacity.total_turbines == 1,
-    'eine geaenderte Flottengroesse wirft die alte Messung weg')
-  assert_eq(result.capacity.max_output, 50, 'und misst neu')
+  assert_eq(result.capacity.max_output, measured, 'die Messung steht')
 end
 
 -- Regression gegen einen Stillstand, aus dem der Knoten nicht mehr
@@ -90,23 +106,15 @@ do
     assert_eq(t.target_rpm, 900, 'die ganze Flotte faehrt auf Zieldrehzahl')
   end
 
-  -- Sobald Leistung gemeldet ist, gilt die Vorgabe. Gemessen wird am ENDE
-  -- des Takts (dafuer braucht es die Ziele dieses Takts), es gilt hier also
-  -- jeweils die Messung des vorigen -- ein Takt Verzug.
+  -- Sobald das Einlernen durch ist, gilt die Vorgabe.
+  local fleet = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }
+  local ms = learn(o, fleet, true)
+  o.note_master_seen(ms + 1000)
   result = o.tick({
-    now_ms = 2000, hardware_ready = true, master_percent = 0,
-    turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) },
-    reactor = {},
+    now_ms = ms + 1000, hardware_ready = true, master_percent = 0,
+    turbines = fleet, reactor = {},
   })
-  assert_eq(result.effective_percent, 100, 'im Messtakt selbst gilt noch das Einlernen')
-  assert_true(result.capacity.ready, 'aber am Ende dieses Takts steht die Messung')
-
-  result = o.tick({
-    now_ms = 3000, hardware_ready = true, master_percent = 0,
-    turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) },
-    reactor = {},
-  })
-  assert_eq(result.effective_percent, 0, 'und ab dem naechsten Takt gilt die MASTER-Vorgabe')
+  assert_eq(result.effective_percent, 0, 'danach gilt die MASTER-Vorgabe')
   for _, t in ipairs(result.turbines) do
     assert_eq(t.target_rpm, 0, 'and 0 % really means no turbine runs')
   end
@@ -117,9 +125,10 @@ do
   local o = orchestrator.new()
   o.note_master_seen(0)
   local fleet = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) }
-  o.tick({ now_ms = 1000, hardware_ready = true, turbines = fleet, reactor = {} })
+  local ms = learn(o, fleet, true)
+  o.note_master_seen(ms + 1000)
   local result = o.tick({
-    now_ms = 2000, hardware_ready = true, master_percent = 50,
+    now_ms = ms + 1000, hardware_ready = true, master_percent = 50,
     turbines = { turbine('T1', 900, 100, true, 1200), turbine('T2', 2000, 100, true, 1200) },
     reactor = {},
   })
@@ -259,13 +268,13 @@ do
     turbine('T1', 900, 100, true), turbine('T2', 900, 100, true),
     turbine('T3', 900, 100, true), turbine('T4', 900, 100, true),
   }
-  o.tick({ now_ms = 1000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
-  o.tick({ now_ms = 2000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
+  local ms = learn(o, fleet, true)
 
   local ack = o.handle_command({ target = 'SET_SETPOINTS', value = { power_target_percent = 25 } })
   assert_true(ack.ok, 'SET_SETPOINTS must be accepted once in MASTER state')
 
-  local result = o.tick({ now_ms = 3000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
+  o.note_master_seen(ms + 1000)
+  local result = o.tick({ now_ms = ms + 1000, hardware_ready = true, turbines = fleet, reactor = { fill_ratio = 0.5 } })
   local running = 0
   for _, t in ipairs(result.turbines) do
     if t.target_rpm > 0 then running = running + 1 end

@@ -26,129 +26,210 @@ M.ROTATE_INTERVAL_MS = 300000 -- 5 min: wie oft der AUS/PUFFER-Platz wandert
 
 -- Was der Knoten MASTER ueber seine Leistung meldet.
 --
--- ── Das Einlernen (Betreibervorgabe, 2026-09-28) ─────────────────────────
+-- ── Das Einlernen ───────────────────────────────────────────────────────
 --
---   "im learning modus muessen 80% der turbinen im ziel rpm bereich sein
---    +-15 rpm. das heisst die turbinen muessen auch unabhaengig vom master
---    waehrend des lernens -- aber auch nur waehrend des lernens -- auf 900
---    rpm gebracht werden. sobald das abgeschlossen ist geht dann wieder
---    ganz normale regelung."
+-- Zurueckgeholtes Originalverfahren aus rt2_capacity.lua (bis v768), auf
+-- Wunsch des Betreibers. Es war nie das Verfahren, das im Feld haengen
+-- blieb -- haengen blieb der ZUSTAND davor und der gestaffelte Suchlauf
+-- (v754-v757), der Turbinen stufenweise freigab. Beides kommt nicht
+-- zurueck; das Messverfahren selbst schon, unveraendert:
 --
--- Das ist hier eins zu eins umgesetzt. Was NICHT zurueckkommt, ist der
--- eigene ZUSTAND im Zustandsautomaten: der Knoten bleibt die ganze Zeit in
--- MASTER bzw. AUTONOM, nimmt Kommandos an, meldet Status und loest
--- Sicherheitsfaelle aus wie immer. Einzig die Leistungsvorgabe wird
--- waehrend des Einlernens uebersteuert. Genau der alte Zusatzzustand war
--- es, in dem die Node wiederholt haengenblieb -- gemessen wird schon, nur
--- nicht mehr in einem Zustand, aus dem es keinen Rueckweg gab.
+--   Gemessen wird der hoechste Gesamtausstoss, den diese Anlage jemals
+--   nachweislich GLEICHZEITIG geliefert hat.
 --
--- ── Welche Zahl MASTER braucht ───────────────────────────────────────────
+--   * Ein Takt zaehlt nur, wenn mindestens 80 % der Flotte gleichzeitig
+--     im Zielband stehen (900 +/- 15 RPM), gekuppelt sind und wirklich
+--     liefern. Eine Summe aus drei zufaellig laufenden Turbinen
+--     beschreibt die Anlage nicht.
+--   * Von den tauglichen Takten gilt der HOECHSTWERT -- nicht der erste.
+--     Damit entscheidet nicht ein einzelner Augenblick, und ein Takt
+--     mitten im Hochlauf friert nichts ein.
+--   * Steigt der Hoechstwert eine Weile nicht mehr (STABLE_MS), ist die
+--     Anlage ausgemessen.
+--   * Gemeldet wird der Hoechstwert abzueglich einer Sicherheitsreserve.
 --
--- MASTER rechnet mit dem Prozentsatz als Anteil der LEISTUNG:
---     assigned_power = capacity * pct / 100      (master/rt_sync.lua)
--- Der Knoten setzt denselben Prozentsatz als Anteil der TURBINEN um:
---     running_count  = pct / 100 * turbine_count (rt2_turbine.lua)
+-- Waehrend des Einlernens faehrt die GANZE Flotte auf Zieldrehzahl, die
+-- MASTER-Vorgabe ist uebersteuert (Betreibervorgabe 2026-09-28). Nur so
+-- entsteht ein Hoechstwert, der die ganze Anlage beschreibt -- und genau
+-- diese Zahl braucht MASTER, weil er den Prozentsatz als Anteil der
+-- LEISTUNG rechnet (assigned_power = capacity * pct / 100), waehrend der
+-- Knoten ihn als Anteil der TURBINEN umsetzt. Beides deckt sich nur, wenn
+-- capacity_max fuer die volle Flotte gilt.
 --
--- Beide stimmen nur ueberein, wenn capacity_max die Leistung der GANZEN
--- Flotte ist -- also das, was herauskaeme, wenn alle Turbinen liefen.
--- Deshalb muss waehrend des Einlernens auch die ganze Flotte fahren: nur
--- dort entsteht diese Zahl, und nur einmal muss sie entstehen.
---
--- ── Der Messpunkt ────────────────────────────────────────────────────────
---
---     mindestens 80 % der Flotte innerhalb 900 +/- 15 RPM, gekuppelt
---     je Turbine = Ausstoss DIESER Turbinen / ihre Anzahl
---     Kapazitaet = je Turbine * GESAMTZAHL
---
--- Gesummt wird nur ueber die Turbinen IM BAND. Die uebrigen bis zu 20 %
--- haengen noch im Hochlauf; ihren kleineren Ausstoss mitzumitteln wuerde
--- die Zahl nach unten ziehen und MASTER dauerhaft zu wenig zuteilen.
-M.LEARN_TOLERANCE_RPM = 15      -- Zielband beim Einlernen (Vorgabe)
-M.LEARN_MIN_FRACTION  = 0.8     -- so viel der Flotte muss gleichzeitig drin stehen
---
--- Und die Notbremse: eine dampfarme Anlage bringt vielleicht NIE 80 % ins
--- Band. Ohne Grenze liefe das Einlernen dann ewig, der Knoten wuerde MASTER
--- dauerhaft uebersteuern und die ganze Flotte fahren -- das ist genau die
--- Sackgasse, in der die alte Lernphase steckenblieb. Nach dieser Zeit gilt
--- deshalb der hoechste bis dahin geflossene Gesamtausstoss als Ergebnis,
--- das Einlernen endet, und die normale Regelung uebernimmt. Der Knoten
--- sagt das im Log, weil die Zahl dann zu klein ist.
-M.LEARN_TIMEOUT_MS    = 180000  -- 3 min
+-- Sobald das Einlernen durch ist, gilt wieder ganz normale Regelung.
+M.TARGET_RPM             = 900
+M.LEARN_TOLERANCE_RPM    = 15      -- Zielband
+M.LEARN_MIN_FRACTION     = 0.8     -- so viel der Flotte muss gleichzeitig drin stehen
+M.LEARN_SAFETY_MARGIN    = 0.05    -- gemeldet wird 95 % des gemessenen Hoechstwerts
+M.LEARN_STABLE_MS        = 6000    -- so lange darf er sich nicht mehr verbessern
+M.TOPOLOGY_DEBOUNCE_MS   = 3000    -- so lange muss eine geaenderte Turbinenzahl anhalten
+M.SATURATION_FRACTION    = 0.95    -- ab hier gilt der Durchfluss als am Anschlag
 
-M.LEARNING = "LEARNING"   -- laeuft gerade, MASTER-Vorgabe ist uebersteuert
-M.MEASURED = "MEASURED"   -- Messpunkt erreicht, auf die Flotte hochgerechnet
-M.OBSERVED = "OBSERVED"   -- Notbremse: nur der rohe Hoechstausstoss
+-- Und die Notbremse, die es im Original NICHT gab: dort fand der
+-- gestaffelte Suchlauf notfalls eine tragbare Teilmenge. Ohne ihn kann
+-- eine dampfarme Anlage die 80 % nie erreichen, und dann liefe das
+-- Einlernen endlos -- der Knoten wuerde MASTER dauerhaft uebersteuern.
+-- Nach dieser Zeit gilt deshalb der hoechste bis dahin geflossene
+-- Gesamtausstoss, das Einlernen endet, die normale Regelung uebernimmt.
+-- Der Knoten sagt im Log, dass die Zahl dann zu klein ist.
+M.LEARN_TIMEOUT_MS       = 180000  -- 3 min
+
+M.LEARNING = "LEARNING"
+M.MEASURED = "MEASURED"
+M.OBSERVED = "OBSERVED"
 
 function M.new_output_state()
   return {
-    max_output = 0, observed = 0,
-    at_target = 0, required_at_target = 0, total_turbines = 0,
-    learning = true, learn_started_ms = nil,
+    max_output = 0, best_output = 0, observed = 0,
+    at_target = 0, required_at_target = 0, saturated = 0, total_turbines = 0,
+    sustainable_turbines = 0,
+    learning = true, learn_started_ms = nil, last_improved_ms = nil,
+    pending_total = nil, pending_since_ms = nil,
     ready = false, reason = "NO_TURBINES",
   }
 end
 
--- turbines: die Messwerte dieses Takts
-local function measure_capacity(previous, turbines, now_ms)
-  local count, at_target, sum_at_target, sum_all = 0, 0, 0, 0
-  for _, t in ipairs(turbines or {}) do
-    count = count + 1
+local function copy_state(t)
+  local out = {}
+  for k, v in pairs(t or {}) do out[k] = v end
+  return out
+end
+
+-- Summiert den Ausstoss aller Turbinen, die GERADE im Zielband und
+-- gekuppelt sind, und zaehlt nebenbei, wieviele bei voller Foerderung
+-- trotzdem zu langsam sind (Saettigung -- reine Diagnose).
+local function measure(turbines)
+  local total = #(turbines or {})
+  if total == 0 then return 0, 0, 0, 0 end
+  local max_flow = rt2_turbine.MAX_FLOW
+  local at_target, output, saturated, sum_all = 0, 0, 0, 0
+  for index = 1, total do
+    local t = turbines[index]
+    local rpm = tonumber(t.rpm)
     local energy = tonumber(t.energy) or 0
     sum_all = sum_all + energy
-    local rpm = tonumber(t.rpm)
-    -- Gekuppelt MUSS sie sein: eine ungekuppelte Turbine dreht zwar, liefert
-    -- aber nichts. Ihr Ausstoss beschriebe den Auslegungspunkt nicht.
-    if rpm and t.coil_engaged == true
-        and math.abs(rpm - rt2_turbine.FULL_TARGET_RPM) <= M.LEARN_TOLERANCE_RPM then
+    if rpm and t.coil_engaged ~= false
+        and math.abs(rpm - M.TARGET_RPM) <= M.LEARN_TOLERANCE_RPM
+        and energy > 0 then
       at_target = at_target + 1
-      sum_at_target = sum_at_target + energy
+      output = output + energy
+    elseif rpm and rpm < M.TARGET_RPM - M.LEARN_TOLERANCE_RPM then
+      local flow = tonumber(t.current_flow)
+      if flow and flow >= max_flow * M.SATURATION_FRACTION then
+        saturated = saturated + 1
+      end
     end
   end
+  return output, at_target, saturated, sum_all
+end
 
-  -- Eine geaenderte Turbinenzahl ist eine andere Anlage: neu einlernen.
-  local same_fleet = count == (tonumber(previous and previous.total_turbines) or 0)
-  local learning   = (not same_fleet) or (previous == nil) or previous.learning ~= false
-  local max_output = same_fleet and (tonumber(previous and previous.max_output) or 0) or 0
-  local observed   = same_fleet and (tonumber(previous and previous.observed) or 0) or 0
-  local started    = same_fleet and previous and previous.learn_started_ms or nil
-  if sum_all > observed then observed = sum_all end
+local function measure_capacity(previous, turbines, now_ms)
+  local state = copy_state(previous or M.new_output_state())
+  now_ms = tonumber(now_ms) or 0
+  local total = #(turbines or {})
 
-  local required = count > 0 and math.ceil(count * M.LEARN_MIN_FRACTION) or 0
-  local reason = learning and M.LEARNING
-    or (max_output > 0 and previous and previous.reason) or M.OBSERVED
+  -- Gar keine Turbinen gelesen ist KEIN Umbau, sondern eine fehlende
+  -- Messung -- ein Discovery-Aussetzer, ein Peripheral-Hickser. Melden,
+  -- nichts anfassen.
+  if total == 0 then
+    state.at_target, state.saturated = 0, 0
+    state.reason = "NO_TURBINES"
+    return state
+  end
 
-  if learning and count > 0 then
-    if started == nil then started = now_ms end
-    if at_target >= required and sum_at_target > 0 then
-      -- Der Messpunkt. Hochgerechnet auf die ganze Flotte.
-      max_output = (sum_at_target / at_target) * count
-      learning, reason = false, M.MEASURED
-    elseif now_ms and started and (now_ms - started) >= M.LEARN_TIMEOUT_MS then
-      -- Notbremse: nimm, was geflossen ist, und lass die Regelung arbeiten.
-      max_output = observed
-      learning, reason = false, M.OBSERVED
+  if total ~= state.total_turbines then
+    -- Die Turbinen-ANZAHL ist das einzige Signal, dem dieses Verfahren als
+    -- echter Umbau traut. Eine blosse Umbenennung (gleiche Anzahl) kommt
+    -- hier nie an und kann einen gelernten Wert daher nicht verwerfen.
+    -- Und erst, wenn die neue Anzahl auch anhaelt: ein Peripheral, das
+    -- einen Takt lang nicht antwortet, sieht sonst aus wie eine abgebaute
+    -- Turbine.
+    if state.pending_total ~= total then
+      state.pending_total = total
+      state.pending_since_ms = now_ms
     end
+    if (not state.learning)
+        and (now_ms - (state.pending_since_ms or now_ms)) < M.TOPOLOGY_DEBOUNCE_MS then
+      state.at_target, state.saturated = 0, 0
+      state.reason = "TOPOLOGY_PENDING"
+      return state
+    end
+    state.pending_total, state.pending_since_ms = nil, nil
+    state.learning = true
+    state.ready = false
+    state.max_output, state.best_output, state.observed = 0, 0, 0
+    state.sustainable_turbines = 0
+    state.last_improved_ms = now_ms
+    state.learn_started_ms = now_ms
+    state.total_turbines = total
+    state.at_target, state.saturated = 0, 0
+    -- Schon hier mitfuehren, sonst meldet der erste Takt "0 von 0" und die
+    -- Anzeige sieht aus, als waere nichts zu tun.
+    state.required_at_target = math.max(1, math.ceil(total * M.LEARN_MIN_FRACTION))
+    state.reason = "TOPOLOGY_CHANGED"
+    return state
+  end
+  state.pending_total, state.pending_since_ms = nil, nil
+
+  local output, at_target, saturated, sum_all = measure(turbines)
+  state.at_target, state.saturated = at_target, saturated
+  state.required_at_target = math.max(1, math.ceil(total * M.LEARN_MIN_FRACTION))
+  if sum_all > (state.observed or 0) then state.observed = sum_all end
+
+  -- Ist die Anlage ausgemessen, wird nichts mehr veraendert. Der gelernte
+  -- Wert beschreibt, was sie geliefert HAT -- ein schwacher Takt spaeter
+  -- widerlegt das nicht.
+  if not state.learning then
+    state.reason = state.reason == M.OBSERVED and M.OBSERVED or M.MEASURED
+    return state
   end
 
-  if count == 0 then
-    reason = "NO_TURBINES"
+  if state.learn_started_ms == nil then state.learn_started_ms = now_ms end
+  if state.last_improved_ms == nil then state.last_improved_ms = now_ms end
+
+  local function settle_measured()
+    state.learning = false
+    state.ready = true
+    state.reason = M.MEASURED
+    return state
   end
 
-  return {
-    max_output = max_output,
-    observed = observed,
-    at_target = at_target,
-    required_at_target = required,
-    total_turbines = count,
-    learning = learning,
-    learn_started_ms = started,
-    -- MASTER darf erst rechnen, wenn das Einlernen durch ist: eine Zahl aus
-    -- dem Hochlauf waere beliebig. master/rt_sync.lua behandelt capacity=0
-    -- ausdruecklich ("Node wird nicht zugeteilt bis sein echter Wert
-    -- vorliegt") -- waehrend des Einlernens faehrt die Flotte ohnehin voll.
-    ready = (not learning) and max_output > 0,
-    reason = reason,
-  }
+  -- Zu wenige Turbinen im Zielband: dieser Takt taugt nicht als Messwert.
+  if at_target < state.required_at_target then
+    if (state.best_output or 0) > 0 and now_ms - state.last_improved_ms >= M.LEARN_STABLE_MS then
+      return settle_measured()
+    end
+    if now_ms - state.learn_started_ms >= M.LEARN_TIMEOUT_MS then
+      -- Notbremse: die 80 % wurden nie erreicht.
+      state.learning = false
+      state.ready = (state.observed or 0) > 0
+      state.max_output = math.floor(state.observed or 0)
+      state.sustainable_turbines = at_target
+      state.reason = M.OBSERVED
+      return state
+    end
+    state.reason = M.LEARNING
+    return state
+  end
+
+  if output > (state.best_output or 0) then
+    state.best_output = output
+    -- Ganzzahlig: RF/t mit acht Nachkommastellen ist nicht nur unsinnig zu
+    -- lesen, der Wert ueberlebt auch eine Serialisierung nicht unveraendert.
+    state.max_output = math.floor(output * (1 - M.LEARN_SAFETY_MARGIN))
+    -- Wieviele Turbinen liefen, als dieser Hoechstwert floss.
+    state.sustainable_turbines = at_target
+    state.last_improved_ms = now_ms
+    state.reason = M.LEARNING
+    return state
+  end
+
+  if now_ms - state.last_improved_ms >= M.LEARN_STABLE_MS then
+    return settle_measured()
+  end
+
+  state.reason = M.LEARNING
+  return state
 end
 
 function M.new(opts)

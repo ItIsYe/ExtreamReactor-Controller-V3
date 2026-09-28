@@ -26,6 +26,21 @@ local function turbine(name, rpm, flow, coil, energy, active)
            energy = energy or 0, active = active }
 end
 
+-- Das Einlernen vorweg durchfahren: ein tauglicher Takt legt nichts fest,
+-- erst wenn sich der Hoechstwert LEARN_STABLE_MS lang nicht mehr
+-- verbessert, ist die Anlage ausgemessen.
+local function learn(o, fleet, master_seen)
+  local ms = 1000
+  for _ = 1, 40 do
+    if master_seen then o.note_master_seen(ms) end
+    local r = o.tick({ now_ms = ms, hardware_ready = true,
+      reactor = { fill_ratio = 0.5 }, turbines = fleet })
+    if r.capacity.ready then return ms end
+    ms = ms + 1000
+  end
+  error('das Einlernen wurde nicht fertig', 2)
+end
+
 local function by_name(result)
   local out = {}
   for _, t in ipairs(result.turbines) do out[t.name] = t end
@@ -43,7 +58,7 @@ do
   -- readings, not from a different target.
   local warm = {}
   for i = 1, 5 do warm[i] = turbine('W' .. i, 900, 1000, true, 100, true) end
-  o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = warm })
+  local ms = learn(o, warm)
 
   local fleet = {
     turbine('SLOW',      100, 500,  false, 0,   true),   -- weit unter Ziel  -> TRIM_UP
@@ -52,7 +67,7 @@ do
     turbine('RUNAWAY',   2400, 1800, true, 100, true),   -- echter Ausreisser-> OVERSPEED
     turbine('BLIND',     nil, 1500, true,  100, true),   -- Drehzahl unlesbar-> NO_RPM_READING
   }
-  local r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
+  local r = o.tick({ now_ms = ms + 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
   local t = by_name(r)
 
   assert_eq(#r.turbines, 5, 'every discovered turbine must get its own decision entry')
@@ -102,12 +117,12 @@ do
   assert_true(early.ok == false, 'a setpoint arriving before the node reached MASTER must be rejected')
   assert_eq(early.reason_code, 'INVALID_STATE')
 
-  o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
-  o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
+  local ms = learn(o, fleet, true)
   assert_eq(o.current_state(), rt2_state.states.MASTER)
   local accepted = o.handle_command({ target = 'SET_SETPOINTS', value = { power_target_percent = 50 } })
   assert_true(accepted.ok, 'once in MASTER the same setpoint is accepted')
-  local r = o.tick({ now_ms = 3000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
+  o.note_master_seen(ms + 1000)
+  local r = o.tick({ now_ms = ms + 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
 
   local targets = {}
   for _, entry in ipairs(r.turbines) do targets[#targets + 1] = entry.target_rpm end
@@ -165,17 +180,18 @@ do
   assert_eq(r.state, rt2_state.states.AUTONOM, 'SAFE -> AUTONOM once the condition clears')
 end
 
--- ═══ 3. Einlernen: 80 % im Zielband, dann hochgerechnet ═══
+-- ═══ 3. Einlernen: 80 % im Zielband, Hoechstwert, dann Ruhe ═══
 do
   -- Betreibervorgabe: mindestens 80 % der Flotte muessen gleichzeitig in
-  -- 900 +/- 15 RPM stehen. Aus DIESEN Turbinen wird auf die ganze Flotte
-  -- hochgerechnet -- die uebrigen bis zu 20 % haengen noch im Hochlauf,
-  -- ihren kleineren Ausstoss mitzumitteln zoege die Zahl nach unten.
+  -- 900 +/- 15 RPM stehen, damit ein Takt ueberhaupt als Messwert zaehlt.
+  -- Von den tauglichen Takten gilt der HOECHSTWERT -- nicht der erste --,
+  -- und erst wenn der sich eine Weile nicht mehr verbessert, ist die
+  -- Anlage ausgemessen.
   local o = orchestrator.new()
-  local function fleet_at(n_running)
+  local function fleet_at(n_in_band)
     local f = {}
     for i = 1, 5 do
-      if i <= n_running then f[i] = turbine('T' .. i, 900, 1000, true, 100, true)
+      if i <= n_in_band then f[i] = turbine('T' .. i, 900, 1000, true, 100, true)
       else f[i] = turbine('T' .. i, 780, rt2_turbine.MAX_FLOW, false, 0, true) end
     end
     return f
@@ -190,25 +206,35 @@ do
     assert_eq(t.target_rpm, 900, 'jede Turbine bekommt das volle Ziel')
   end
 
-  -- Drei von fuenf im Band = 60 % -- noch zu wenig.
+  -- Drei von fuenf = 60 % -- dieser Takt taugt nicht als Messwert.
   r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
   assert_true(r.capacity.learning, '60 % reichen nicht')
-  assert_eq(r.capacity.at_target, 3)
+  assert_eq(r.capacity.best_output, 0, 'und es entsteht kein Messwert')
 
-  -- Vier von fuenf = genau 80 % -> der Messpunkt.
+  -- Vier von fuenf = genau 80 % -- jetzt zaehlt er.
   r = o.tick({ now_ms = 3000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
-  assert_true(not r.capacity.learning, 'bei 80 % ist das Einlernen durch')
-  assert_eq(r.capacity.reason, 'MEASURED')
-  assert_eq(r.capacity.at_target, 4)
-  -- (400 / 4) * 5 = 500: je Turbine 100, hochgerechnet auf die Flotte.
-  -- Gesummt wird NUR ueber die vier im Band -- die fuenfte lieferte 0 und
-  -- haette den Schnitt auf 80 gedrueckt.
-  assert_eq(r.capacity.max_output, 500,
-    'aus den Turbinen im Band wird auf die ganze Flotte hochgerechnet')
+  assert_eq(r.capacity.best_output, 400, 'vier Turbinen zu je 100 RF/t')
+  assert_true(r.capacity.learning, 'ein einzelner Messwert legt aber noch nichts fest')
 
-  -- Danach steht die Zahl -- auch wenn spaeter alle fuenf liefern.
+  -- Fuenf von fuenf: besser, der Hoechstwert steigt.
   r = o.tick({ now_ms = 4000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(5) })
-  assert_eq(r.capacity.max_output, 500, 'die Messung wird nicht laufend neu geschrieben')
+  assert_eq(r.capacity.best_output, 500, 'der Hoechstwert steigt mit')
+  assert_true(r.capacity.learning)
+
+  -- Keine Verbesserung mehr -> nach LEARN_STABLE_MS ist die Anlage aus-
+  -- gemessen. Gemeldet wird der Hoechstwert abzueglich der Reserve.
+  r = o.tick({ now_ms = 4000 + orchestrator.LEARN_STABLE_MS + 1, hardware_ready = true,
+    reactor = { fill_ratio = 0.5 }, turbines = fleet_at(5) })
+  assert_true(not r.capacity.learning, 'bleibt der Hoechstwert stehen, ist die Anlage ausgemessen')
+  assert_eq(r.capacity.reason, 'MEASURED')
+  assert_eq(r.capacity.max_output, math.floor(500 * (1 - orchestrator.LEARN_SAFETY_MARGIN)),
+    '500 abzueglich 5 % Sicherheitsreserve')
+  assert_eq(r.capacity.sustainable_turbines, 5, 'so viele liefen, als der Hoechstwert floss')
+
+  -- Danach steht die Zahl -- ein schwacher Takt widerlegt sie nicht.
+  r = o.tick({ now_ms = 60000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(1) })
+  assert_eq(r.capacity.max_output, math.floor(500 * (1 - orchestrator.LEARN_SAFETY_MARGIN)),
+    'die Messung beschreibt, was die Anlage geliefert HAT')
 end
 
 -- ═══ 4. Reaktorregelung: nur Dampftank, in JEDEM Modus gleich ═══

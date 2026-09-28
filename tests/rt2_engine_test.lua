@@ -96,15 +96,23 @@ local fields = rt2_engine.status_fields()
 assert_eq(fields.mode, result.state)
 assert_eq(fields.turbines[1].id, 'T1')
 
--- Die Leistungsmeldung an MASTER ist mitgeschrieben, nicht gelernt: der
--- hoechste Gesamtausstoss, der wirklich geflossen ist. Sie muss durch
--- status_fields() sichtbar sein -- MASTER teilt seinen Bedarf dagegen auf.
+-- Das Einlernen: eine Flotte im Zielband muss sich ausmessen lassen, und
+-- das Ergebnis muss durch status_fields() sichtbar sein -- MASTER teilt
+-- seinen Bedarf dagegen auf.
 do
-  assert_eq(fields.capacity_ready, true, 'eine Flotte im Zielband hat sich eingelernt')
-  assert_eq(fields.capacity_max, 100, 'exactly the output that flowed -- no margin, no extrapolation')
-  assert_eq(fields.capacity_total_turbines, 1)
-  assert_eq(fields.capacity_at_target, 1)
-  assert_true(fields.capacity_reason ~= nil, 'the capacity state must always carry a diagnostic reason')
+  -- Ein einzelner Messwert legt nichts fest; erst wenn der Hoechstwert
+  -- stehenbleibt, ist die Anlage ausgemessen.
+  for _ = 1, 10 do
+    advance(3000)
+    rt2_engine.tick(fake_ctx)
+    if rt2_engine.status_fields().capacity_ready then break end
+  end
+  local learned = rt2_engine.status_fields()
+  assert_eq(learned.capacity_ready, true, 'eine Flotte im Zielband muss sich einlernen lassen')
+  assert_eq(learned.capacity_max, math.floor(100 * 0.95), '100 RF/t abzueglich 5 % Reserve')
+  assert_eq(learned.capacity_total_turbines, 1)
+  assert_eq(learned.capacity_at_target, 1)
+  assert_true(learned.capacity_reason ~= nil, 'the capacity state must always carry a diagnostic reason')
 end
 
 -- Eine Flotte, die noch nichts liefert, meldet auch nichts -- und faehrt
@@ -130,8 +138,7 @@ do
   local idle_fields = rt2_engine.status_fields()
   assert_eq(idle_fields.capacity_ready, false, 'waehrend des Einlernens meldet der Knoten nichts')
   assert_eq(idle_fields.capacity_max, 0)
-  assert_eq(idle_fields.capacity_reason, 'LEARNING', 'und sagt, dass er einlernt')
-  assert_eq(idle_fields.capacity_learning, true)
+  assert_eq(idle_fields.capacity_learning, true, 'und sagt, dass er einlernt')
 end
 
 -- handle_command() must reach the underlying orchestrator and its

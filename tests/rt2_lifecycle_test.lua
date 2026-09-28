@@ -249,7 +249,7 @@ assert_eq(switched_on, TURBINE_COUNT, 'jede Turbine wird eingeschaltet')
 
 -- ═══ C · Die gemeldete Leistung entsteht im Betrieb ══════════════════════
 phase('C Leistungsmeldung')
-for _ = 1, 400 do
+for _ = 1, 2000 do
   tick(1)
   if last.capacity.ready then break end
 end
@@ -355,7 +355,7 @@ rt2_engine.init({ log = ctx.log })
 assert_eq(rt2_engine.current_state(), rt2_state.states.INIT, 'nach init() steht der Knoten auf INIT')
 tick(1)
 assert_true(last.state ~= rt2_state.states.INIT, 'und ist nach einem Takt wieder im Betrieb')
-for _ = 1, 400 do
+for _ = 1, 2000 do
   tick(1)
   if last.capacity.ready then break end
 end
