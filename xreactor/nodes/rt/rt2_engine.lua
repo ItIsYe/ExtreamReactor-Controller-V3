@@ -18,6 +18,7 @@ local rt2_state = require("nodes.rt.rt2_state")
 local rt2_safety = require("nodes.rt.rt2_safety")
 local rt2_projection = require("nodes.rt.rt2_projection")
 local rt2_reactor = require("nodes.rt.rt2_reactor")
+local rt2_turbine = require("nodes.rt.rt2_turbine")
 
 local M = {}
 
@@ -174,24 +175,29 @@ function M.tick(ctx)
     local msg
     if cap.reason == "NO_TURBINES" then
       msg = "v2 noch keine Turbine gefunden -- warte auf Discovery"
-    elseif cap.reason == "NO_OUTPUT" then
-      msg = string.format("v2 %d Turbine(n) gefunden, noch kein Ausstoss --"
-        .. " bis dahin laeuft die ganze Flotte", cap.total_turbines or 0)
+    elseif cap.reason == orchestrator.LEARNING then
+      msg = string.format(
+        "v2 EINLERNEN: %d von %d Turbinen im Zielband (%d RPM +/- %d), noetig sind %d."
+          .. " Die MASTER-Vorgabe ist so lange uebersteuert, die ganze Flotte faehrt.",
+        cap.at_target or 0, cap.total_turbines or 0, rt2_turbine.FULL_TARGET_RPM,
+        orchestrator.LEARN_TOLERANCE_RPM, cap.required_at_target or 0)
     elseif cap.reason == orchestrator.MEASURED then
       msg = string.format(
-        "v2 Anlage vermessen: %.0f RF/t fuer %d Turbinen (%.0f RF/t je Turbine,"
-          .. " gemessen als %d von %d am Ziel)",
+        "v2 EINLERNEN FERTIG: %.0f RF/t fuer %d Turbinen (%.0f RF/t je Turbine,"
+          .. " gemessen an %d im Zielband). Normale Regelung nach MASTER-Vorgabe.",
         cap.max_output or 0, cap.total_turbines or 0,
         (cap.total_turbines or 0) > 0 and (cap.max_output / cap.total_turbines) or 0,
-        cap.at_target or 0, cap.running or 0)
+        cap.at_target or 0)
     else
-      -- Rueckfallwert: der saubere Betriebspunkt wurde noch nie erreicht.
+      -- Notbremse gezogen: das Einlernen hat den Messpunkt nie erreicht.
       -- Das gehoert gesagt, sonst haelt man die Zahl fuer eine Messung.
       msg = string.format(
-        "v2 Leistung nur GESCHAETZT: %.0f RF/t -- die Flotte stand noch nie"
-          .. " vollstaendig am Ziel (%d von %d laufenden Turbinen). MASTER teilt"
-          .. " gegen eine zu kleine Zahl auf.",
-        cap.max_output or 0, cap.at_target or 0, cap.running or 0)
+        "v2 EINLERNEN ABGEBROCHEN nach %.0fs: nur %d von %d Turbinen kamen ins"
+          .. " Zielband (noetig %d). Es gilt der hoechste geflossene Ausstoss"
+          .. " %.0f RF/t -- das ist zu wenig, MASTER teilt gegen eine zu kleine"
+          .. " Zahl auf. Die normale Regelung laeuft wieder.",
+        orchestrator.LEARN_TIMEOUT_MS / 1000, cap.at_target or 0,
+        cap.total_turbines or 0, cap.required_at_target or 0, cap.max_output or 0)
     end
     ctx.log("INFO", msg)
     pcall(print, "[RT] " .. msg)
@@ -258,7 +264,10 @@ function M.status_fields()
     capacity_stable_turbines = last_result.capacity.at_target,
     -- Wieviele Turbinen in diesem Takt ueberhaupt laufen SOLLEN. Ohne das
     -- laesst sich "3 von 3 am Ziel" nicht von "3 von 50" unterscheiden.
-    capacity_running_turbines = last_result.capacity.running,
+    -- Wieviele Turbinen fuer den Messpunkt noetig sind (80 % der Flotte).
+    -- Ohne das laesst sich "40 im Band" nicht als Fortschritt lesen.
+    capacity_required_turbines = last_result.capacity.required_at_target,
+    capacity_learning = last_result.capacity.learning == true,
     capacity_source = last_result.capacity.reason,
     capacity_sustainable_turbines = last_result.capacity.total_turbines,
     -- Aliase unter den alten v2-Namen beibehalten: die RT-eigene UI und

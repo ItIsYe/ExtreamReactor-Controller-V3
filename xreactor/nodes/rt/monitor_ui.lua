@@ -197,6 +197,8 @@ function M.update_status_snapshot(ctx)
     capacity_stable_samples = capacity.ready and 1 or 0,
     capacity_stable_turbines = capacity.at_target or 0,
     capacity_total_turbines = capacity.total_turbines or 0,
+    -- Wieviele Turbinen fuer den Messpunkt noetig sind (80 % der Flotte).
+    capacity_required_turbines = capacity.required_turbines or 0,
     reactors = reactors,
     turbines = turbines,
   }
@@ -279,6 +281,7 @@ function M.update(monitor, ctx)
     capacity_stable_samples = snapshot and snapshot.capacity_stable_samples or 0,
     capacity_stable_turbines = snapshot and snapshot.capacity_stable_turbines or 0,
     capacity_total_turbines = snapshot and snapshot.capacity_total_turbines or 0,
+    capacity_required_turbines = snapshot and snapshot.capacity_required_turbines or 0,
     binding = ctx.binding,
     build_label = ctx.build_label or ctx.manifest_id or ctx.release_id,
     -- ctx.monitor_scale wird von main.lua gesetzt (der aktuell wirksame,

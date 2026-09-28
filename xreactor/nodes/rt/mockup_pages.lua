@@ -60,16 +60,17 @@ local function rt_status(model)
   if assignment == "shutdown" then return "SYSTEM FAHRT HERUNTER", "muted" end
   if assignment == "shed" or assignment == "standby" then return "WARTET AUF LASTZUWEISUNG", "muted" end
   if assignment == "startup" then return "SYSTEM FAHRT HOCH", "LIMITED" end
-  -- "KAPAZITAET WIRD GELERNT" stand hier noch aus der Zeit, als es eine
-  -- Lernphase gab. Die ist seit v769 weg: der Knoten misst nichts mehr, er
-  -- SCHREIBT nur mit, was schon geflossen ist. capacity_ready=false heisst
-  -- deshalb genau eines -- diese Flotte hat bisher nichts geliefert. Das
-  -- ist keine Phase, die von allein endet, sondern ein Befund: entweder
-  -- laufen die Turbinen noch hoch, oder sie bekommen keinen Dampf.
+  -- Waehrend des Einlernens faehrt die ganze Flotte auf Zieldrehzahl und
+  -- die MASTER-Vorgabe ist uebersteuert. Das gehoert deutlich dran, sonst
+  -- sieht es wie eine Fehlfunktion aus ("warum laufen alle?").
+  if tostring(model.capacity_source or "") == "LEARNING" then
+    return string.format("EINLERNEN: %d/%d IM ZIELBAND",
+      num(model.capacity_stable_turbines, 0), num(model.capacity_required_turbines, 0)), "LIMITED"
+  end
   if not model.capacity_ready then return "NOCH KEIN AUSSTOSS GEMESSEN", "LIMITED" end
-  -- Die gemeldete Zahl ist entweder vermessen (sauberer Betriebspunkt, auf
-  -- die Flotte hochgerechnet) oder nur der rohe Hoechstausstoss. Im zweiten
-  -- Fall teilt MASTER gegen eine zu kleine Zahl auf -- das gehoert sichtbar.
+  -- Die Notbremse hat gegriffen: der Messpunkt wurde nie erreicht, es gilt
+  -- nur der rohe Hoechstausstoss. MASTER teilt dann gegen eine zu kleine
+  -- Zahl auf -- das gehoert sichtbar.
   if tostring(model.capacity_source or "") == "OBSERVED" then
     return "LEISTUNG NUR GESCHAETZT", "LIMITED"
   end
@@ -90,7 +91,10 @@ local function page_header(mon, model, title, page, icon)
   local w = ({ mon.getSize() })[1]
   if w >= 40 then
     mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), master_key(model))
-    mux.status_dot(mon, math.floor(w * 0.35), 3, model.capacity_ready and "CAP READY" or "KEIN AUSSTOSS", capacity_key(model))
+    mux.status_dot(mon, math.floor(w * 0.35), 3,
+      model.capacity_ready and "CAP READY"
+        or (tostring(model.capacity_source or "") == "LEARNING" and "EINLERNEN" or "KEIN AUSSTOSS"),
+      capacity_key(model))
     mux.status_dot(mon, math.floor(w * 0.68), 3, tostring(model.assignment_state or "-"):upper(), model.assignment_state == "active" and "OK" or "LIMITED")
   end
   return mon.getSize()
@@ -335,7 +339,9 @@ function M.render_diagnostics(mon, model)
   mux.data_row(mon, 2, 15, w - 3, { label = "TARGET STEAM", value = short(model.target_steam), status = "text", icon = "flow" })
 
   section_arrow(mon, 2, 17, w - 3, "SYSTEM", capacity_key(model), "storage")
-  mux.data_row(mon, 2, 19, w - 3, { label = "CAPACITY", value = (model.capacity_ready and "READY " or "KEIN AUSSTOSS ") .. short(model.capacity_max, "RF/t"), status = capacity_key(model), icon = "storage" })
+  mux.data_row(mon, 2, 19, w - 3, { label = "CAPACITY", value = (model.capacity_ready and "READY "
+    or (tostring(model.capacity_source or "") == "LEARNING" and "EINLERNEN " or "KEIN AUSSTOSS "))
+    .. short(model.capacity_max, "RF/t"), status = capacity_key(model), icon = "storage" })
   mux.data_row(mon, 2, 20, w - 3, { label = "RETRIES", value = tostring(retries), status = retries > 0 and "LIMITED" or "OK", icon = "network" })
   mux.data_row(mon, 2, 21, w - 3, { label = "QUEUE DROP / DEDUP", value = tostring(queue_dropped) .. " / " .. tostring(dedupe_hits), status = queue_dropped > 0 and "WARNING" or "OK", icon = "network" })
   mux.data_row(mon, 2, 22, w - 3, { label = "LAST COMMAND", value = tostring(model.last_command or "none") .. " / " .. tostring(model.last_command_ts or "-"), status = "text", icon = "config" })

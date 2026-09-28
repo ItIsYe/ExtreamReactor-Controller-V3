@@ -165,13 +165,12 @@ do
   assert_eq(r.state, rt2_state.states.AUTONOM, 'SAFE -> AUTONOM once the condition clears')
 end
 
--- ═══ 3. Leistungsmeldung: gemessen, nicht geschaetzt ═══
+-- ═══ 3. Einlernen: 80 % im Zielband, dann hochgerechnet ═══
 do
-  -- Der Knoten meldet MASTER den hoechsten Gesamtausstoss, der wirklich
-  -- geflossen ist. Frueher lief dafuer ein gestaffelter Suchlauf mit einer
-  -- 80-%-Regel: waren nie genug Turbinen GLEICHZEITIG im Messfenster,
-  -- lieferte das Einlernen ueberhaupt keine Zahl, und der Knoten kam nicht
-  -- aus der Lernphase heraus.
+  -- Betreibervorgabe: mindestens 80 % der Flotte muessen gleichzeitig in
+  -- 900 +/- 15 RPM stehen. Aus DIESEN Turbinen wird auf die ganze Flotte
+  -- hochgerechnet -- die uebrigen bis zu 20 % haengen noch im Hochlauf,
+  -- ihren kleineren Ausstoss mitzumitteln zoege die Zahl nach unten.
   local o = orchestrator.new()
   local function fleet_at(n_running)
     local f = {}
@@ -182,29 +181,34 @@ do
     return f
   end
 
-  -- Solange noch nichts geliefert wurde, faehrt die ganze Flotte -- ohne
-  -- das kaeme von MASTER eine Vorgabe von 0 % und der Knoten stuende still.
+  -- Waehrend des Einlernens faehrt die ganze Flotte auf Zieldrehzahl.
   local r = o.tick({ now_ms = 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(0) })
-  assert_true(not r.capacity.ready, 'nothing has flowed yet')
+  assert_true(r.capacity.learning, 'der Knoten lernt ein')
+  assert_true(not r.capacity.ready, 'und meldet MASTER dabei nichts')
+  assert_eq(r.capacity.required_at_target, 4, '80 % von 5 Turbinen sind 4')
   for _, t in ipairs(r.turbines) do
     assert_eq(t.target_rpm, 900, 'jede Turbine bekommt das volle Ziel')
   end
 
-  -- Vier von fuenf liefern -> der Takt zaehlt sofort, es gibt keine
-  -- Mindestbeteiligung mehr.
-  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
-  assert_true(r.capacity.ready, 'ein wirklich geflossener Gesamtausstoss reicht')
-  assert_eq(r.capacity.reason, 'OBSERVED')
-  assert_eq(r.capacity.at_target, 4, 'vier Turbinen standen am Ziel')
-  -- Gemessen, NICHT hochgerechnet: 4 x 100. Die alte Formel trug
-  -- (400/4) * 5 = 500 ein -- also Leistung fuer eine fuenfte Turbine
-  -- erfunden, die in dem Moment gar nichts lieferte.
-  assert_eq(r.capacity.max_output, 400)
+  -- Drei von fuenf im Band = 60 % -- noch zu wenig.
+  r = o.tick({ now_ms = 2000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(3) })
+  assert_true(r.capacity.learning, '60 % reichen nicht')
+  assert_eq(r.capacity.at_target, 3)
 
-  -- Laeuft die Flotte spaeter voll, steigt die gemeldete Leistung -- ohne
-  -- Suchlauf, ohne Zustandswechsel.
-  r = o.tick({ now_ms = 3000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(5) })
-  assert_eq(r.capacity.max_output, 500, 'a fuller fleet simply raises the reported figure')
+  -- Vier von fuenf = genau 80 % -> der Messpunkt.
+  r = o.tick({ now_ms = 3000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(4) })
+  assert_true(not r.capacity.learning, 'bei 80 % ist das Einlernen durch')
+  assert_eq(r.capacity.reason, 'MEASURED')
+  assert_eq(r.capacity.at_target, 4)
+  -- (400 / 4) * 5 = 500: je Turbine 100, hochgerechnet auf die Flotte.
+  -- Gesummt wird NUR ueber die vier im Band -- die fuenfte lieferte 0 und
+  -- haette den Schnitt auf 80 gedrueckt.
+  assert_eq(r.capacity.max_output, 500,
+    'aus den Turbinen im Band wird auf die ganze Flotte hochgerechnet')
+
+  -- Danach steht die Zahl -- auch wenn spaeter alle fuenf liefern.
+  r = o.tick({ now_ms = 4000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet_at(5) })
+  assert_eq(r.capacity.max_output, 500, 'die Messung wird nicht laufend neu geschrieben')
 end
 
 -- ═══ 4. Reaktorregelung: nur Dampftank, in JEDEM Modus gleich ═══

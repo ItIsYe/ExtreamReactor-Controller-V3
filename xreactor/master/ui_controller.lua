@@ -262,11 +262,23 @@ function M.new(opts)
         -- Flotte hat bisher keinen Ausstoss geliefert, den der Knoten
         -- melden koennte. Das endet nicht von allein, es ist ein Befund.
         if not rt_node.capacity_ready then
-          rt_node.learning_note = string.format(
-            "KEIN AUSSTOSS: %d/%d Turbinen am Ziel",
-            rt_node.capacity_stable_turbines or 0,
-            rt_node.capacity_total_turbines or 0
-          )
+          -- Einlernen: der Knoten faehrt dabei seine ganze Flotte auf
+          -- Zieldrehzahl und ueberstimmt die MASTER-Vorgabe, bis 80 % im
+          -- Zielband stehen. capacity=0 heisst hier also nicht "kaputt",
+          -- sondern "misst gerade" -- rt_sync teilt ihm solange nichts zu.
+          if tostring(rt_data.capacity_source or "") == "LEARNING" then
+            rt_node.learning_note = string.format(
+              "EINLERNEN: %d/%d Turbinen im Zielband",
+              rt_node.capacity_stable_turbines or 0,
+              rt_data.capacity_required_turbines or 0
+            )
+          else
+            rt_node.learning_note = string.format(
+              "KEIN AUSSTOSS: %d/%d Turbinen am Ziel",
+              rt_node.capacity_stable_turbines or 0,
+              rt_node.capacity_total_turbines or 0
+            )
+          end
           rt.rt_learning = (rt.rt_learning or 0) + 1
         elseif rt_node.capacity_sustainable_turbines
             and rt_node.capacity_total_turbines > 0

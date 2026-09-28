@@ -147,8 +147,8 @@ function layout.status_badges(opts)
       -- "LEARN" hiess einmal "die Lernphase laeuft". Die gibt es nicht
       -- mehr (seit v769); ohne capacity_ready hat der Knoten schlicht
       -- nichts geliefert, was er melden koennte.
-      label = opts.capacity_ready and "CAP" or "0 RF/t",
-      short = opts.capacity_ready and "CAP" or "0RF",
+      label = opts.capacity_ready and "CAP" or "LERNT",
+      short = opts.capacity_ready and "CAP" or "LRN",
       status = opts.capacity_status or (opts.capacity_ready and "OK" or "LIMITED"),
       priority = 3,
     }

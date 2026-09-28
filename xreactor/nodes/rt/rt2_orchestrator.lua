@@ -26,15 +26,21 @@ M.ROTATE_INTERVAL_MS = 300000 -- 5 min: wie oft der AUS/PUFFER-Platz wandert
 
 -- Was der Knoten MASTER ueber seine Leistung meldet.
 --
--- Frueher lief dafuer eine eigene Lernphase (rt2_capacity): ein ZUSTAND im
--- Zustandsautomaten, den der Knoten erst verlassen durfte, wenn ein
--- gestaffelter Suchlauf fertig war. Der Zustand ist weg und bleibt weg --
--- dort blieb der Knoten wiederholt haengen, und solange er dort stand,
--- hoerte er nicht auf MASTER.
+-- ── Das Einlernen (Betreibervorgabe, 2026-09-28) ─────────────────────────
 --
--- Die MESSUNG ist gebliebenes Kerngeschaeft, denn ohne sie weiss MASTER
--- nicht, womit er arbeiten kann. Sie laeuft jetzt nebenher, waehrend der
--- Knoten ganz normal regelt.
+--   "im learning modus muessen 80% der turbinen im ziel rpm bereich sein
+--    +-15 rpm. das heisst die turbinen muessen auch unabhaengig vom master
+--    waehrend des lernens -- aber auch nur waehrend des lernens -- auf 900
+--    rpm gebracht werden. sobald das abgeschlossen ist geht dann wieder
+--    ganz normale regelung."
+--
+-- Das ist hier eins zu eins umgesetzt. Was NICHT zurueckkommt, ist der
+-- eigene ZUSTAND im Zustandsautomaten: der Knoten bleibt die ganze Zeit in
+-- MASTER bzw. AUTONOM, nimmt Kommandos an, meldet Status und loest
+-- Sicherheitsfaelle aus wie immer. Einzig die Leistungsvorgabe wird
+-- waehrend des Einlernens uebersteuert. Genau der alte Zusatzzustand war
+-- es, in dem die Node wiederholt haengenblieb -- gemessen wird schon, nur
+-- nicht mehr in einem Zustand, aus dem es keinen Rueckweg gab.
 --
 -- ── Welche Zahl MASTER braucht ───────────────────────────────────────────
 --
@@ -45,102 +51,102 @@ M.ROTATE_INTERVAL_MS = 300000 -- 5 min: wie oft der AUS/PUFFER-Platz wandert
 --
 -- Beide stimmen nur ueberein, wenn capacity_max die Leistung der GANZEN
 -- Flotte ist -- also das, was herauskaeme, wenn alle Turbinen liefen.
--- Meldet der Knoten stattdessen die Summe dessen, was GERADE laeuft, dann
--- ist MASTERs Aufteilung um genau den Faktor daneben, mit dem er den
--- Knoten gerade faehrt.
+-- Deshalb muss waehrend des Einlernens auch die ganze Flotte fahren: nur
+-- dort entsteht diese Zahl, und nur einmal muss sie entstehen.
 --
--- ── Wie gemessen wird ────────────────────────────────────────────────────
+-- ── Der Messpunkt ────────────────────────────────────────────────────────
 --
--- Ein Takt taugt als Messwert, wenn JEDE Turbine, die laufen soll, auch
--- wirklich an ihrem Ziel steht und gekuppelt ist. Dann -- und nur dann --
--- beschreibt der Ausstoss den Auslegungspunkt:
---
---     je Turbine = Summe Ausstoss / laufende Turbinen
+--     mindestens 80 % der Flotte innerhalb 900 +/- 15 RPM, gekuppelt
+--     je Turbine = Ausstoss DIESER Turbinen / ihre Anzahl
 --     Kapazitaet = je Turbine * GESAMTZAHL
 --
--- Das ist eine Hochrechnung, aber eine belastbare: sie entsteht aus einem
--- Betriebspunkt, an dem keine einzige laufende Turbine ihr Ziel verfehlt.
--- Die alte Formel rechnete dagegen aus den Turbinen hoch, die zufaellig
--- gerade am Ziel waren, WAEHREND andere es verfehlten -- und erfand damit
--- Leistung fuer Turbinen, die sie nachweislich nicht brachten.
+-- Gesummt wird nur ueber die Turbinen IM BAND. Die uebrigen bis zu 20 %
+-- haengen noch im Hochlauf; ihren kleineren Ausstoss mitzumitteln wuerde
+-- die Zahl nach unten ziehen und MASTER dauerhaft zu wenig zuteilen.
+M.LEARN_TOLERANCE_RPM = 15      -- Zielband beim Einlernen (Vorgabe)
+M.LEARN_MIN_FRACTION  = 0.8     -- so viel der Flotte muss gleichzeitig drin stehen
 --
--- Behalten wird der Hoechstwert: ein Takt mitten im Hochlauf soll die Zahl
--- nicht nach unten ziehen. Eine geaenderte Turbinenzahl setzt sie zurueck
--- -- eine abgebaute Turbine darf nicht in einer Zahl weiterleben, die
--- MASTER fuer belastbar haelt.
---
--- ── Und der Rueckfallwert ────────────────────────────────────────────────
---
--- Eine dampfarme Anlage erreicht diesen sauberen Betriebspunkt womoeglich
--- nie. Ohne Rueckfall stuende capacity_max dort fuer immer auf 0, MASTER
--- wuerde den Knoten nie zuteilen -- und genau das war die Sackgasse der
--- alten Lernphase. Deshalb gilt ersatzweise der hoechste Gesamtausstoss,
--- der ueberhaupt schon geflossen ist. Der ist eher zu klein, aber nie 0,
--- und reason sagt, welcher der beiden Werte gerade gilt.
-M.MEASURED = "MEASURED"   -- sauberer Betriebspunkt, auf die Flotte hochgerechnet
-M.OBSERVED = "OBSERVED"   -- Rueckfall: roher Hoechstausstoss
+-- Und die Notbremse: eine dampfarme Anlage bringt vielleicht NIE 80 % ins
+-- Band. Ohne Grenze liefe das Einlernen dann ewig, der Knoten wuerde MASTER
+-- dauerhaft uebersteuern und die ganze Flotte fahren -- das ist genau die
+-- Sackgasse, in der die alte Lernphase steckenblieb. Nach dieser Zeit gilt
+-- deshalb der hoechste bis dahin geflossene Gesamtausstoss als Ergebnis,
+-- das Einlernen endet, und die normale Regelung uebernimmt. Der Knoten
+-- sagt das im Log, weil die Zahl dann zu klein ist.
+M.LEARN_TIMEOUT_MS    = 180000  -- 3 min
+
+M.LEARNING = "LEARNING"   -- laeuft gerade, MASTER-Vorgabe ist uebersteuert
+M.MEASURED = "MEASURED"   -- Messpunkt erreicht, auf die Flotte hochgerechnet
+M.OBSERVED = "OBSERVED"   -- Notbremse: nur der rohe Hoechstausstoss
 
 function M.new_output_state()
   return {
-    max_output = 0, measured = 0, observed = 0,
-    at_target = 0, running = 0, total_turbines = 0,
+    max_output = 0, observed = 0,
+    at_target = 0, required_at_target = 0, total_turbines = 0,
+    learning = true, learn_started_ms = nil,
     ready = false, reason = "NO_TURBINES",
   }
 end
 
 -- turbines: die Messwerte dieses Takts
--- results:  die Entscheidungen dieses Takts (gleiche Reihenfolge) -- daraus
---           kommt das Ziel je Turbine, also wer ueberhaupt laufen soll
-local function measure_capacity(previous, turbines, results)
-  local sum, count, running, at_target = 0, 0, 0, 0
-  for index, t in ipairs(turbines or {}) do
+local function measure_capacity(previous, turbines, now_ms)
+  local count, at_target, sum_at_target, sum_all = 0, 0, 0, 0
+  for _, t in ipairs(turbines or {}) do
     count = count + 1
-    sum = sum + (tonumber(t.energy) or 0)
-    local target = results[index] and tonumber(results[index].target_rpm) or 0
-    if target > 0 then
-      running = running + 1
-      local rpm = tonumber(t.rpm)
-      -- Gekuppelt MUSS sie sein: eine ungekuppelte Turbine dreht zwar, aber
-      -- sie liefert nichts. Ihr Ausstoss beschriebe den Auslegungspunkt nicht.
-      if rpm and t.coil_engaged == true
-          and math.abs(rpm - target) <= rt2_turbine.RPM_BAND then
-        at_target = at_target + 1
-      end
+    local energy = tonumber(t.energy) or 0
+    sum_all = sum_all + energy
+    local rpm = tonumber(t.rpm)
+    -- Gekuppelt MUSS sie sein: eine ungekuppelte Turbine dreht zwar, liefert
+    -- aber nichts. Ihr Ausstoss beschriebe den Auslegungspunkt nicht.
+    if rpm and t.coil_engaged == true
+        and math.abs(rpm - rt2_turbine.FULL_TARGET_RPM) <= M.LEARN_TOLERANCE_RPM then
+      at_target = at_target + 1
+      sum_at_target = sum_at_target + energy
     end
   end
 
+  -- Eine geaenderte Turbinenzahl ist eine andere Anlage: neu einlernen.
   local same_fleet = count == (tonumber(previous and previous.total_turbines) or 0)
-  local measured = same_fleet and (tonumber(previous and previous.measured) or 0) or 0
-  local observed = same_fleet and (tonumber(previous and previous.observed) or 0) or 0
+  local learning   = (not same_fleet) or (previous == nil) or previous.learning ~= false
+  local max_output = same_fleet and (tonumber(previous and previous.max_output) or 0) or 0
+  local observed   = same_fleet and (tonumber(previous and previous.observed) or 0) or 0
+  local started    = same_fleet and previous and previous.learn_started_ms or nil
+  if sum_all > observed then observed = sum_all end
 
-  if sum > observed then observed = sum end
+  local required = count > 0 and math.ceil(count * M.LEARN_MIN_FRACTION) or 0
+  local reason = learning and M.LEARNING
+    or (max_output > 0 and previous and previous.reason) or M.OBSERVED
 
-  -- Der saubere Betriebspunkt: alles, was laufen soll, laeuft auch.
-  if running > 0 and at_target == running and sum > 0 then
-    local claim = (sum / running) * count
-    if claim > measured then measured = claim end
+  if learning and count > 0 then
+    if started == nil then started = now_ms end
+    if at_target >= required and sum_at_target > 0 then
+      -- Der Messpunkt. Hochgerechnet auf die ganze Flotte.
+      max_output = (sum_at_target / at_target) * count
+      learning, reason = false, M.MEASURED
+    elseif now_ms and started and (now_ms - started) >= M.LEARN_TIMEOUT_MS then
+      -- Notbremse: nimm, was geflossen ist, und lass die Regelung arbeiten.
+      max_output = observed
+      learning, reason = false, M.OBSERVED
+    end
   end
 
-  local max_output, reason
-  if measured > 0 then
-    max_output, reason = measured, M.MEASURED
-  else
-    max_output, reason = observed, M.OBSERVED
-  end
   if count == 0 then
     reason = "NO_TURBINES"
-  elseif max_output <= 0 then
-    reason = "NO_OUTPUT"
   end
 
   return {
     max_output = max_output,
-    measured = measured,
     observed = observed,
     at_target = at_target,
-    running = running,
+    required_at_target = required,
     total_turbines = count,
-    ready = max_output > 0,
+    learning = learning,
+    learn_started_ms = started,
+    -- MASTER darf erst rechnen, wenn das Einlernen durch ist: eine Zahl aus
+    -- dem Hochlauf waere beliebig. master/rt_sync.lua behandelt capacity=0
+    -- ausdruecklich ("Node wird nicht zugeteilt bis sein echter Wert
+    -- vorliegt") -- waehrend des Einlernens faehrt die Flotte ohnehin voll.
+    ready = (not learning) and max_output > 0,
     reason = reason,
   }
 end
@@ -335,21 +341,21 @@ function M.new(opts)
     -- Knotens. Ein ausgeloester Einzelreaktor aendert daran nichts.
     local count = #(input.turbines or {})
 
-    -- Solange der Knoten noch keine Leistung gemeldet hat, gilt die
-    -- Vorgabe von MASTER NICHT -- die ganze Flotte laeuft.
+    -- WAEHREND DES EINLERNENS gilt die Vorgabe von MASTER nicht: die ganze
+    -- Flotte faehrt auf die feste Zieldrehzahl (Betreibervorgabe, siehe
+    -- oben). Nur so entsteht der Messpunkt -- und nur so kommt der Knoten
+    -- ueberhaupt aus dem Stand heraus: MASTER teilt seinen Bedarf gegen
+    -- capacity_max auf, das ist beim Start 0, also kaeme eine Vorgabe von
+    -- 0 % zurueck, also liefe keine Turbine, also floesse nichts, also
+    -- bliebe capacity_max 0.
     --
-    -- Sonst schliesst sich ein Kreis, aus dem der Knoten nicht mehr
-    -- herauskommt: MASTER teilt seinen Bedarf gegen capacity_max auf, das
-    -- ist beim Start 0, also kommt eine Vorgabe von 0 % an, also laeuft
-    -- keine Turbine, also fliesst kein Ausstoss, also bleibt capacity_max
-    -- 0. Frueher hielt die Lernphase diesen Kreis auf; die ist weg, also
-    -- steht die Bedingung jetzt hier -- an der einen Stelle, die sie
-    -- braucht.
+    -- Danach -- und das ist die zweite Haelfte der Vorgabe -- gilt wieder
+    -- ganz normale Regelung nach MASTERs Prozentsatz.
     --
     -- Gemessen wird am ENDE des Takts (siehe unten), also gilt hier die
     -- Messung des vorigen -- ein Takt Verzug, der nichts ausmacht.
     local percent = input.master_percent or self.master_percent
-    if not self.capacity.ready then percent = 100 end
+    if self.capacity.learning then percent = 100 end
 
     local turbine_results = {}
     for index, t in ipairs(input.turbines or {}) do
@@ -413,13 +419,10 @@ function M.new(opts)
       }
     end
 
-    -- Jetzt erst messen: dafuer braucht es die Ziele dieses Takts, denn nur
-    -- eine Turbine, die laufen SOLL, darf ueber den Auslegungspunkt
-    -- mitentscheiden. Waehrend SAFE nicht -- der Durchfluss ist dort
-    -- erzwungen 0, was die Flotte dann liefert, beschreibt ihre Leistung
-    -- nicht.
+    -- Waehrend SAFE wird nicht gemessen: der Durchfluss ist dort erzwungen
+    -- 0, was die Flotte dann liefert, beschreibt ihre Leistung nicht.
     if state ~= rt2_state.states.SAFE then
-      self.capacity = measure_capacity(self.capacity, input.turbines, turbine_results)
+      self.capacity = measure_capacity(self.capacity, input.turbines, now_ms)
     end
 
     local first = reactor_decisions[1]

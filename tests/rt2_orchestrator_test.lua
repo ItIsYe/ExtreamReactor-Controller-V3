@@ -40,42 +40,42 @@ do
   end
 end
 
--- Die gemeldete Leistung wird nur noch mitgeschrieben: der hoechste
--- Gesamtausstoss, der wirklich geflossen ist.
+-- Das Einlernen: solange es laeuft, gibt es keine Zahl fuer MASTER.
 do
   local o = orchestrator.new()
   local result = o.tick({ now_ms = 1000, hardware_ready = true,
     turbines = { turbine('T1', 100, 0, false), turbine('T2', 100, 0, false) }, reactor = {} })
-  assert_true(not result.capacity.ready, 'nothing has been produced yet')
-  assert_eq(result.capacity.reason, 'NO_OUTPUT')
+  assert_true(not result.capacity.ready, 'waehrend des Einlernens meldet der Knoten nichts')
+  assert_eq(result.capacity.reason, 'LEARNING')
+  assert_true(result.capacity.learning)
 
   result = o.tick({ now_ms = 2000, hardware_ready = true,
     turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 120, true) }, reactor = {} })
-  assert_true(result.capacity.ready, 'a single flowing tick is enough -- it is a measurement, not an estimate')
+  assert_true(result.capacity.ready, 'beide im Zielband -> das Einlernen ist durch')
   assert_eq(result.capacity.max_output, 220,
-    'zwei Turbinen am Ziel, 220 RF/t -- auf eine Flotte von zwei hochgerechnet bleibt es 220')
-  assert_eq(result.capacity.reason, 'MEASURED', 'und es ist eine echte Messung, kein Rueckfallwert')
+    'zwei Turbinen im Band, 220 RF/t -- auf eine Flotte von zwei hochgerechnet bleibt es 220')
+  assert_eq(result.capacity.reason, 'MEASURED')
   assert_eq(result.capacity.at_target, 2)
-  assert_eq(result.capacity.running, 2)
+  assert_true(not result.capacity.learning, 'und danach laeuft die normale Regelung')
 
-  -- Ein schwaecherer Takt darf den Hoechstwert nicht senken.
+  -- Die gemessene Zahl steht. Ein schwaecherer Takt aendert sie nicht.
   result = o.tick({ now_ms = 3000, hardware_ready = true,
     turbines = { turbine('T1', 900, 50, true), turbine('T2', 900, 50, true) }, reactor = {} })
-  assert_eq(result.capacity.max_output, 220, 'the peak holds')
+  assert_eq(result.capacity.max_output, 220, 'die Messung steht')
 
-  -- Eine geaenderte Turbinenzahl setzt ihn dagegen zurueck: ein abgebautes
-  -- Geraet darf nicht in einer Zahl weiterleben, die MASTER fuer belastbar
-  -- haelt.
+  -- Eine geaenderte Turbinenzahl ist eine andere Anlage: neu einlernen.
   result = o.tick({ now_ms = 4000, hardware_ready = true,
     turbines = { turbine('T1', 900, 50, true) }, reactor = {} })
-  assert_eq(result.capacity.max_output, 50, 'a changed fleet size resets the peak')
+  assert_true(result.capacity.learning ~= true or result.capacity.total_turbines == 1,
+    'eine geaenderte Flottengroesse wirft die alte Messung weg')
+  assert_eq(result.capacity.max_output, 50, 'und misst neu')
 end
 
 -- Regression gegen einen Stillstand, aus dem der Knoten nicht mehr
 -- herauskommt: MASTER teilt seinen Bedarf gegen capacity_max auf. Solange
--- der Knoten noch nichts geliefert hat, ist das 0, also kaeme eine Vorgabe
--- von 0 % zurueck -- keine Turbine laeuft, kein Ausstoss, capacity_max
--- bleibt 0. Frueher hielt die Lernphase diesen Kreis auf.
+-- der Knoten noch nichts gemessen hat, ist das 0, also kaeme eine Vorgabe
+-- von 0 % zurueck -- keine Turbine laeuft, kein Ausstoss, nichts zu messen.
+-- Genau dagegen uebersteuert das Einlernen die MASTER-Vorgabe.
 do
   local o = orchestrator.new()
   o.note_master_seen(0)
@@ -85,9 +85,9 @@ do
     reactor = {},
   })
   assert_eq(result.state, rt2_state.states.MASTER)
-  assert_eq(result.effective_percent, 100, 'without a reported output the MASTER percentage does not apply yet')
+  assert_eq(result.effective_percent, 100, 'waehrend des Einlernens gilt die MASTER-Vorgabe nicht')
   for _, t in ipairs(result.turbines) do
-    assert_eq(t.target_rpm, 900, 'the whole fleet runs until the node has something to report')
+    assert_eq(t.target_rpm, 900, 'die ganze Flotte faehrt auf Zieldrehzahl')
   end
 
   -- Sobald Leistung gemeldet ist, gilt die Vorgabe. Gemessen wird am ENDE
@@ -98,7 +98,7 @@ do
     turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) },
     reactor = {},
   })
-  assert_eq(result.effective_percent, 100, 'im Messtakt selbst gilt noch die alte Lage')
+  assert_eq(result.effective_percent, 100, 'im Messtakt selbst gilt noch das Einlernen')
   assert_true(result.capacity.ready, 'aber am Ende dieses Takts steht die Messung')
 
   result = o.tick({

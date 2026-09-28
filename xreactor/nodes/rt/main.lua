@@ -450,6 +450,9 @@ local function build_status_payload(status_level)
   if v2.capacity_at_target then payload.capacity_stable_turbines = v2.capacity_at_target end
   if v2.capacity_total_turbines then payload.capacity_total_turbines = v2.capacity_total_turbines end
   if v2.capacity_reason then payload.capacity_source = v2.capacity_reason end
+  if v2.capacity_required_turbines then
+    payload.capacity_required_turbines = v2.capacity_required_turbines
+  end
   writeback_ctx()
   return payload
 end
@@ -502,6 +505,7 @@ local function update_monitor()
     at_target     = v2.capacity_at_target or 0,
     total_turbines = v2.capacity_total_turbines or 0,
     reason        = v2.capacity_reason or v2.capacity_source or "UNKNOWN",
+    required_turbines = v2.capacity_required_turbines or 0,
   }
   monitor_ctx.node_state    = v2.node_state
   monitor_ctx.current_state = v2.mode

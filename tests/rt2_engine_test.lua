@@ -100,7 +100,7 @@ assert_eq(fields.turbines[1].id, 'T1')
 -- hoechste Gesamtausstoss, der wirklich geflossen ist. Sie muss durch
 -- status_fields() sichtbar sein -- MASTER teilt seinen Bedarf dagegen auf.
 do
-  assert_eq(fields.capacity_ready, true, 'a producing fleet reports a usable capacity')
+  assert_eq(fields.capacity_ready, true, 'eine Flotte im Zielband hat sich eingelernt')
   assert_eq(fields.capacity_max, 100, 'exactly the output that flowed -- no margin, no extrapolation')
   assert_eq(fields.capacity_total_turbines, 1)
   assert_eq(fields.capacity_at_target, 1)
@@ -128,9 +128,10 @@ do
   rt2_engine.init({})
   rt2_engine.tick(idle_ctx)
   local idle_fields = rt2_engine.status_fields()
-  assert_eq(idle_fields.capacity_ready, false, 'a fleet that has produced nothing must not report a capacity')
+  assert_eq(idle_fields.capacity_ready, false, 'waehrend des Einlernens meldet der Knoten nichts')
   assert_eq(idle_fields.capacity_max, 0)
-  assert_eq(idle_fields.capacity_reason, 'NO_OUTPUT', 'and must say why')
+  assert_eq(idle_fields.capacity_reason, 'LEARNING', 'und sagt, dass er einlernt')
+  assert_eq(idle_fields.capacity_learning, true)
 end
 
 -- handle_command() must reach the underlying orchestrator and its
