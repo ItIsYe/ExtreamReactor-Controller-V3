@@ -24,8 +24,10 @@ local M = {}
 
 local rt2_state = require('nodes.rt.rt2_state')
 
-local function ok(effects)
-  return { ok = true, effects = effects }
+local function ok(effects, extra)
+  local result = { ok = true, effects = effects }
+  for k, v in pairs(extra or {}) do result[k] = v end
+  return result
 end
 
 local function fail(error_msg, reason_code)
@@ -73,8 +75,34 @@ end
 -- every tick in rt2_engine, so an operator cannot "acknowledge away" a
 -- reactor that is genuinely still over its limit -- it simply trips again
 -- on the next tick.
-local function clear_trip()
-  return ok({ clear_safety_trip = true })
+-- Die Quittung MUSS die module_id zurueckgeben, die MASTER geschickt hat.
+--
+-- MASTERs Startup-Sequencer (master/startup_sequencer.lua) ordnet das
+-- ACK ueber genau dieses Feld zu:
+--     sequencer:notify_ack(id, result.module_id)
+--     ... if self.active.module_id == module_id then -> WAITING_STABLE
+-- Fehlt es, vergleicht er gegen nil, findet keine Uebereinstimmung und
+-- bleibt in WAITING_ACK stehen, bis nach 60 s sein Timeout greift --
+-- obwohl die Node das Kommando angenommen hat. Im Feld gemessen:
+-- "Timeout stage=WAITING_ACK elapsed=60.2s", Warteschlange 51/52. Danach
+-- verwirft der Sequencer die ganze Warteschlange, schickt MODE=LIMITED
+-- (oder EMERGENCY) und meldet einen Alarm.
+--
+-- v1s command_handler.lua gab `module_id = module.id` mit; beim Umstieg
+-- auf v2 ging das Feld verloren, weil dieser Handler nur ok/error/
+-- reason_code kannte. Zurueckgegeben wird bewusst die EMPFANGENE id
+-- (Echo) statt einer selbst gebildeten: verglichen wird gegen das, was
+-- MASTER gesendet hat, also kann ein Echo per Konstruktion nicht daneben
+-- liegen.
+--
+-- Inhaltlich bleibt es dabei, dass es hier nichts zu staffeln gibt: der
+-- Regler faehrt ohne Startup-Sequenz hoch. Die Quittung sagt "angenommen",
+-- und der Modulzustand, auf den MASTER danach wartet, kommt aus
+-- rt2_projection.lua.
+local function clear_trip(command)
+  local value = type(command) == "table" and command.value or nil
+  return ok({ clear_safety_trip = true },
+    { module_id = type(value) == "table" and value.module_id or nil })
 end
 handlers.REQUEST_STARTUP_MODULE = clear_trip
 handlers.STARTUP_STAGE = clear_trip

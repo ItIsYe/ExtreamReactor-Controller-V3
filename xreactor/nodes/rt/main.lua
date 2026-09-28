@@ -583,7 +583,10 @@ local function handle_command_rt2(message)
   log(result.ok == false and "WARN" or "INFO", ("v2 command target=%s ok=%s%s"):format(
     tostring(command.target), tostring(result.ok),
     result.ok == false and (" error=" .. tostring(result.error) .. " reason=" .. tostring(result.reason_code)) or ""))
-  return { ok = result.ok, error = result.error, reason_code = result.reason_code }
+  -- module_id gehoert in die Quittung: MASTERs Startup-Sequencer ordnet das
+  -- ACK ueber dieses Feld zu (siehe rt2_command_handler.lua's clear_trip).
+  return { ok = result.ok, error = result.error, reason_code = result.reason_code,
+           module_id = result.module_id }
 end
 
 -- ── Init ─────────────────────────────────────────────────────────────────────
