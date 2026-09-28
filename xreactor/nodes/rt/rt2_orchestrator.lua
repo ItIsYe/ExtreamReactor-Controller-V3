@@ -26,54 +26,121 @@ M.ROTATE_INTERVAL_MS = 300000 -- 5 min: wie oft der AUS/PUFFER-Platz wandert
 
 -- Was der Knoten MASTER ueber seine Leistung meldet.
 --
--- Frueher lief dafuer eine eigene Lernphase (rt2_capacity): ein Suchlauf,
--- der Turbinen stufenweise freigab, auf einen tragenden Betriebspunkt
--- wartete, einen Hoechstwert mit Sicherheitsabschlag bildete und ihn in
--- einer eigenen Datei ablegte -- mit einem eigenen Zustand im
--- Zustandsautomaten davor und mehreren Wegen, auf denen er haengenblieb.
+-- Frueher lief dafuer eine eigene Lernphase (rt2_capacity): ein ZUSTAND im
+-- Zustandsautomaten, den der Knoten erst verlassen durfte, wenn ein
+-- gestaffelter Suchlauf fertig war. Der Zustand ist weg und bleibt weg --
+-- dort blieb der Knoten wiederholt haengen, und solange er dort stand,
+-- hoerte er nicht auf MASTER.
 --
--- Gemessen wird jetzt nur noch MITGESCHRIEBEN: der hoechste Gesamtausstoss,
--- den diese Flotte in diesem Lauf schon geliefert hat. Das ist immer eine
--- Zahl, die wirklich geflossen ist -- sie verspricht MASTER also nie zu
--- viel. Zu WENIG darf sie behaupten, und das korrigiert sich von selbst:
--- teilt MASTER gegen eine zu kleine Kapazitaet auf, fordert er einen
--- hoeheren Prozentsatz, es laufen mehr Turbinen, der Ausstoss steigt --
--- und damit der mitgeschriebene Hoechstwert.
+-- Die MESSUNG ist gebliebenes Kerngeschaeft, denn ohne sie weiss MASTER
+-- nicht, womit er arbeiten kann. Sie laeuft jetzt nebenher, waehrend der
+-- Knoten ganz normal regelt.
 --
--- Der Hoechstwert verfaellt nicht von allein, aber eine geaenderte
--- Turbinenzahl setzt ihn zurueck: eine abgebaute Turbine darf nicht in
--- einer Zahl weiterleben, die MASTER fuer belastbar haelt.
+-- ── Welche Zahl MASTER braucht ───────────────────────────────────────────
+--
+-- MASTER rechnet mit dem Prozentsatz als Anteil der LEISTUNG:
+--     assigned_power = capacity * pct / 100      (master/rt_sync.lua)
+-- Der Knoten setzt denselben Prozentsatz als Anteil der TURBINEN um:
+--     running_count  = pct / 100 * turbine_count (rt2_turbine.lua)
+--
+-- Beide stimmen nur ueberein, wenn capacity_max die Leistung der GANZEN
+-- Flotte ist -- also das, was herauskaeme, wenn alle Turbinen liefen.
+-- Meldet der Knoten stattdessen die Summe dessen, was GERADE laeuft, dann
+-- ist MASTERs Aufteilung um genau den Faktor daneben, mit dem er den
+-- Knoten gerade faehrt.
+--
+-- ── Wie gemessen wird ────────────────────────────────────────────────────
+--
+-- Ein Takt taugt als Messwert, wenn JEDE Turbine, die laufen soll, auch
+-- wirklich an ihrem Ziel steht und gekuppelt ist. Dann -- und nur dann --
+-- beschreibt der Ausstoss den Auslegungspunkt:
+--
+--     je Turbine = Summe Ausstoss / laufende Turbinen
+--     Kapazitaet = je Turbine * GESAMTZAHL
+--
+-- Das ist eine Hochrechnung, aber eine belastbare: sie entsteht aus einem
+-- Betriebspunkt, an dem keine einzige laufende Turbine ihr Ziel verfehlt.
+-- Die alte Formel rechnete dagegen aus den Turbinen hoch, die zufaellig
+-- gerade am Ziel waren, WAEHREND andere es verfehlten -- und erfand damit
+-- Leistung fuer Turbinen, die sie nachweislich nicht brachten.
+--
+-- Behalten wird der Hoechstwert: ein Takt mitten im Hochlauf soll die Zahl
+-- nicht nach unten ziehen. Eine geaenderte Turbinenzahl setzt sie zurueck
+-- -- eine abgebaute Turbine darf nicht in einer Zahl weiterleben, die
+-- MASTER fuer belastbar haelt.
+--
+-- ── Und der Rueckfallwert ────────────────────────────────────────────────
+--
+-- Eine dampfarme Anlage erreicht diesen sauberen Betriebspunkt womoeglich
+-- nie. Ohne Rueckfall stuende capacity_max dort fuer immer auf 0, MASTER
+-- wuerde den Knoten nie zuteilen -- und genau das war die Sackgasse der
+-- alten Lernphase. Deshalb gilt ersatzweise der hoechste Gesamtausstoss,
+-- der ueberhaupt schon geflossen ist. Der ist eher zu klein, aber nie 0,
+-- und reason sagt, welcher der beiden Werte gerade gilt.
+M.MEASURED = "MEASURED"   -- sauberer Betriebspunkt, auf die Flotte hochgerechnet
+M.OBSERVED = "OBSERVED"   -- Rueckfall: roher Hoechstausstoss
+
 function M.new_output_state()
-  return { max_output = 0, at_target = 0, total_turbines = 0, ready = false, reason = "NO_TURBINES" }
+  return {
+    max_output = 0, measured = 0, observed = 0,
+    at_target = 0, running = 0, total_turbines = 0,
+    ready = false, reason = "NO_TURBINES",
+  }
 end
 
-local function observe_output(previous, turbines)
-  local sum, at_target, count = 0, 0, 0
-  for _, t in ipairs(turbines or {}) do
+-- turbines: die Messwerte dieses Takts
+-- results:  die Entscheidungen dieses Takts (gleiche Reihenfolge) -- daraus
+--           kommt das Ziel je Turbine, also wer ueberhaupt laufen soll
+local function measure_capacity(previous, turbines, results)
+  local sum, count, running, at_target = 0, 0, 0, 0
+  for index, t in ipairs(turbines or {}) do
     count = count + 1
     sum = sum + (tonumber(t.energy) or 0)
-    local rpm = tonumber(t.rpm)
-    if rpm and math.abs(rpm - rt2_turbine.FULL_TARGET_RPM) <= rt2_turbine.RPM_BAND then
-      at_target = at_target + 1
+    local target = results[index] and tonumber(results[index].target_rpm) or 0
+    if target > 0 then
+      running = running + 1
+      local rpm = tonumber(t.rpm)
+      -- Gekuppelt MUSS sie sein: eine ungekuppelte Turbine dreht zwar, aber
+      -- sie liefert nichts. Ihr Ausstoss beschriebe den Auslegungspunkt nicht.
+      if rpm and t.coil_engaged == true
+          and math.abs(rpm - target) <= rt2_turbine.RPM_BAND then
+        at_target = at_target + 1
+      end
     end
   end
 
-  local peak = tonumber(previous and previous.max_output) or 0
-  if count ~= (tonumber(previous and previous.total_turbines) or 0) then peak = 0 end
-  if sum > peak then peak = sum end
+  local same_fleet = count == (tonumber(previous and previous.total_turbines) or 0)
+  local measured = same_fleet and (tonumber(previous and previous.measured) or 0) or 0
+  local observed = same_fleet and (tonumber(previous and previous.observed) or 0) or 0
 
-  local reason = "OBSERVED"
+  if sum > observed then observed = sum end
+
+  -- Der saubere Betriebspunkt: alles, was laufen soll, laeuft auch.
+  if running > 0 and at_target == running and sum > 0 then
+    local claim = (sum / running) * count
+    if claim > measured then measured = claim end
+  end
+
+  local max_output, reason
+  if measured > 0 then
+    max_output, reason = measured, M.MEASURED
+  else
+    max_output, reason = observed, M.OBSERVED
+  end
   if count == 0 then
     reason = "NO_TURBINES"
-  elseif peak <= 0 then
+  elseif max_output <= 0 then
     reason = "NO_OUTPUT"
   end
 
   return {
-    max_output = peak,
+    max_output = max_output,
+    measured = measured,
+    observed = observed,
     at_target = at_target,
+    running = running,
     total_turbines = count,
-    ready = peak > 0,
+    ready = max_output > 0,
     reason = reason,
   }
 end
@@ -256,13 +323,6 @@ function M.new(opts)
       safety_tripped   = all_tripped or self.manual_safety_trip,
     })
 
-    -- Leistungsmeldung mitschreiben. Waehrend SAFE nicht: der Durchfluss
-    -- ist dort erzwungen 0, was die Flotte dann liefert, beschreibt ihre
-    -- Leistung nicht.
-    if state ~= rt2_state.states.SAFE then
-      self.capacity = observe_output(self.capacity, input.turbines)
-    end
-
     local reactor_decisions = {}
     for index, unit in ipairs(self.reactors) do
       local ri = reactor_inputs[index] or {}
@@ -285,6 +345,9 @@ function M.new(opts)
     -- 0. Frueher hielt die Lernphase diesen Kreis auf; die ist weg, also
     -- steht die Bedingung jetzt hier -- an der einen Stelle, die sie
     -- braucht.
+    --
+    -- Gemessen wird am ENDE des Takts (siehe unten), also gilt hier die
+    -- Messung des vorigen -- ein Takt Verzug, der nichts ausmacht.
     local percent = input.master_percent or self.master_percent
     if not self.capacity.ready then percent = 100 end
 
@@ -348,6 +411,15 @@ function M.new(opts)
         rpm = t.rpm,
         coil_engaged = t.coil_engaged == true,
       }
+    end
+
+    -- Jetzt erst messen: dafuer braucht es die Ziele dieses Takts, denn nur
+    -- eine Turbine, die laufen SOLL, darf ueber den Auslegungspunkt
+    -- mitentscheiden. Waehrend SAFE nicht -- der Durchfluss ist dort
+    -- erzwungen 0, was die Flotte dann liefert, beschreibt ihre Leistung
+    -- nicht.
+    if state ~= rt2_state.states.SAFE then
+      self.capacity = measure_capacity(self.capacity, input.turbines, turbine_results)
     end
 
     local first = reactor_decisions[1]

@@ -67,6 +67,12 @@ local function rt_status(model)
   -- ist keine Phase, die von allein endet, sondern ein Befund: entweder
   -- laufen die Turbinen noch hoch, oder sie bekommen keinen Dampf.
   if not model.capacity_ready then return "NOCH KEIN AUSSTOSS GEMESSEN", "LIMITED" end
+  -- Die gemeldete Zahl ist entweder vermessen (sauberer Betriebspunkt, auf
+  -- die Flotte hochgerechnet) oder nur der rohe Hoechstausstoss. Im zweiten
+  -- Fall teilt MASTER gegen eine zu kleine Zahl auf -- das gehoert sichtbar.
+  if tostring(model.capacity_source or "") == "OBSERVED" then
+    return "LEISTUNG NUR GESCHAETZT", "LIMITED"
+  end
   local s = snapshot(model)
   local target = num(model.target_power, num(s.target_power, 0))
   local actual = num(s.actual_output, 0)

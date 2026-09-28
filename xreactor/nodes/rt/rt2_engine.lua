@@ -167,8 +167,8 @@ function M.tick(ctx)
 
   -- Die gemeldete Leistung sichtbar machen, wenn sie sich aendert.
   local cap = result.capacity
-  local diag = string.format("%s|%d|%d", tostring(cap.reason),
-    math.floor((cap.max_output or 0) / 1000), cap.total_turbines or 0)
+  local diag = string.format("%s|%d|%d|%d", tostring(cap.reason),
+    math.floor((cap.max_output or 0) / 1000), cap.total_turbines or 0, cap.at_target or 0)
   if diag ~= last_logged_capacity_diag then
     last_logged_capacity_diag = diag
     local msg
@@ -177,9 +177,21 @@ function M.tick(ctx)
     elseif cap.reason == "NO_OUTPUT" then
       msg = string.format("v2 %d Turbine(n) gefunden, noch kein Ausstoss --"
         .. " bis dahin laeuft die ganze Flotte", cap.total_turbines or 0)
+    elseif cap.reason == orchestrator.MEASURED then
+      msg = string.format(
+        "v2 Anlage vermessen: %.0f RF/t fuer %d Turbinen (%.0f RF/t je Turbine,"
+          .. " gemessen als %d von %d am Ziel)",
+        cap.max_output or 0, cap.total_turbines or 0,
+        (cap.total_turbines or 0) > 0 and (cap.max_output / cap.total_turbines) or 0,
+        cap.at_target or 0, cap.running or 0)
     else
-      msg = string.format("v2 Leistung gemeldet: %.0f RF/t aus %d Turbinen (%d am Ziel)",
-        cap.max_output or 0, cap.total_turbines or 0, cap.at_target or 0)
+      -- Rueckfallwert: der saubere Betriebspunkt wurde noch nie erreicht.
+      -- Das gehoert gesagt, sonst haelt man die Zahl fuer eine Messung.
+      msg = string.format(
+        "v2 Leistung nur GESCHAETZT: %.0f RF/t -- die Flotte stand noch nie"
+          .. " vollstaendig am Ziel (%d von %d laufenden Turbinen). MASTER teilt"
+          .. " gegen eine zu kleine Zahl auf.",
+        cap.max_output or 0, cap.at_target or 0, cap.running or 0)
     end
     ctx.log("INFO", msg)
     pcall(print, "[RT] " .. msg)
@@ -244,6 +256,9 @@ function M.status_fields()
     capacity_total_turbines = last_result.capacity.total_turbines,
     -- MASTER liest diese beiden Namen (message_handlers.lua).
     capacity_stable_turbines = last_result.capacity.at_target,
+    -- Wieviele Turbinen in diesem Takt ueberhaupt laufen SOLLEN. Ohne das
+    -- laesst sich "3 von 3 am Ziel" nicht von "3 von 50" unterscheiden.
+    capacity_running_turbines = last_result.capacity.running,
     capacity_source = last_result.capacity.reason,
     capacity_sustainable_turbines = last_result.capacity.total_turbines,
     -- Aliase unter den alten v2-Namen beibehalten: die RT-eigene UI und

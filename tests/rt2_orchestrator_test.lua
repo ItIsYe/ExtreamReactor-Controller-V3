@@ -52,8 +52,11 @@ do
   result = o.tick({ now_ms = 2000, hardware_ready = true,
     turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 120, true) }, reactor = {} })
   assert_true(result.capacity.ready, 'a single flowing tick is enough -- it is a measurement, not an estimate')
-  assert_eq(result.capacity.max_output, 220, 'exactly the sum that flowed, no margin and no extrapolation')
+  assert_eq(result.capacity.max_output, 220,
+    'zwei Turbinen am Ziel, 220 RF/t -- auf eine Flotte von zwei hochgerechnet bleibt es 220')
+  assert_eq(result.capacity.reason, 'MEASURED', 'und es ist eine echte Messung, kein Rueckfallwert')
   assert_eq(result.capacity.at_target, 2)
+  assert_eq(result.capacity.running, 2)
 
   -- Ein schwaecherer Takt darf den Hoechstwert nicht senken.
   result = o.tick({ now_ms = 3000, hardware_ready = true,
@@ -87,13 +90,23 @@ do
     assert_eq(t.target_rpm, 900, 'the whole fleet runs until the node has something to report')
   end
 
-  -- Sobald Leistung gemeldet ist, gilt die Vorgabe.
+  -- Sobald Leistung gemeldet ist, gilt die Vorgabe. Gemessen wird am ENDE
+  -- des Takts (dafuer braucht es die Ziele dieses Takts), es gilt hier also
+  -- jeweils die Messung des vorigen -- ein Takt Verzug.
   result = o.tick({
     now_ms = 2000, hardware_ready = true, master_percent = 0,
     turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) },
     reactor = {},
   })
-  assert_eq(result.effective_percent, 0, 'once output is known the MASTER percentage applies')
+  assert_eq(result.effective_percent, 100, 'im Messtakt selbst gilt noch die alte Lage')
+  assert_true(result.capacity.ready, 'aber am Ende dieses Takts steht die Messung')
+
+  result = o.tick({
+    now_ms = 3000, hardware_ready = true, master_percent = 0,
+    turbines = { turbine('T1', 900, 100, true), turbine('T2', 900, 100, true) },
+    reactor = {},
+  })
+  assert_eq(result.effective_percent, 0, 'und ab dem naechsten Takt gilt die MASTER-Vorgabe')
   for _, t in ipairs(result.turbines) do
     assert_eq(t.target_rpm, 0, 'and 0 % really means no turbine runs')
   end
