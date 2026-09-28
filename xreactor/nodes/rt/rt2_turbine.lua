@@ -208,11 +208,33 @@ function M.compute_flow_decision(input)
   -- hinterher; ohne diese Sperre stapelt der Regler Schritte auf eine
   -- Wirkung, die noch gar nicht eingetreten ist. Ohne Uhrangabe
   -- (Modultests, Altaufrufer) entfaellt die Sperre.
+  --
+  -- Die Sperre gilt nur VORWAERTS. Liegt die gemerkte Zeit in der ZUKUNFT,
+  -- ist die Uhr zurueckgesprungen -- und dann darf sie nicht greifen, sonst
+  -- sperrt sie die Turbine fuer immer aus:
+  --
+  --   SETTLING gibt den unveraenderten Durchfluss zurueck. Der ist damit
+  --   gleich dem Rueckmesswert, also setzt rt2_orchestrator unchanged=true
+  --   und schreibt nicht -- und weil es nicht schreibt, schreibt es auch
+  --   last_change_ms NICHT fort. Die gemerkte Zeit bleibt in der Zukunft,
+  --   der naechste Takt entscheidet wieder SETTLING, und so weiter. Der
+  --   Regler kommt aus eigener Kraft nie mehr heraus, waehrend die
+  --   Drehzahl weiter sauber gelesen wird und die Anzeige gesund aussieht.
+  --   Nur ein Neustart der Node hat das geloest.
+  --
+  -- Mit dieser Bedingung faellt ein Ruecksprung sofort durch auf den
+  -- Regelschritt unten; der stellt einen anderen Wert als den
+  -- Rueckmesswert, der Orchestrator schreibt wieder, und dabei wird
+  -- last_change_ms auf die neue Zeit gesetzt. Der Fehler heilt sich in
+  -- einem einzigen Takt.
   local now_ms = tonumber(input.now_ms)
   local last_change_ms = tonumber(input.last_change_ms)
   local interval_ms = tonumber(input.min_adjust_interval_ms) or M.MIN_ADJUST_INTERVAL_MS
-  if now_ms and last_change_ms and (now_ms - last_change_ms) < interval_ms then
-    return hold("SETTLING")
+  if now_ms and last_change_ms then
+    local since = now_ms - last_change_ms
+    if since >= 0 and since < interval_ms then
+      return hold("SETTLING")
+    end
   end
 
   -- Proportionalschritt, gedeckelt. Am Bandrand genau TRIM_STEP, naeher am
