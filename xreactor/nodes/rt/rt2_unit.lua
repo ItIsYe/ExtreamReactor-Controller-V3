@@ -61,7 +61,23 @@ function M.new(opts)
     local override = self.safety_tripped or node_state == rt2_state.states.SAFE
     local fill = input.reactor and input.reactor.fill_ratio or nil
 
-    local adjust_due = (now_ms or 0) - self.last_rod_change_ms >= rt2_reactor.MIN_ADJUST_INTERVAL_MS
+    -- Stellintervall der Staebe -- und wie beim Durchfluss (siehe
+    -- rt2_turbine.lua) gilt es nur VORWAERTS.
+    --
+    -- Springt os.epoch("utc") zurueck, liegt last_rod_change_ms in der
+    -- Zukunft. adjust_due waere dann dauerhaft falsch, die Tankregelung
+    -- lieferte nur noch RATE_LIMITED -- und weil last_rod_change_ms allein
+    -- im adjust_due-Zweig fortgeschrieben wird, kaeme sie aus eigener Kraft
+    -- nie wieder heraus. Die Staebe stuenden fest, wo sie gerade standen,
+    -- waehrend der Reaktor weiter heizt. Im Feld auf node-102 so gesehen:
+    -- 1979 °C bei eingefrorenen 82 % Stabstellung, 21 °C unter der
+    -- Abschaltschwelle -- der Reaktor konnte nicht mehr gegensteuern.
+    --
+    -- Ein Ruecksprung gilt deshalb als "Intervall abgelaufen": es wird
+    -- gestellt, und dabei zieht last_rod_change_ms auf die neue Uhr nach.
+    local since_rod_change = (now_ms or 0) - self.last_rod_change_ms
+    local adjust_due = since_rod_change < 0
+      or since_rod_change >= rt2_reactor.MIN_ADJUST_INTERVAL_MS
 
     local decision = rt2_reactor.compute_rod_level({
       fill_ratio = fill,

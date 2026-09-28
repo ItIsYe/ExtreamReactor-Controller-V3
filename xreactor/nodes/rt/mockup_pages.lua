@@ -194,11 +194,12 @@ function M.render_turbines(mon, model)
   local y = 12
   if w >= 50 then
     mux.table_header(mon, 2, y, w - 3, {
-      { label = "ID", width = 16 }, { label = "RPM", width = 10 }, { label = "FLOW", width = 11 }, { label = "STATUS", width = 8 },
+      { label = "ID", width = 16 }, { label = "RPM", width = 8 }, { label = "FLOW", width = 8 },
+      { label = "SPULE", width = 7 }, { label = "REGLER", width = 14 },
     })
   else
     mux.table_header(mon, 2, y, w - 3, {
-      { label = "ID", width = 10 }, { label = "RPM", width = 7 }, { label = "FLOW", width = 7 }, { label = "ST", width = 5 },
+      { label = "ID", width = 10 }, { label = "RPM", width = 6 }, { label = "FLOW", width = 6 }, { label = "REGLER", width = 12 },
     })
   end
   y = y + 2
@@ -209,11 +210,20 @@ function M.render_turbines(mon, model)
     local ind = t.bound == false and "OFFLINE" or t.inductor == true and "ON" or t.inductor == false and "OFF" or "?"
     local key = ind == "ON" and "OK" or ind == "OFFLINE" and "EMERGENCY" or ind == "OFF" and "EMERGENCY" or "muted"
     local id = tostring(t.id or ("T-" .. string.format("%02d", i)))
+    -- Der Grund der letzten Reglerentscheidung. Ohne ihn zeigt diese
+    -- Tabelle nur, was die Hardware tut -- und das laeuft auch dann
+    -- weiter, wenn niemand mehr stellt (die Liste entsteht aus einem
+    -- eigenen Leseweg, siehe monitor_ui.build_turbine_status).
+    local reason = tostring(t.flow_reason or "-")
     local line
     if w >= 50 then
-      line = string.format("%-16s %-10s %-11s %-8s", mux.fit(id, 16), t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-", ind)
+      line = string.format("%-16s %-8s %-8s %-7s %-14s", mux.fit(id, 16),
+        t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-",
+        ind, mux.fit(reason, 14))
     else
-      line = string.format("%-10s %-7s %-7s %-5s", mux.fit(id, 10), t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-", ind)
+      line = string.format("%-10s %-6s %-6s %-12s", mux.fit(id, 10),
+        t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-",
+        mux.fit(reason, 12))
     end
     mux.data_row(mon, 2, y, w - 3, { label = line, value = "", status = key })
     y = y + 1

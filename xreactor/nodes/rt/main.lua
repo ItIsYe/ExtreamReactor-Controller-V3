@@ -505,6 +505,23 @@ local function update_monitor()
   }
   monitor_ctx.node_state    = v2.node_state
   monitor_ctx.current_state = v2.mode
+  -- Was der Regler je Turbine ZULETZT ENTSCHIEDEN hat, nach Peripheriename.
+  --
+  -- Die Turbinenliste des Schirms entsteht in monitor_ui.build_turbine_status()
+  -- aus einem EIGENEN Leseweg (peripheral.wrap), voellig unabhaengig von der
+  -- Regelkette. Das ist praktisch -- die Anzeige lebt auch dann, wenn ein
+  -- Adapter klemmt -- hat aber einen Preis: steht die Regelung still, laufen
+  -- Drehzahl und Durchfluss auf dem Schirm munter weiter, und von aussen ist
+  -- nicht zu sehen, dass niemand mehr stellt. Genau so wurde auf node-102
+  -- eine festhaengende Node stundenlang fuer gesund gehalten.
+  --
+  -- Der Grund der letzten Entscheidung schliesst diese Luecke: er sagt, was
+  -- der Regler WILL, nicht was die Hardware gerade tut.
+  local reasons = {}
+  for _, t in ipairs(v2.turbines or {}) do
+    if t.id then reasons[t.id] = t.flow_reason end
+  end
+  monitor_ctx.turbine_flow_reasons = reasons
   -- ctx.targets fuellt niemand mehr (handle_command_rt2 ist der einzige
   -- Command-Handler); die Vorgabe lebt im Orchestrator.
   local v2_targets = {}

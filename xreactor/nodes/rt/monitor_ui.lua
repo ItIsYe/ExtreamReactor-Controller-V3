@@ -119,7 +119,13 @@ function M.build_reactor_status(devices, reactor_adapter, log_prefix)
 end
 
 -- Same consolidation as M.build_reactor_status() above, for turbines.
-function M.build_turbine_status(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
+--
+-- flow_reasons (optional, nach Peripheriename): was der Regler je Turbine
+-- zuletzt entschieden hat. Diese Funktion liest die Hardware ueber einen
+-- EIGENEN Weg, unabhaengig von der Regelkette -- steht die Regelung still,
+-- laufen Drehzahl und Durchfluss hier trotzdem weiter. Der Grund kommt
+-- deshalb vom Aufrufer, wie capacity_override auch.
+function M.build_turbine_status(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix, flow_reasons)
   local list, total_output = {}, 0
   local min_rpm, max_rpm, sum_rpm, rpm_count = nil, nil, 0, 0
   for _, entry in ipairs(devices.turbines or {}) do
@@ -150,6 +156,7 @@ function M.build_turbine_status(devices, turbine_adapter, read_turbine_rpm, read
       energy = energy,
       active = info.active,
       inductor = info.coil_engaged,
+      flow_reason = flow_reasons and entry.name and flow_reasons[entry.name] or nil,
     }
   end
   return list, total_output, min_rpm, max_rpm, rpm_count > 0 and (sum_rpm / rpm_count) or nil
@@ -159,7 +166,8 @@ function M.update_status_snapshot(ctx)
   local summary = ctx.devices.registry_summary or ctx.registry:get_summary() or {}
   local reactors, min_temp, max_temp, avg_temp = M.build_reactor_status(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
   local turbines, actual_output, min_rpm, max_rpm, avg_rpm = M.build_turbine_status(
-    ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
+    ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps,
+    ctx.log_prefix, ctx.turbine_flow_reasons)
   -- ctx.capacity_override: der Lernzustand des Reglers, vom Aufrufer
   -- gegeben. Als es hier noch einen zweiten Lernzustand gab, stand auf dem
   -- RT-Schirm "KAPAZITAET WIRD GELERNT / CAPACITY 0.0", waehrend im

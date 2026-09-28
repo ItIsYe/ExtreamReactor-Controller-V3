@@ -117,4 +117,40 @@ do
   assert_eq(same.reason, 'SETTLING', 'im selben Augenblick wird nicht erneut gestellt')
 end
 
+-- ══ 4. Dieselbe Sperre sitzt in der REAKTORregelung ═══════════════════
+--
+-- rt2_unit.lua hat ein eigenes Stellintervall fuer die Staebe, mit genau
+-- demselben Muster: adjust_due wird aus (now - last) gebildet, und last
+-- wird NUR im adjust_due-Zweig fortgeschrieben. Eine zurueckgesprungene
+-- Uhr fror damit auch die Staebe fest -- und das ist die gefaehrlichere
+-- Haelfte: ein Reaktor, der nicht mehr einfahren kann, heizt weiter. Auf
+-- node-102 stand er bei 1979 °C und 82 % Stabstellung, 21 °C unter der
+-- Abschaltschwelle.
+do
+  local o = orchestrator.new()
+  local function step(ms, fill)
+    return o.tick({ now_ms = ms, hardware_ready = true,
+      turbines = { turbine(900, 1200) },
+      reactors = { { name = 'R1', reactor = { fill_ratio = fill, current_rods = 82, active = true } } } })
+  end
+
+  -- Voller Tank -> die Staebe muessen einfahren (weniger Leistung).
+  local r = step(500000, 0.95)
+  assert_eq(r.reactors[1].reason, 'TANK_FULL_INSERT', 'Vorbedingung: der Reaktor regelt')
+
+  -- Uhr springt zurueck. Der Tank ist weiter voll, es MUSS weiter gestellt
+  -- werden.
+  local adjusted = 0
+  for i = 1, 10 do
+    local r2 = step(1000 + i * 700, 0.95)
+    if r2.reactors[1].reason == 'TANK_FULL_INSERT' then adjusted = adjusted + 1 end
+  end
+  assert_true(adjusted > 0,
+    'nach einem Ruecksprung der Uhr muessen die Staebe weiter geregelt werden,'
+      .. ' sonst heizt der Reaktor ungebremst weiter (Verstellungen: ' .. adjusted .. ')')
+  assert_true(o.reactors[1].last_rod_change_ms <= 8000,
+    'und die gemerkte Stellzeit muss auf die neue Uhr nachgezogen worden sein (ist: '
+      .. tostring(o.reactors[1].last_rod_change_ms) .. ')')
+end
+
 print('rt2_clock_backwards_no_regulator_lock_test.lua: ok')
