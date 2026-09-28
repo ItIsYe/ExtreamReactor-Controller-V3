@@ -1,21 +1,16 @@
 # RT-Regel-Engine v2
 
-**Stand: 2026-09-24 | manifest-v732 | Zweig `beta`**
+**Stand: 2026-09-28 | manifest-v770 | Zweig `beta`**
 
-Der RT-Knoten hat zwei Regel-Engines. v1 (`reactor_control.lua`,
-`turbine_control.lua`, `module_lifecycle.lua`) ist der Bestand, v2
-(`rt2_*.lua`) der Neubau. Welche laeuft, entscheidet **pro Knoten** ein
-Eintrag in `/xreactor_config/rt.lua`:
+Der RT-Knoten hat **genau eine** Regel-Engine (`rt2_*.lua`). Der
+Vorgaenger v1 (`reactor_control.lua`, `turbine_control.lua`,
+`module_lifecycle.lua`, `state_handlers.lua`, `command_handler.lua`,
+`capacity_learning.lua` …) ist mit v770 vollstaendig entfernt — es gibt
+keine Umschaltung und keinen Eintrag `engine =` mehr. Die RT-Rolle ist
+dadurch von 782 KB auf 584 KB geschrumpft und passt wieder auf einen
+Standardrechner.
 
-```lua
-engine = "v2",
-```
-
-Ohne den Eintrag laeuft der Knoten unveraendert auf v1. v2 soll v1
-spaeter ersetzen — **noch nicht**; bis dahin ist es eine Kanarienvogel-
-Umstellung auf einzelnen Knoten.
-
-Beim Start sagt der Rechner selbst, was laeuft:
+Beim Start sagt der Rechner selbst, was er gefunden hat:
 
 ```
 [RT] engine=v2 AKTIV -- 2 Reaktor(en), 30 Turbinen
@@ -40,20 +35,17 @@ einer "AUTONOM-Reaktorlogik", die man synchron halten muesste.
 
 | Datei | Aufgabe | rein? |
 |---|---|---|
-| `rt2_state.lua` | Zustandsautomat INIT/LEARNING/MASTER/AUTONOM/SAFE | ja |
+| `rt2_state.lua` | Zustandsautomat INIT/MASTER/AUTONOM/SAFE | ja |
 | `rt2_reactor.lua` | Stabstellung aus dem Dampftank | ja |
 | `rt2_turbine.lua` | Ziel-RPM, Durchfluss, Spule | ja |
-| `rt2_turbine_model.lua` | Kennlinie je Turbine (Durchfluss → Drehzahl) | ja |
-| `rt2_capacity.lua` | Einlernen der Knotenleistung | ja |
-| `rt2_tuning.lua` | Selbstvermessung der Anlage | ja |
 | `rt2_safety.lua` | Temperatur/Kuehlmittel (nutzt `core/safety.lua`) | ja |
 | `rt2_command_handler.lua` | Befehle von MASTER | ja |
 | `rt2_master_link.lua` | MASTER-Verbindung, 12-s-Fenster | ja |
 | `rt2_projection.lua` | Uebersetzung in v1-Vokabular fuer UI und MASTER | ja |
-| `rt2_unit.lua` | EIN Reaktor: Stellrate, Profil, Sicherheitslage | Zustand |
+| `rt2_unit.lua` | EIN Reaktor: Stellrate, letzter Messwert, Sicherheitslage | Zustand |
 | `rt2_orchestrator.lua` | ein Takt fuer den Knoten | Zustand |
 | `rt2_adapter.lua` | Peripherie lesen und schreiben | nein |
-| `rt2_engine.lua` | Fassade fuer `main.lua`, Dateien | nein |
+| `rt2_engine.lua` | Fassade fuer `main.lua` | nein |
 
 "rein" heisst: gleiche Eingabe, gleiche Ausgabe, kein `peripheral`, kein
 `ctx`, kein globaler Zustand — mit schlichten Lua-Tabellen testbar.
@@ -99,10 +91,15 @@ deshalb entgangen.
 | Zustand | Bedeutung | Turbinenziel |
 |---|---|---|
 | INIT | Discovery noch nicht vollstaendig | — |
-| LEARNING | Kapazitaet wird gemessen | 900 fuer alle |
-| MASTER | MASTER verbunden, dessen Vorgabe gilt | Vollast/Puffer/AUS |
+| MASTER | MASTER verbunden, dessen Vorgabe gilt | 900 oder 0 |
 | AUTONOM | kein MASTER | 900 fuer alle |
 | SAFE | kein Reaktor mehr regelbar | 0 |
+
+Es gab bis v769 einen Zustand `LEARNING` davor, in dem eine
+Kapazitaetsmessung lief, bevor der Knoten ueberhaupt auf MASTER hoerte —
+mit eigenem Suchlauf, eigener Zwischendatei und mehreren Wegen, auf denen
+er haengenblieb. Der ist weg: sobald Hardware da ist, arbeitet der
+Knoten.
 
 Der Modus wird **nie befohlen**: MASTER gegen AUTONOM ergibt sich allein
 aus dem Zeitstempel der letzten MASTER-Nachricht (12 s). `SET_MODE` wird
@@ -121,77 +118,101 @@ Ein Hand-SCRAM haelt, bis ein Startbefehl
 Bedingung dagegen wird jeden Takt neu bewertet und laesst sich nicht
 wegquittieren.
 
-## Einlernen
+## Leistungsvorgabe von MASTER
 
-Gemessen wird der **hoechste Gesamtausstoss, der tatsaechlich floss**:
-jeden Takt die Energie aller Turbinen summieren, die gerade am Ziel
-(900 ± 15 RPM) und gekuppelt sind, und davon das Maximum behalten. Ein
-Takt zaehlt nur, wenn mindestens **80 %** der Flotte gleichzeitig im
-Zielbereich stehen. Bleibt der Hoechstwert 6 s stehen, ist die Anlage
-ausgemessen.
+Die Vorgabe in Prozent bestimmt, **wieviele** Turbinen laufen — nicht,
+wie schnell sie drehen. 60 % von 50 Turbinen heisst 30 Turbinen auf
+900 RPM, 20 stehen. Welche Plaetze stehen, wandert alle 5 Minuten, damit
+keine Turbine dauerhaft kalt bleibt.
 
-Nicht hochgerechnet: Frueher wurde aus wenigen Turbinen auf die
-Gesamtzahl geschlossen — das erfand Leistung fuer Turbinen, die in dem
-Moment nichts lieferten.
+Das ist bewusst grob. Eine Turbine ausserhalb ihres Auslegungspunkts
+liefert unverhaeltnismaessig wenig, deshalb ist „weniger Turbinen, alle
+auf 900" die bessere Aufteilung als „alle Turbinen, alle zu langsam". Den
+frueheren Teillast-Platz mit krummer Zieldrehzahl gibt es nicht mehr.
 
-Diese Zahl ist der Zweck des Ganzen: MASTER teilt seinen Leistungsbedarf
-gegen sie auf (`capacity_max` im Statuspayload).
+### Was MASTER dafuer braucht
 
-## Selbstvermessung der Turbinen
+MASTER teilt seinen Leistungsbedarf gegen `capacity_max` auf. Diese Zahl
+wird **nur mitgeschrieben**, nicht eingelernt: jeden Takt die Energie
+aller Turbinen summieren und den hoechsten je erreichten Wert behalten.
+Eine geaenderte Turbinenzahl setzt ihn zurueck.
 
-Der Durchflussregler hat sich frueher in festen Schritten (`TRIM_STEP`)
-an die Zieldrehzahl herangetastet, ohne den Zusammenhang zwischen
-Durchfluss und Drehzahl zu kennen. Das ist ein Integrator ohne
-Streckenwissen — er **muss** pendeln: er macht auf, bis die Drehzahl
-ueber dem Ziel steht, dann zu, bis sie darunter steht. Gemeldet wurde das
-als „immer hoch runter hoch runter".
+Das ist immer eine Zahl, die wirklich geflossen ist — sie verspricht
+MASTER also nie zu viel. Zu wenig darf sie behaupten, und das korrigiert
+sich von selbst: teilt MASTER gegen eine zu kleine Zahl auf, fordert er
+einen hoeheren Prozentsatz, es laufen mehr Turbinen, der Ausstoss steigt.
 
-Vier Dinge beenden das, drei davon ohne jedes Lernen:
+**Solange noch nichts geflossen ist, gilt MASTERs Vorgabe nicht und die
+ganze Flotte laeuft.** Sonst schliesst sich ein Kreis, aus dem der Knoten
+nicht mehr herauskommt: MASTER teilt gegen 0 auf, es kaeme eine Vorgabe
+von 0 % an, keine Turbine liefe, es floesse nichts, die Meldung bliebe 0.
+Frueher hielt die Lernphase diesen Kreis auf; jetzt steht die Bedingung
+an der einen Stelle im Orchestrator, die sie braucht.
 
-1. **Stellintervall** (`MIN_ADJUST_INTERVAL_MS`, 600 ms). Vorher wurde in
-   jedem Takt gestellt, gegen einen Rotor, der Sekunden braucht. Der
-   Regler hat also auf eine Drehzahl reagiert, in der seine vorige
-   Verstellung noch gar nicht steckte. Ausserhalb des Bandes gilt ein
-   kuerzeres Intervall (`RAMP_INTERVAL_MS`) — dort wird hochgefahren,
-   nicht gehalten.
-2. **Vorausschau beim Hochfahren** (`RAMP_LOOKAHEAD_S`). Traegt die
-   Drehzahl, die der Rotor gerade aufnimmt, ihn innerhalb dieser Zeit ans
-   Ziel, wird nicht weiter aufgemacht. Das ist der eigentliche Grund fuer
-   den alten Ueberschwinger: es wurde so lange mehr Dampf gegeben, wie
-   die Drehzahl unter dem Ziel lag, und am Band-Rand stand dann viel zu
-   viel an.
-3. **Ruhezone** (`SETTLE_BAND_RPM`, 4 RPM). Nah genug am Ziel wird gar
-   nicht mehr gestellt. Ohne sie bleibt ein endloses +1/−1 uebrig, weil
-   die kleinstmoegliche Verstellung (1 mB/t) groesser ist als die
-   verbleibende Abweichung.
-4. **Die gelernte Kennlinie** (`rt2_turbine_model.lua`).
+## Das Regelgesetz des Durchflusses
 
-Die Kennlinie entsteht rein **beobachtend**, wie beim Reaktor: steht der
-Durchfluss still (dafuer sorgt 1. und 3.) und dreht der Rotor dabei
-gleichmaessig, ist das ein Betriebspunkt. Eine Ausgleichsgerade durch
-diese Paare ergibt
+Es gibt **genau eines**: Abweichung zwischen Ist- und Solldrehzahl →
+Durchfluss-Schritt.
 
-    Drehzahl = slope · Durchfluss + intercept
+```
+1. Keine Drehzahlmessung   -> Dampf aus.   NO_RPM_READING
+2. Ziel 0 (Turbine steht)  -> Dampf aus.   TARGET_ZERO
+3. Echte Ueberdrehzahl     -> Dampf aus.   OVERSPEED
+4. Nah genug am Ziel       -> nichts tun.  SETTLED
+5. Stellintervall nicht um -> nichts tun.  SETTLING
+6. sonst: Schritt proportional zur Abweichung, gedeckelt auf TRIM_STEP.
+                                           TRIM_UP / TRIM_DOWN
+```
 
-Gemessen wird **nur mit gekuppelter Spule** — das ist der Zustand, in dem
-die Anlage arbeitet; ohne Last gilt eine ganz andere Gerade. Aus demselben
-Grund regelt auch nur die gekuppelte Turbine nach der Kennlinie; beim
-Hochfahren bleibt es bei der Rampe.
+1.–3. sind Schutz, nicht Regelung: sie greifen im selben Takt und werden
+immer geschrieben, auch wenn der Rueckmesswert behauptet, es staende
+schon so an. Eine Bremsung darf nicht an einer Ersparnis scheitern.
 
-Damit kann der Regler zwei Dinge, die vorher nicht gingen:
+**Ruhezone** (`SETTLE_BAND_RPM`, 4 RPM): nah genug am Ziel wird gar nicht
+gestellt. Ohne sie bleibt ein endloses +1/−1 uebrig, weil die
+kleinstmoegliche Verstellung (1 mB/t) groesser ist als die verbleibende
+Abweichung.
 
-- **Vorsteuerung**: verschiebt MASTER die Vorgabe, wird der Durchfluss
-  fuer die neue Drehzahl in EINEM Zug gestellt, statt sich in Schritten
-  von `TRIM_STEP` heranzutasten. Ueberschwingen kann er dabei nicht — es
-  ist der Beharrungswert, den die Turbine selbst gemessen hat.
-- **Richtige Schrittweite**: eine Abweichung von x RPM verlangt
-  x/slope mB/t, nicht pauschal `TRIM_STEP`.
+**Stellintervall** (`MIN_ADJUST_INTERVAL_MS`, 600 ms): der Rotor haengt
+der Vorgabe um Sekunden hinterher. Ohne diese Sperre stapelt der Regler
+Schritte auf eine Wirkung, die noch gar nicht eingetreten ist.
 
-Eine Anlage, die ruhig auf einem Punkt steht, lernt nichts dazu — eine
-Gerade braucht Punkte an verschiedenen Stellen. Die liefert der normale
-Betrieb (Lastwechsel von MASTER, Puffer-Slots, Neustarts). Bis dahin
-regelt die Turbine mit 1.–3., und das allein genuegt schon fuer einen
-stehenden Durchfluss.
+**Verstaerkung**: genau am Rand des Zielbands kommt ein voller
+`TRIM_STEP` heraus, naeher am Ziel entsprechend weniger. Damit gibt es
+keine Kante zwischen „weit weg" und „fast da" — und genau diese Kante war
+das alte Sprungverhalten.
+
+### Was hier frueher stand
+
+Bis v768 lagen an dieser Stelle **vier Verfahren nebeneinander**: eine
+Rampe mit eigenem Intervall, eine Feintrimmung innerhalb des Bandes, ein
+Streckenmodell aus je Turbine gelernten Kennlinien
+(`rt2_turbine_model.lua`) und eine Vorausschau auf die
+Rotorbeschleunigung. Sie loesten sich gegenseitig ab, und welches gerade
+griff, war von aussen nicht zu sehen.
+
+Die Feldaufzeichnung vom 27.09. zeigte 26 von 40 Turbinen oberhalb des
+Zielbands mit Durchfluss 0 im Auslauf, waehrend **keine einzige
+Kennlinie** in Gebrauch war. Der Betreiber hat mehrfach bestaetigt, dass
+es nicht an der Dampfversorgung lag. Alle vier sind durch das eine Gesetz
+oben ersetzt.
+
+### Die Spule und die Ruhezone muessen sich ueberlappen
+
+Ein Fehler, der beim Umbau aufgefallen ist und auf beide Seiten passt:
+die Ruhezone des Reglers liegt bei 900 ± 4 RPM, die Kupplungsschwelle der
+Spule lag **genau auf 900**. Eine Turbine, die bei 897 einschwang, war
+fuer den Regler angekommen und fuer die Spule noch darunter — sie
+kuppelte nie ein, und eine ungekuppelte Turbine liefert nichts.
+Dauerhaft, denn der Regler hatte keinen Grund mehr, etwas zu aendern.
+Ohne Last beschleunigt der Rotor sogar, und der Regler nimmt Dampf weg,
+um die 900 zu halten: die Anlage sieht in jeder Anzeige gesund aus und
+produziert nichts. Im Zwillingstest blieb so die ganze Flotte bei
+897 RPM stehen und meldete 0 RF/t.
+
+Die Spule kuppelt jetzt auch dann, wenn der Regler die Turbine als
+angekommen ansieht. Festgehalten in
+`rt2_settled_turbine_couples_test.lua`.
 
 Ein Nebeneffekt: eine eingeschwungene Turbine wird gar nicht mehr
 beschrieben (`flow_decision.unchanged`), was je Takt einen
@@ -258,22 +279,19 @@ sich die Faehigkeiten ausserdem je Peripherie:
 
 Festgehalten in `turbine_adapter_capability_probe_test.lua`.
 
-## Selbstvermessung des Reaktors
-
-`rt2_tuning.lua` misst **je Reaktor**, wie schnell sein Dampftank auf
-eine Stabbewegung reagiert — rein beobachtend, ohne Stoersignal. Aus der
-Ausgleichsgeraden durch (Stabstellung → Fuellrate) folgen Stellintervall
-und Schrittweite, beide hart geklammert. Gemessen wird einmal, das
-Ergebnis wird persistiert.
-
 ## Dateien unter `/xreactor_config/`
 
 | Datei | Inhalt |
 |---|---|
-| `rt.lua` | `engine = "v2"`, Sicherheitsgrenzen — **legt der Installer an** |
-| `rt2_capacity_cache.lua` | gemessene Knotenleistung (flach — eine Flotte) |
-| `rt2_reactor_tuning.lua` | Anlagenprofil je Reaktor |
-| `rt2_turbine_model.lua` | Kennlinie je Turbine |
+| `rt.lua` | Peripherienamen, Sicherheitsgrenzen — **legt der Installer an** |
+
+Mehr legt der Knoten nicht ab. Bis v768 schrieb er drei weitere Dateien
+(`rt2_capacity_cache.lua`, `rt2_reactor_tuning.lua`,
+`rt2_turbine_model.lua`) mit gelernter Kapazitaet, gemessenem
+Anlagenprofil je Reaktor und Kennlinie je Turbine. Alle drei konnten die
+Regelung von Lauf zu Lauf veraendern — ein Neustart war damit nie
+wirklich derselbe Zustand. Es gelten jetzt die festen Werte aus
+`rt2_reactor.lua` und `rt2_turbine.lua`.
 
 ## Anzeige
 
@@ -293,8 +311,7 @@ derselbe Knoten auf seinem Monitor gleichzeitig `! LEARNING`,
 `MASTER % 0.0` zeigte. Beides stimmte fuer sich — die Regelung lief auf
 v2, die Anzeige las v1:
 
-- `ctx.capacity_learning` ist v1s Lernzustand; unter `engine = "v2"`
-  fuellt ihn niemand mehr.
+- `ctx.capacity_learning` war v1s Lernzustand; den fuellte niemand mehr.
 - `ctx.node_state_machine` wird unter v2 bewusst nie weitergeschaltet
   (siehe unten) und bleibt auf seinem Bootwert.
 - `ctx.targets` fuellte v1s `command_handler`, den `handle_command_v2`
@@ -306,29 +323,6 @@ v2, die Anzeige las v1:
 der Aufrufer ihm gibt, und faellt ohne diese Vorgaben auf v1 zurueck.
 Abgesichert in `rt2_monitor_v2_display_test.lua` — inklusive der Pruefung,
 dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
-
-## Umschalten
-
-Der Schalter steht in `/xreactor_config/rt.lua`:
-
-```lua
-engine = "v2",
-```
-
-Genau so: klein, in Anfuehrungszeichen. Alles andere setzt
-`config_normalizer.validate_config()` still auf `"v1"` zurueck. Danach
-den Rechner neu starten; beim Start steht am Bildschirm
-
-    [RT] engine=v2 AKTIV -- 1 Reaktor(en), 25 Turbinen
-
-Der **Installer legt die Datei an** (`installer/init.lua`), mit
-`engine = "v1"` und einem Kommentarblock, der beides erklaert — sie muss
-also nur editiert werden. Eine **vorhandene** Datei fasst er nie an:
-`/xreactor_config/` liegt ausserhalb von `/xreactor` und ueberlebt jede
-Neuinstallation und jedes Auto-Update. Einmal setzen reicht.
-
-Der Schalter existiert nur, solange es beide Engines gibt. Abgesichert in
-`installer_rt_engine_config_test.lua`.
 
 ## Was v2 bewusst NICHT tut
 
@@ -344,16 +338,16 @@ Der Schalter existiert nur, solange es beide Engines gibt. Abgesichert in
 
 | Datei | prueft |
 |---|---|
-| `rt2_lifecycle_test.lua` | PC-Start → Einlernen → MASTER/AUTONOM → SAFE → Neustart (13 Abschnitte) |
+| `rt2_lifecycle_test.lua` | PC-Start → MASTER/AUTONOM → SAFE → Neustart (13 Abschnitte) |
 | `rt2_twin_reactor_integration_test.lua` | zwei Reaktoren, 30 Turbinen, echter Adapterstapel |
 | `rt2_engine_integration_test.lua` | 25 Turbinen, echter Adapterstapel |
 | `rt2_two_reactor_test.lua` | Unabhaengigkeit der Reaktoren |
 | `rt2_regulation_behaviour_test.lua` | Einzelregelung je Turbine |
-| `rt2_capacity_to_master_test.lua` | Kette gemessener Wert → Statusfelder → MASTER-Aufteilung |
+| `rt2_settled_turbine_couples_test.lua` | Ruhezone und Kupplungsschwelle ueberlappen sich |
+| `rt2_unreadable_flow_commands_zero_test.lua` | unbekannter Durchfluss wird nie als 0 geschrieben |
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
-| `rt2_tuning_test.lua` | Selbstvermessung des Reaktors gegen eine bekannte Anlage |
-| `rt2_turbine_model_test.lua` | Kennlinie je Turbine, und dass der Regler damit zur Ruhe kommt (Vergleich alt/neu an einer traegen Strecke) |
-| `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt v2s Zustand, nicht v1s leeren |
+| `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt den wirklichen Zustand |
+| `rt_boot_smoke_test.lua` | Kaltstart der ganzen Rolle auf einer simulierten Anlage |
 | plus Modultests je `rt2_*`-Datei | |
 
 ## Stand im Betrieb
@@ -382,16 +376,16 @@ nachgeprueft.
 Nicht bestaetigt bleibt **mehr als 25 Turbinen** — nur gegen Tests belegt
 (nachgemessen bis 100).
 
-Die **gelernte Kennlinie** war in diesem Lauf nicht beteiligt: ohne
-Lastwechsel entsteht nur EIN Betriebspunkt, und acht verschiedene sind
-noetig (nachgemessen). Was hier ruhig laeuft, sind Stellintervall,
-Vorausschau und Ruhezone — die brauchen kein Lernen. Siehe
-„Selbstvermessung der Turbinen".
+**Bestaetigt (Betreiber, 2026-09-28, Fassung v770): der vereinfachte
+Regler laeuft, auch im Doppelsetup, ohne erkennbare Probleme.** Das ist
+der erste Stand ohne Lernphase, ohne Kennlinien und ohne v1 — er ist als
+`stable-beta-v770` markiert.
 
 ## Offen
 
-- **Zwei Reaktoren im Spiel nachpruefen.** Behoben in v742, aber nur
-  gegen Tests belegt.
+- ~~**Zwei Reaktoren im Spiel nachpruefen.**~~ Erledigt: der Betreiber
+  hat das Doppelsetup mit v770 im Spiel gefahren, ohne erkennbare
+  Probleme.
 - ~~**Groessenordnung des gemessenen Werts pruefen.**~~ Erledigt: der
   Betreiber hat bestaetigt, dass der gemeldete Ausstoss zu dem passt, was
   an der ENERGY-Node ankommt. Zum Nachlesen, was da gemessen wurde: der
