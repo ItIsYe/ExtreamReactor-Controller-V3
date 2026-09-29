@@ -30,6 +30,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 FUEL_MAIN = REPO / "xreactor/nodes/fuel/main.lua"
 FUEL_STORAGE = REPO / "xreactor/nodes/fuel/storage.lua"
+FUEL_LOGISTICS = REPO / "xreactor/nodes/fuel/logistics_router.lua"
 
 failures = []
 
@@ -129,6 +130,49 @@ if default_block:
     check(
         re.search(r"interval\s*=\s*5\b", default_block.group(1)) is not None,
         "DEFAULT_CONFIG.logistics.interval ist nicht 5 s",
+    )
+
+# 8. Lieferdauer: die Ventil-Transaktion ist eine Zustandsmaschine, die nur
+#    in tick() voranschreitet, und drei ihrer Phasen (BLOCKING, OPENING,
+#    FINAL_BLOCK) enden mit dem Eintreffen der Bestaetigungen. Wird nur aus
+#    dem after_cycle des Fast-Loops getaktet, liegt zwischen "Bestaetigung
+#    da" und "naechste Phase" jedes Mal bis zu ein halber Takt -- bei drei
+#    Phasen bis zu anderthalb Sekunden je Lieferung, zusaetzlich zur echten
+#    Laufzeit im Rohr.
+ack_listener = re.search(
+    r'name = "valve_ack_listener".*?\n  end \}\)', body, re.S
+)
+check(ack_listener is not None, "valve_ack_listener in nodes/fuel/main.lua nicht gefunden")
+if ack_listener:
+    check(
+        re.search(r":tick\(\)", ack_listener.group(0)) is not None,
+        "valve_ack_listener taktet den Ventil-Router nach einer Bestaetigung "
+        "nicht sofort weiter -- jede Phase wartet dann auf das naechste "
+        "after_cycle",
+    )
+
+# 9. Lieferdauer: nach einer erfolgreichen Lieferung darf der naechste
+#    hungrige Reaktor nicht noch das ganze logistics.interval abwarten.
+logistics_body = strip_comments(FUEL_LOGISTICS.read_text(encoding="utf-8"))
+finish = re.search(
+    r"local function finish_delivery\(self, request, phase, terminal_state, err\)"
+    r"(.*?)\nend\n",
+    logistics_body,
+    re.S,
+)
+check(finish is not None, "finish_delivery() in logistics_router.lua nicht gefunden")
+if finish:
+    check(
+        re.search(r"last_run_ts\s*=\s*0", finish.group(1)) is not None,
+        "finish_delivery() gibt den naechsten Zyklus nicht frei -- der "
+        "naechste Reaktor wartet dann bis zu logistics.interval Sekunden, "
+        "obwohl der Router frei ist",
+    )
+    check(
+        re.search(r'terminal_state == "COMPLETE_SAFE"', finish.group(1)) is not None,
+        "finish_delivery() gibt den naechsten Zyklus auch nach einem "
+        "Fehlschlag sofort frei -- ein dauerhaft scheiterndes Ziel liefe "
+        "damit im Fast-Loop-Takt in den Dauerversuch, samt Ventilschalterei",
     )
 
 if failures:

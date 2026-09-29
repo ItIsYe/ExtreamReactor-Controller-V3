@@ -306,7 +306,24 @@ local function finish_delivery(self, request, phase, terminal_state, err)
     started_ts = request.started_ts,
     finished_ts = request.finished_ts,
   }
-  if self._state.current_request == request then self._state.current_request = nil end
+  if self._state.current_request == request then
+    self._state.current_request = nil
+    -- Nach einer erfolgreich abgeschlossenen Lieferung nicht noch das
+    -- ganze logistics.interval abwarten: der Router ist frei, und der
+    -- naechste hungrige Reaktor waere sonst fruehestens interval Sekunden
+    -- spaeter dran -- bei mehreren leeren Reaktoren summiert sich das zu
+    -- Minuten, in denen nichts passiert, obwohl nichts blockiert.
+    -- Denselben Reaktor schuetzt weiterhin seine Abklingzeit
+    -- (resupply_cooldown_s, Vorgabe 30 s, siehe refresh_peripherals()),
+    -- der Fuellstand aus dem Netz ist ja noch der alte.
+    --
+    -- Nur bei Erfolg. Nach einem Fehlschlag bleibt das Intervall die
+    -- Bremse -- sonst liefe ein dauerhaft scheiterndes Ziel in einen
+    -- Dauerversuch im Fast-Loop-Takt, samt Ventilschalterei.
+    if terminal_state == "COMPLETE_SAFE" then
+      self._state.last_run_ts = 0
+    end
+  end
 end
 
 local function account_async_error(self, request)

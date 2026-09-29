@@ -523,7 +523,19 @@ local function init()
     local channel, message = event[3], event[5]
     if channel ~= constants.channels.VALVE then return end
     if type(message) == "table" and message.type == "VALVE_ACK" then
-      get_rs_router():handle_valve_ack(message)
+      local rs = get_rs_router()
+      rs:handle_valve_ack(message)
+      -- Sofort weitertakten statt auf das naechste after_cycle zu warten.
+      -- Die Ventil-Transaktion ist eine Zustandsmaschine, die nur in
+      -- tick() voranschreitet, und drei ihrer Phasen (BLOCKING, OPENING,
+      -- FINAL_BLOCK) enden genau mit dem Eintreffen der Bestaetigungen.
+      -- Ohne diesen Aufruf lag zwischen "Bestaetigung da" und "naechste
+      -- Phase" jedes Mal bis zu ein halber Fast-Loop-Takt -- bei drei
+      -- Phasen also bis zu anderthalb Sekunden reine Wartezeit je
+      -- Lieferung, zusaetzlich zur echten Laufzeit im Rohr. tick() ist
+      -- gegen Mehrfachaufrufe unempfindlich (kein Tick-Backlog, siehe
+      -- redstone_router.lua).
+      rs:tick()
     end
   end })
   -- HOP_SCAN teilt sich denselben Kanal/rohen Listener-Ansatz wie VALVE_ACK
