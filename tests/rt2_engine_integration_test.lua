@@ -207,7 +207,13 @@ for tick = 1, 3000 do
     reached_operational = true
   end
   step_physics()
-  clock_ms = clock_ms + 100
+  -- 500 ms je Takt, nicht 100 -- siehe die Begruendung in
+  -- tests/rt2_lifecycle_test.lua: step_physics() holt je Takt 35 % der
+  -- Luecke auf, was nur bei einer realistischen Taktzeit einen Rotor mit
+  -- der Traegheit ergibt, auf die der Regler gebaut ist. Seit er aus der
+  -- verstrichenen Zeit eine Aenderungsrate rechnet, wirkt eine zu kurze
+  -- Taktzeit wie eine Scheinbeschleunigung.
+  clock_ms = clock_ms + 500
   if os.getenv('TRACE') and tick % 100 == 0 then
     local t1 = last.turbines[1]
     local p1 = plant.turbines[turbine_names[1]]
@@ -292,6 +298,10 @@ do
   local allowed = {
     TRIM_UP = true, TRIM_DOWN = true, SETTLED = true, SETTLING = true,
     OVERSPEED = true, TARGET_ZERO = true, NO_RPM_READING = true,
+    -- Seit dem Vorhalt (rt2_turbine.lua): die Vorhersage trifft das Ziel,
+    -- also wird nicht gestellt. Ohne diesen Grund waere jede weitere
+    -- Verstellung genau das Ueberschwingen.
+    ON_PREDICTED_TARGET = true,
   }
   local seen_trim_up = false
   local r
@@ -310,7 +320,7 @@ do
   for _ = 1, 400 do
     r = rt2_engine.tick(ctx)
     step_physics()
-    clock_ms = clock_ms + 100
+    clock_ms = clock_ms + 500
     if r.capacity.at_target == TURBINE_COUNT then break end
   end
   assert_eq(r.capacity.at_target, TURBINE_COUNT,

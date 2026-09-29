@@ -253,6 +253,12 @@ function M.new(opts)
     -- den Rueckmesswert der Hardware angewiesen -- und wenn der fehlt,
     -- hat er gar keinen Bezugspunkt mehr (siehe rt2_turbine.lua).
     turbine_last_flow = {},
+    -- Die vorige Drehzahlmessung je Turbine, mit ihrem Zeitstempel. Daraus
+    -- rechnet rt2_turbine.compute_flow_decision() die Aenderungsrate und
+    -- damit seinen Vorhalt (siehe dort). Zwei Zahlen je Turbine, ueber
+    -- genau einen Takt -- kein Speicher, keine Kennlinie, kein Lernen.
+    turbine_last_rpm = {},
+    turbine_last_rpm_ms = {},
     -- Einheiten nach Name, damit ein Reaktor bei einer geaenderten
     -- Reihenfolge seinen Messzustand behaelt.
     reactors_by_name = {},
@@ -454,7 +460,19 @@ function M.new(opts)
         now_ms = now_ms,
         last_change_ms = name and self.turbine_last_change_ms[name] or nil,
         last_commanded_flow = name and self.turbine_last_flow[name] or nil,
+        last_rpm = name and self.turbine_last_rpm[name] or nil,
+        last_rpm_ms = name and self.turbine_last_rpm_ms[name] or nil,
       })
+
+      -- Den Messpunkt fuer den naechsten Takt merken, BEVOR die Entscheidung
+      -- weiterverarbeitet wird -- und nur, wenn wirklich gemessen wurde.
+      -- Eine ausgefallene Messung darf den letzten gueltigen Punkt nicht
+      -- ueberschreiben, sonst waere die Rate danach aus einer Luecke
+      -- gerechnet.
+      if name and tonumber(t.rpm) ~= nil then
+        self.turbine_last_rpm[name] = tonumber(t.rpm)
+        self.turbine_last_rpm_ms[name] = now_ms
+      end
       -- Steht die Vorgabe schon so an, muss sie nicht erneut geschrieben
       -- werden. Das ist der Normalfall -- eine eingeschwungene Turbine
       -- wird gar nicht mehr verstellt -- und spart je Takt einen

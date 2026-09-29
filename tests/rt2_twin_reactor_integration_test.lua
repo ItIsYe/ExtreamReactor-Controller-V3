@@ -218,7 +218,12 @@ local function tick(steps)
     if not ok then error('Takt hat geworfen: ' .. tostring(result), 0) end
     last = result
     step_physics()
-    clock_ms = clock_ms + 100
+    -- 500 ms je Takt, nicht 100 -- siehe die Begruendung in
+    -- tests/rt2_lifecycle_test.lua: die Uhr dieser Pruefstrecke und ihre
+    -- Physik (35 % der Luecke je Takt) passten nicht zueinander, und seit
+    -- der Regler aus der verstrichenen Zeit eine Aenderungsrate rechnet,
+    -- wirkt eine zu kurze Taktzeit wie eine Scheinbeschleunigung.
+    clock_ms = clock_ms + 500
   end
   return last
 end

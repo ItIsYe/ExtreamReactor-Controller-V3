@@ -71,6 +71,73 @@ M.TRIM_STEP = 35
 -- Nach oben bleibt deshalb alles wie es war.
 M.MAX_TRIM_STEP_DOWN = 400
 
+-- ── Vorhalt ──────────────────────────────────────────────────────────────
+--
+-- Betreibervorgabe: "der Regler muss fast instant reagieren koennen, aber
+-- trotzdem nicht ueberschwingen."
+--
+-- Mit einem Regler, der nur die IST-Drehzahl sieht, ist das nicht zu haben:
+-- schnell heisst grosse Verstaerkung, und grosse Verstaerkung heisst
+-- Ueberschwingen -- der Rotor braucht Sekunden, um auf eine Verstellung zu
+-- antworten, und in dieser Zeit stellt ein schneller Regler weiter gegen
+-- eine Wirkung, die noch aussteht.
+--
+-- Was beides zusammenbringt, ist die AENDERUNGSRATE. Geregelt wird nicht
+-- auf die Drehzahl, die jetzt anliegt, sondern auf die, die in
+-- LOOKAHEAD_S Sekunden anliegen wird, wenn es so weitergeht:
+--
+--   Vorhersage = Drehzahl + Rate * LOOKAHEAD_S
+--
+-- Eine Turbine bei 700 mit +120 U/min/s ist damit nicht "200 zu langsam",
+-- sondern (bei 2 s Vorhalt) "40 zu schnell" -- der Regler nimmt zurueck,
+-- WAEHREND sie noch steigt, und trifft die 900 ohne darueber zu schiessen.
+-- Umgekehrt darf er weit weg viel entschiedener zupacken, weil ihn die
+-- Rate rechtzeitig wieder einbremst.
+--
+-- Das ist ausdruecklich KEIN Lernen: nichts wird gespeichert, nichts ueber
+-- Takte hinaus gemittelt, keine Kennlinie gebildet. Es sind zwei Messwerte
+-- aus zwei aufeinanderfolgenden Takten -- mehr nicht. Der Vorhalt ersetzt
+-- die alte Stellsperre, die dasselbe Problem mit Warten geloest hat.
+-- 1.0 s, nicht laenger. Ein Vorhalt, der ueber der Zeitkonstante der
+-- Strecke liegt, sagt mehr voraus, als die Strecke einloest, und faengt an
+-- zu schwingen. Nachgemessen am 2026-09-29 gegen drei Rotortraegheiten
+-- (Zeitkonstante 1.4 s / 5 s / 12.5 s), Anfahrt aus dem Stand auf 900:
+--
+--   Vorhalt   Spitze (1.4s / 5s / 12.5s)   im Band nach
+--   aus       1049 / 999 / 969             10.0s / 27.0s / 58.5s
+--   1.0s       899 / 962 / 954              7.0s / 14.5s / 37.0s
+--   2.0s       898 / 919 / 938             12.0s / 13.0s / 28.0s
+--
+-- 2 s ist bei traegen Rotoren besser, beim schnellen aber wieder
+-- schlechter als 1 s -- genau das erwartete Aufschwingen. 1 s verbessert
+-- jeden der drei Faelle und verschlechtert keinen.
+M.LOOKAHEAD_S = 1.0
+
+-- Groesster Schritt nach OBEN, aber nur solange eine Rate vorliegt. Ohne
+-- Vorhalt bleibt es bei TRIM_STEP: der grosse Schritt ist ueberhaupt nur
+-- deshalb vertretbar, weil die Vorhersage rechtzeitig wieder einbremst.
+-- Faellt die Rate weg (fehlender Messpunkt, Uhrsprung), faellt auch er weg
+-- -- die Vorsicht muss mit der Grundlage verschwinden, nicht ohne sie
+-- bestehen bleiben.
+M.MAX_TRIM_STEP_UP = 400
+
+-- Groesste Rate, die noch als "steht" durchgeht. Die Drehzahlmessung
+-- rauscht um ein paar Umdrehungen; ohne diese Schwelle wuerde daraus bei
+-- 2 s Vorhalt eine zweistellige Scheinabweichung, und eine eingeschwungene
+-- Turbine faenge an zu zappeln.
+M.SETTLE_RATE_RPM_PER_S = 12
+
+-- Aelter als das darf der vorige Messpunkt nicht sein, sonst ist die daraus
+-- gerechnete Rate nichts wert (verpasste Takte, Neustart, Uhrsprung).
+M.MAX_RATE_AGE_MS = 3000
+
+-- Soweit darf die Vorhersage die Lage hoechstens verschieben. Sie bleibt
+-- eine Schaetzung aus zwei Messpunkten; liegen die dicht beieinander,
+-- wird aus einem kleinen Messsprung eine grosse Rate. Der Deckel nimmt
+-- ihr nicht die Richtung, nur die Masslosigkeit -- und er sorgt dafuer,
+-- dass die echte Abweichung nie voellig von der Schaetzung erschlagen wird.
+M.MAX_PREDICT_RPM = 300
+
 -- So lange bleibt eine Durchflussvorgabe stehen, bevor die naechste kommt.
 --
 -- Der Regler lief bisher in jedem Takt -- mehrmals pro Sekunde -- gegen
@@ -216,14 +283,58 @@ function M.compute_flow_decision(input)
   end
 
   -- ── Ab hier wird geregelt, nicht mehr geschuetzt ──────────────────────
+
+  -- Aenderungsrate aus zwei aufeinanderfolgenden Messpunkten. Fehlt der
+  -- vorige, ist er zu alt oder liegt er in der Zukunft (Uhrsprung), gilt
+  -- die Rate als unbekannt -- dann regelt es wie zuvor rein auf den
+  -- Istwert. Unbekannt wird NIE als 0 behandelt: "keine Rate" und "dreht
+  -- konstant" sind verschiedene Aussagen, und die zweite wuerde hier eine
+  -- Vorhersage begruenden, fuer die es keine Grundlage gibt.
+  local rate_rpm_per_s = nil
+  local prev_rpm = tonumber(input.last_rpm)
+  local prev_rpm_ms = tonumber(input.last_rpm_ms)
+  local now_for_rate = tonumber(input.now_ms)
+  if prev_rpm and prev_rpm_ms and now_for_rate then
+    local dt_ms = now_for_rate - prev_rpm_ms
+    if dt_ms > 0 and dt_ms <= M.MAX_RATE_AGE_MS then
+      rate_rpm_per_s = (rpm - prev_rpm) * 1000 / dt_ms
+    end
+  end
+
   local error_rpm = target_rpm - rpm
+
+  -- Der Vorhalt: geregelt wird auf die Drehzahl, die in LOOKAHEAD_S
+  -- Sekunden anliegt, wenn es so weitergeht. Ohne Rate bleibt es beim
+  -- Istwert.
+  local lookahead_s = tonumber(input.lookahead_s) or M.LOOKAHEAD_S
+  local control_error = error_rpm
+  if rate_rpm_per_s then
+    -- Die Vorhersage wird begrenzt. Eine aus zwei dicht aufeinander
+    -- folgenden Messpunkten gerechnete Rate kann voellig ueberzogen sein
+    -- (ein Sprung von 40 Umdrehungen in 100 ms ergibt 400 U/min/s), und
+    -- ohne Deckel wuerde daraus eine Scheinabweichung, die jede echte
+    -- Abweichung erschlaegt. Der Deckel nimmt der Vorhersage nicht ihre
+    -- Richtung, nur ihre Masslosigkeit.
+    local predicted_delta = rate_rpm_per_s * lookahead_s
+    local max_predict = tonumber(input.max_predict_rpm) or M.MAX_PREDICT_RPM
+    if predicted_delta > max_predict then predicted_delta = max_predict end
+    if predicted_delta < -max_predict then predicted_delta = -max_predict end
+    control_error = target_rpm - (rpm + predicted_delta)
+  end
 
   -- Ruhezone: nah genug am Ziel wird gar nicht gestellt. Ohne sie stellt
   -- der Regler auch dann noch, wenn er angekommen ist -- die kleinste
   -- Schrittweite ist auf einer grossen Turbine schon mehr als die
   -- verbleibende Abweichung, und das Ergebnis ist ein endloses +1/-1.
+  --
+  -- Mit Vorhalt gehoert die Rate dazu: eine Turbine, die GERADE durch 900
+  -- hindurchbeschleunigt, steht nicht am Ziel, auch wenn die Abweichung in
+  -- diesem Augenblick null ist. Ohne diese zweite Bedingung wuerde der
+  -- Regler genau im entscheidenden Moment die Haende in den Schoss legen.
   local settle_band = tonumber(input.settle_band_rpm) or M.SETTLE_BAND_RPM
-  if math.abs(error_rpm) <= settle_band then
+  local settle_rate = tonumber(input.settle_rate_rpm_per_s) or M.SETTLE_RATE_RPM_PER_S
+  local rate_settled = (rate_rpm_per_s == nil) or (math.abs(rate_rpm_per_s) <= settle_rate)
+  if math.abs(error_rpm) <= settle_band and rate_settled then
     return hold("SETTLED")
   end
 
@@ -261,8 +372,15 @@ function M.compute_flow_decision(input)
   local now_ms = tonumber(input.now_ms)
   local last_change_ms = tonumber(input.last_change_ms)
   local interval_ms = tonumber(input.min_adjust_interval_ms) or M.MIN_ADJUST_INTERVAL_MS
+  --
+  -- Und sie entfaellt ganz, sobald eine Rate vorliegt: der Vorhalt loest
+  -- dasselbe Problem (Rotor antwortet verzoegert) auf dem richtigen Weg.
+  -- Er SIEHT die noch ausstehende Wirkung als Rate, statt sie abzuwarten.
+  -- Genau das ist "fast instant reagieren, ohne zu ueberschwingen": mit
+  -- Wartezeit ist der Regler langsam, ohne Vorhalt schwingt er ueber.
   local braking = rpm > target_rpm + band
-  if now_ms and last_change_ms and not braking then
+  local skip_interval = braking or (rate_rpm_per_s ~= nil)
+  if now_ms and last_change_ms and not skip_interval then
     local since = now_ms - last_change_ms
     if since >= 0 and since < interval_ms then
       return hold("SETTLING")
@@ -273,12 +391,21 @@ function M.compute_flow_decision(input)
   -- entsprechend weniger, mindestens aber 1 -- sonst bliebe eine kleine
   -- Abweichung ewig stehen. Weiter weg waechst er mit der Abweichung; nur
   -- die Deckelung unterscheidet die Richtungen (siehe MAX_TRIM_STEP_DOWN).
-  local step = M.TRIM_STEP * math.abs(error_rpm) / band
+  local step = M.TRIM_STEP * math.abs(control_error) / band
 
-  if error_rpm > 0 then
-    -- Zu langsam: gemaechlich nachlegen. Ein grosser Schritt hier erzeugt
-    -- genau das Ueberschwingen, das die Turbine ueber das Band traegt.
-    local up = math.max(1, math.min(M.TRIM_STEP, math.floor(step + 0.5)))
+  -- Die Vorhersage sagt "kommt hin": nichts tun. Das ist der Kern des
+  -- Vorhalts -- die Turbine ist noch weit weg, aber sie ist auf dem Weg,
+  -- und jede weitere Verstellung jetzt waere genau das Ueberschwingen.
+  if math.abs(control_error) < 1 then
+    return hold("ON_PREDICTED_TARGET")
+  end
+
+  if control_error > 0 then
+    -- Zu langsam. Wie entschieden nachgelegt werden darf, haengt daran, ob
+    -- eine Rate vorliegt: mit Vorhalt bremst die Vorhersage rechtzeitig
+    -- wieder ein, ohne ihn wuerde ein grosser Schritt ueberschwingen.
+    local cap = rate_rpm_per_s and M.MAX_TRIM_STEP_UP or M.TRIM_STEP
+    local up = math.max(1, math.min(cap, math.floor(step + 0.5)))
     return { flow = clamp(current_flow + up, min_flow, max_flow), reason = "TRIM_UP" }
   end
 
