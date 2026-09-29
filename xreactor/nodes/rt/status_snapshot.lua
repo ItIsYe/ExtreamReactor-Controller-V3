@@ -41,15 +41,27 @@ function M.build_turbine_snapshots(registry, turbine_adapter, modules, log_prefi
     local module = modules[entry.id]
     local energy = info and numeric_value(info.energy) or nil
     if energy then total_output = total_output + energy end
+    -- Je Turbine gehen nur noch die Felder raus, die MASTER auch liest.
+    -- Bei 50 Turbinen alle 5 s ist dieses Array der mit Abstand groesste
+    -- Posten im Statusverkehr -- vier Felder waren reine Fracht:
+    --
+    --   name        entry.id ist bereits "turbine:"..name
+    --   alias       nur bei REAKTOREN gelesen (master/fuel_relay.lua)
+    --   output      Dublette von energy, derselbe Wert
+    --   target_rpm  MASTER kennt die Zieldrehzahl aus seiner eigenen Config
+    --
+    -- Was bleibt und WER es liest (vor dem Kuerzen nachgeprueft):
+    --   id           ueberall zur Zuordnung
+    --   rpm          Sequencer-Telemetrie, alert_rules
+    --   flow_rate    master/startup_sequencer.lua's Telemetriezeile
+    --   energy       Summe des Knotenausstosses
+    --   coil_engaged core/alert_rules.lua's COIL_EARLY
+    --   state        Sequencer wartet auf "STABLE"
     table.insert(list, {
       id = entry.id,
-      name = entry.name,
-      alias = entry.alias,
       rpm = info and info.rpm or nil,
       flow_rate = info and info.flow or nil,
       energy = energy,
-      output = energy,
-      target_rpm = targets.rpm,
       coil_engaged = info and bool_or_nil(info.coil_engaged) or nil,
       state = module and module.state or nil
     })
@@ -72,11 +84,12 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
       rods_level = info and info.control_rod_level or nil,
       active = info and info.active or nil,
       steam_production = info and info.steam or nil,
-      coolant_amount = info and info.coolant_amount or nil,
-      coolant_amount_max = info and info.coolant_amount_max or nil,
+      -- Vom Kuehlmittel geht nur der ANTEIL raus. Die Rohmengen
+      -- (coolant_amount/-_max) und coolant_ratio_source wertet
+      -- ausschliesslich die Node selbst aus (core/safety.lua ueber
+      -- rt2_safety) -- MASTER hat sie nie gelesen.
       coolant_filled_percentage = info and info.coolant_filled_percentage or nil,
       coolant_ratio = info and info.coolant_ratio or nil,
-      coolant_ratio_source = info and info.coolant_ratio_source or nil,
       -- Fuel-Fuellstand im Reaktor-Snapshot, den RT sowieso regelmaessig
       -- an Master schickt -- FUEL hat sonst keinen eigenen Wired-Modem-
       -- Zugriff auf den Reaktor.
@@ -114,8 +127,6 @@ function M.build_status_payload(ctx)
     capacity_source = "UNKNOWN",
     capacity_stable_turbines = 0,
     capacity_total_turbines = 0,
-    capacity_required_stable_turbines = 1,
-    capacity_sample_output = 0,
     turbine_rpm = ctx.targets.rpm,
     steam = ctx.targets.steam,
     capabilities = health_payload.capabilities,

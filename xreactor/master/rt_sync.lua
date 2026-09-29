@@ -84,7 +84,7 @@ function M.send_rt_setpoints(comms, node, setpoints)
   if not node then return end
   local payload = M.normalize_setpoints(setpoints)
   comms:send_command(utils.normalize_node_id(node.id), {
-    target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET,
+    target = constants.command_targets.SET_SETPOINTS,
     value = payload
   }, { requires_applied = true })
   node.last_setpoints = payload

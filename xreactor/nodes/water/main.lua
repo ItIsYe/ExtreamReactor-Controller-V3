@@ -362,7 +362,6 @@ local function build_status_payload()
     table.insert(cluster_info, { name = name, level = level, filling = st.filling or false, draining = st.draining or false, min = cluster.min_volume, max = cluster.max_volume, read_failed = st.read_failed or false, write_error = st.write_error })
   end
   payload.clusters = cluster_info
-  payload.water_snapshot_generation = water_snapshot.generation
   payload.buffers = buffers
   payload.bindings = water_health.bindings
   payload.bindings_summary = health.summarize_bindings(water_health.bindings)

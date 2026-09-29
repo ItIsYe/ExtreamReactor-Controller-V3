@@ -231,7 +231,7 @@ function sequencer.new(comms, ramp_profile, opts)
         return
       end
       local payload = {
-        target = constants.command_targets.STARTUP_STAGE or constants.command_targets.REQUEST_STARTUP_MODULE,
+        target = constants.command_targets.STARTUP_STAGE,
         value = {
           module_id = self.active.module_id,
           module_type = self.active.module_type,

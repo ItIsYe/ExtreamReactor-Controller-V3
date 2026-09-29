@@ -160,7 +160,7 @@ function M.new(opts)
   local function ack_matches_last_setpoints(node, result)
     if type(result) ~= "table" or result.ok == false then return false end
     local target = result.command_target
-    local expected_target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET
+    local expected_target = constants.command_targets.SET_SETPOINTS
     if target ~= expected_target then return false end
     local value = result.command_value
     local last = node and node.last_setpoints

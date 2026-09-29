@@ -59,10 +59,11 @@ constants.status_levels = {
   MANUAL = "MANUAL"
 }
 
+-- Nur Ziele, die auch wirklich gesendet ODER behandelt werden.
+-- Entfallen (2026-09-29, Kommunikations-Durchgang): POWER_TARGET,
+-- STEAM_TARGET, TURBINE_RPM und REQUEST_SHUTDOWN_MODULE -- keines kam
+-- ausserhalb dieser Liste noch irgendwo vor.
 constants.command_targets = {
-  POWER_TARGET = "POWER_TARGET",
-  STEAM_TARGET = "STEAM_TARGET",
-  TURBINE_RPM = "TURBINE_RPM",
   SET_MODE = "SET_MODE",
   SET_SETPOINTS = "SET_SETPOINTS",
   STARTUP_STAGE = "STARTUP_STAGE",
@@ -72,8 +73,8 @@ constants.command_targets = {
   SET_RESERVE = "SET_RESERVE",
   -- WATER-Ziel-Fuellmenge fernsteuerbar, analog zu SET_RESERVE bei FUEL.
   SET_TARGET = "SET_TARGET",
+  -- Loest den Hand-Riegel eines SCRAM wieder (nodes/rt/rt2_command_handler).
   REQUEST_STARTUP_MODULE = "REQUEST_STARTUP_MODULE",
-  REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE",
   -- Master leitet den per RT-Status gesammelten Reaktor-Fuellstand an FUEL
   -- weiter -- FUEL hat selbst keinen Wired-Zugriff auf die Reaktoren.
   FUEL_STATUS = "FUEL_STATUS",
