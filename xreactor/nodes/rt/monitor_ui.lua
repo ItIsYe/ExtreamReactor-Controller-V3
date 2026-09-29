@@ -194,7 +194,6 @@ function M.update_status_snapshot(ctx)
     capacity_max = capacity.max_output or (ctx.targets and ctx.targets.capacity_max) or 0,
     capacity_ready = capacity.ready == true,
     capacity_source = capacity.reason or (ctx.targets and ctx.targets.capacity_source) or "unknown",
-    capacity_stable_samples = capacity.ready and 1 or 0,
     capacity_stable_turbines = capacity.at_target or 0,
     capacity_total_turbines = capacity.total_turbines or 0,
     -- Wieviele Turbinen fuer den Messpunkt noetig sind (80 % der Flotte).
@@ -278,7 +277,6 @@ function M.update(monitor, ctx)
     capacity_max = snapshot and snapshot.capacity_max or 0,
     capacity_ready = snapshot and snapshot.capacity_ready or false,
     capacity_source = snapshot and snapshot.capacity_source or "unknown",
-    capacity_stable_samples = snapshot and snapshot.capacity_stable_samples or 0,
     capacity_stable_turbines = snapshot and snapshot.capacity_stable_turbines or 0,
     capacity_total_turbines = snapshot and snapshot.capacity_total_turbines or 0,
     capacity_required_turbines = snapshot and snapshot.capacity_required_turbines or 0,

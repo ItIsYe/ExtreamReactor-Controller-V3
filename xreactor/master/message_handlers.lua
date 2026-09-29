@@ -258,6 +258,12 @@ function M.new(opts)
     -- Nur v2-Knoten schicken ihn -- bei v1 bleibt er schlicht nil.
     rt.capacity_sustainable_turbines = number_or_nil(payload.capacity_sustainable_turbines)
       or rt.capacity_sustainable_turbines
+    -- Wieviele Turbinen gleichzeitig im Zielband stehen muessen, damit das
+    -- Einlernen zaehlt (80 % der Flotte). ui_controller.lua baut daraus
+    -- "EINLERNEN: x/y Turbinen im Zielband" -- ohne diese Zeile stand dort
+    -- dauerhaft "x/0".
+    rt.capacity_required_turbines = number_or_nil(payload.capacity_required_turbines)
+      or rt.capacity_required_turbines
     if rt.capacity_ready == true then node.capacity_ready = true end
     node.capacity_max   = rt.capacity_max or node.capacity_max
     -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0

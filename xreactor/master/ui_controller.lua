@@ -252,11 +252,11 @@ function M.new(opts)
         local rt_data = node.rt or {}
         rt_node.capacity_ready          = rt_data.capacity_ready == true or node.capacity_ready == true
         rt_node.capacity_max            = pick_number(rt_data.capacity_max, node.capacity_max, 0)
-        rt_node.capacity_stable_samples = rt_data.capacity_stable_samples or 0
         rt_node.capacity_stable_turbines= rt_data.capacity_stable_turbines or 0
         rt_node.capacity_total_turbines = rt_data.capacity_total_turbines or 0
         rt_node.capacity_source         = rt_data.capacity_source or "UNKNOWN"
         rt_node.capacity_sustainable_turbines = rt_data.capacity_sustainable_turbines
+        rt_node.capacity_required_turbines = rt_data.capacity_required_turbines or 0
         -- Kein Knoten LERNT mehr etwas ein: die Lernphase ist seit v769
         -- entfernt. capacity_ready=false heisst jetzt genau eines -- diese
         -- Flotte hat bisher keinen Ausstoss geliefert, den der Knoten
@@ -270,7 +270,7 @@ function M.new(opts)
             rt_node.learning_note = string.format(
               "EINLERNEN: %d/%d Turbinen im Zielband",
               rt_node.capacity_stable_turbines or 0,
-              rt_data.capacity_required_turbines or 0
+              rt_node.capacity_required_turbines
             )
           else
             rt_node.learning_note = string.format(

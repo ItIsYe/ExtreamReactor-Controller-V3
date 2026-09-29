@@ -90,12 +90,11 @@ end
 
 -- Diese Datei nimmt HARDWARE auf -- sie entscheidet nichts. Die Kapazitaet
 -- stand hier bis v768 selbst im Payload, gemessen von v1s eigenem
--- capacity_learning.lua. Das ist entfallen: rt2_capacity.lua ist die einzige
--- Quelle, und main.lua legt dessen Werte nach diesem Aufruf ueber das
--- Payload. Die Nullen hier sind bewusst Platzhalter, keine Messwerte --
--- ueberschrieben wird jedes Feld, bevor das Payload die Node verlaesst.
--- Die Alt-Feldnamen (capacity_stable_samples/-_turbines/-_required) bleiben,
--- weil UI (monitor_ui.lua) und Master (ui_controller.lua) sie lesen.
+-- capacity_learning.lua. Das ist entfallen: das Einlernen im Orchestrator
+-- ist die einzige Quelle, und main.lua legt dessen Werte nach diesem
+-- Aufruf ueber das Payload. Die Nullen hier sind bewusst Platzhalter,
+-- keine Messwerte -- ueberschrieben wird jedes Feld, bevor das Payload die
+-- Node verlaesst.
 function M.build_status_payload(ctx)
   local health_payload = ctx.build_health_payload()
   local turbines, actual_output = M.build_turbine_snapshots(ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
@@ -113,7 +112,6 @@ function M.build_status_payload(ctx)
     capacity_max = 0,
     capacity_ready = false,
     capacity_source = "UNKNOWN",
-    capacity_stable_samples = 0,
     capacity_stable_turbines = 0,
     capacity_total_turbines = 0,
     capacity_required_stable_turbines = 1,

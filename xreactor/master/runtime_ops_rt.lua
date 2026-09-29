@@ -43,11 +43,11 @@ function M.sync_rt_node(runtime, node, reason)
     if not node._learning_logged or (now - (node._learning_logged or 0)) > 10000 then
       node._learning_logged = now
       runtime.log((
-        "RT node still learning capacity node=%s stable_samples=%s stable_turbines=%s/%s"
+        "RT node still learning capacity node=%s im Zielband=%s/%s von %s Turbinen"
       ):format(
         tostring(node.id),
-        tostring(rt.capacity_stable_samples or 0),
         tostring(rt.capacity_stable_turbines or 0),
+        tostring(rt.capacity_required_turbines or 0),
         tostring(rt.capacity_total_turbines or 0)
       ), "INFO")
     end

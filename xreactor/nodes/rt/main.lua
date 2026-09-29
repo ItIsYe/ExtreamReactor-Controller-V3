@@ -453,6 +453,13 @@ local function build_status_payload(status_level)
   if v2.capacity_required_turbines then
     payload.capacity_required_turbines = v2.capacity_required_turbines
   end
+  -- Wieviele Turbinen liefen, als der gelernte Hoechstwert floss. MASTER
+  -- liest das Feld (message_handlers.lua) und zeigt daraus "x von y
+  -- Turbinen tragen" an -- gesendet hat es die Node nur nie, seit der
+  -- rt2-Regler die Kapazitaet uebernahm. Die Anzeige war damit tot.
+  if v2.capacity_sustainable_turbines then
+    payload.capacity_sustainable_turbines = v2.capacity_sustainable_turbines
+  end
   writeback_ctx()
   return payload
 end

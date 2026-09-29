@@ -44,7 +44,11 @@ end
 
 local function capacity_key(model)
   if model.capacity_ready then return "OK" end
-  if num(model.capacity_stable_samples, 0) > 0 then return "LIMITED" end
+  -- Fortschritt heisst: es stehen schon Turbinen im Zielband. Hier stand
+  -- frueher capacity_stable_samples -- ein Feld aus v1s Lernverfahren, das
+  -- seit dem rt2-Regler niemand mehr fuellt. Die Farbe war damit immer rot,
+  -- egal wie weit das Einlernen war.
+  if num(model.capacity_stable_turbines, 0) > 0 then return "LIMITED" end
   return "WARNING"
 end
 

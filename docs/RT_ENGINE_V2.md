@@ -1,6 +1,6 @@
 # RT-Regel-Engine v2
 
-**Stand: 2026-09-28 | manifest-v770 | Zweig `beta`**
+**Stand: 2026-09-29 | manifest-v779 | Zweig `beta`**
 
 Der RT-Knoten hat **genau eine** Regel-Engine (`rt2_*.lua`). Der
 Vorgaenger v1 (`reactor_control.lua`, `turbine_control.lua`,
@@ -95,11 +95,13 @@ deshalb entgangen.
 | AUTONOM | kein MASTER | 900 fuer alle |
 | SAFE | kein Reaktor mehr regelbar | 0 |
 
-Es gab bis v769 einen Zustand `LEARNING` davor, in dem eine
-Kapazitaetsmessung lief, bevor der Knoten ueberhaupt auf MASTER hoerte —
-mit eigenem Suchlauf, eigener Zwischendatei und mehreren Wegen, auf denen
-er haengenblieb. Der ist weg: sobald Hardware da ist, arbeitet der
-Knoten.
+Der Knoten LERNT weiterhin ein (siehe unten) — aber nicht mehr in einem
+eigenen ZUSTAND. Bis v769 stand hier ein `LEARNING`, das der Knoten erst
+verlassen durfte, wenn ein gestaffelter Suchlauf fertig war; solange hoerte
+er nicht auf MASTER, und an mehreren Stellen kam er dort nicht mehr heraus.
+Der Zustand ist weg und bleibt weg: sobald Hardware da ist, arbeitet der
+Knoten — Kommandos, Status und Sicherheitsfaelle laufen waehrend des
+Einlernens ganz normal. Uebersteuert wird einzig die Leistungsvorgabe.
 
 Der Modus wird **nie befohlen**: MASTER gegen AUTONOM ergibt sich allein
 aus dem Zeitstempel der letzten MASTER-Nachricht (12 s). `SET_MODE` wird
@@ -133,21 +135,76 @@ frueheren Teillast-Platz mit krummer Zieldrehzahl gibt es nicht mehr.
 ### Was MASTER dafuer braucht
 
 MASTER teilt seinen Leistungsbedarf gegen `capacity_max` auf. Diese Zahl
-wird **nur mitgeschrieben**, nicht eingelernt: jeden Takt die Energie
-aller Turbinen summieren und den hoechsten je erreichten Wert behalten.
-Eine geaenderte Turbinenzahl setzt ihn zurueck.
+muss beschreiben, was die Flotte liefert, wenn **alle** Turbinen laufen —
+denn MASTER rechnet den Prozentsatz als Anteil der LEISTUNG
+(`assigned_power = capacity * pct / 100`, `master/rt_sync.lua`), waehrend
+der Knoten ihn als Anteil der TURBINEN umsetzt. Beides deckt sich nur bei
+einer Zahl fuer die volle Flotte.
 
-Das ist immer eine Zahl, die wirklich geflossen ist — sie verspricht
-MASTER also nie zu viel. Zu wenig darf sie behaupten, und das korrigiert
-sich von selbst: teilt MASTER gegen eine zu kleine Zahl auf, fordert er
-einen hoeheren Prozentsatz, es laufen mehr Turbinen, der Ausstoss steigt.
+## Einlernen
 
-**Solange noch nichts geflossen ist, gilt MASTERs Vorgabe nicht und die
-ganze Flotte laeuft.** Sonst schliesst sich ein Kreis, aus dem der Knoten
-nicht mehr herauskommt: MASTER teilt gegen 0 auf, es kaeme eine Vorgabe
-von 0 % an, keine Turbine liefe, es floesse nichts, die Meldung bliebe 0.
-Frueher hielt die Lernphase diesen Kreis auf; jetzt steht die Bedingung
-an der einen Stelle im Orchestrator, die sie braucht.
+Verfahren wie vor v769 (damals `rt2_capacity.lua`), Betreibervorgabe:
+
+> „im learning modus muessen 80% der turbinen im ziel rpm bereich sein
+> +-15 rpm. das heisst die turbinen muessen auch unabhaengig vom master
+> waehrend des lernens — aber auch nur waehrend des lernens — auf 900 rpm
+> gebracht werden. sobald das abgeschlossen ist geht dan wieder ganz
+> normale regelung."
+
+Gemessen wird der **hoechste Gesamtausstoss, den die Anlage jemals
+nachweislich GLEICHZEITIG geliefert hat**:
+
+| | |
+|---|---|
+| Zielband | 900 ± 15 RPM (`LEARN_TOLERANCE_RPM`) |
+| Mindestanteil | 80 % der Flotte, gleichzeitig (`LEARN_MIN_FRACTION`) |
+| Abschluss | Hoechstwert steigt 6 s nicht mehr (`LEARN_STABLE_MS`) |
+| Reserve | gemeldet werden 95 % davon (`LEARN_SAFETY_MARGIN`) |
+| Notbremse | nach 3 min endet es in jedem Fall (`LEARN_TIMEOUT_MS`) |
+
+Ein Takt zaehlt nur, wenn genug Turbinen gleichzeitig im Band stehen,
+gekuppelt sind und wirklich liefern — eine Summe aus drei zufaellig
+laufenden Turbinen beschreibt die Anlage nicht. Von den tauglichen Takten
+gilt der **Hoechstwert**, nicht der erste: damit entscheidet nicht ein
+einzelner Augenblick, und ein Takt mitten im Hochlauf friert nichts ein.
+
+**Waehrend des Einlernens faehrt die ganze Flotte auf Zieldrehzahl und die
+MASTER-Vorgabe ist uebersteuert.** Nur so entsteht ein Wert, der die ganze
+Anlage beschreibt — und nur so kommt der Knoten ueberhaupt aus dem Stand:
+MASTER teilt gegen `capacity_max` auf, das ist beim Start 0, also kaeme
+eine Vorgabe von 0 % zurueck, also liefe keine Turbine, also floesse
+nichts. Danach gilt MASTERs Prozentsatz wieder unveraendert.
+
+Eine geaenderte Turbinen-ANZAHL ist ein Umbau und laesst neu einlernen —
+aber erst, wenn sie 3 s anhaelt (`TOPOLOGY_DEBOUNCE_MS`); ein Peripheral,
+das einen Takt lang nicht antwortet, sieht sonst aus wie eine abgebaute
+Turbine. Gar keine Turbinen gelesen ist dagegen **kein** Umbau, sondern
+ein Discovery-Aussetzer: melden, nichts anfassen.
+
+Mitgezaehlt wird ausserdem die **Saettigung**: eine Turbine, die vollen
+Durchfluss faehrt und trotzdem zu langsam ist, hat keine Reglerreserve
+mehr — entweder fehlt Dampf, oder die Spulenlast ist zu hoch. Das ist
+reine Diagnose, aber es macht ein unsichtbares Haengen zu einem lesbaren
+Befund im Log.
+
+### Was NICHT zurueckgekommen ist
+
+Der gestaffelte Suchlauf (v754–v757), der Turbinen stufenweise freigab und
+daraus eine „tragbare Anzahl" ableitete. Er hat im Feld 49 von 50 Turbinen
+abgestellt und war der Grund, warum das Einlernen haengenblieb. Ohne ihn
+findet der Knoten keine tragbare Teilmenge mehr — deshalb die Notbremse
+oben: bringt eine dampfarme Anlage nie 80 % ins Band, gilt nach 3 min der
+hoechste geflossene Ausstoss, und das Log sagt deutlich, dass die Zahl zu
+klein ist.
+
+### Die Kette bis MASTER
+
+`status_fields()` → `build_status_payload()` → `message_handlers.lua` →
+`ui_controller.lua`. Sie laeuft ueber reine Feldnamen in vier Dateien;
+bricht sie in der Mitte, faellt nichts um und die Anzeige zeigt still eine
+Null. Genau so lagen `capacity_sustainable_turbines` und
+`capacity_required_turbines` lange tot. Abgesichert in
+`capacity_payload_chain_test.py`.
 
 ## Das Regelgesetz des Durchflusses
 
@@ -288,10 +345,17 @@ Festgehalten in `turbine_adapter_capability_probe_test.lua`.
 Mehr legt der Knoten nicht ab. Bis v768 schrieb er drei weitere Dateien
 (`rt2_capacity_cache.lua`, `rt2_reactor_tuning.lua`,
 `rt2_turbine_model.lua`) mit gelernter Kapazitaet, gemessenem
-Anlagenprofil je Reaktor und Kennlinie je Turbine. Alle drei konnten die
-Regelung von Lauf zu Lauf veraendern — ein Neustart war damit nie
-wirklich derselbe Zustand. Es gelten jetzt die festen Werte aus
+Anlagenprofil je Reaktor und Kennlinie je Turbine. Die letzten beiden
+veraenderten die Regelung von Lauf zu Lauf — ein Neustart war damit nie
+wirklich derselbe Zustand; es gelten jetzt die festen Werte aus
 `rt2_reactor.lua` und `rt2_turbine.lua`.
+
+**Der Kapazitaets-Cache ist damit ebenfalls weg**: die Anlage wird nach
+jedem Neustart neu eingelernt. Das dauert, solange die Flotte braucht, um
+80 % ins Zielband zu bringen — und es hat den Vorteil, dass kein
+veralteter Wert aus einer Datei zurueckkommen kann, nachdem sich an der
+Anlage etwas geaendert hat. Soll der Wert einen Neustart ueberdauern, ist
+das eine eigene Entscheidung und eine eigene Datei.
 
 ## Anzeige
 
@@ -348,7 +412,11 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
 | `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt den wirklichen Zustand |
 | `rt_boot_smoke_test.lua` | Kaltstart der ganzen Rolle auf einer simulierten Anlage |
-| plus Modultests je `rt2_*`-Datei | |
+| `rt2_learning_test.lua` | Einlernen: 80 %, Zielband, Hoechstwert, Notbremse, Umbau |
+| `rt2_clock_backwards_no_regulator_lock_test.lua` | eine zurueckspringende Uhr sperrt weder Durchfluss- noch Stabregelung aus |
+| `rt2_turbine_flow_decoupled_from_tank_test.lua` | der Dampftank regelt den Reaktor, nicht die Turbinen |
+| `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |
+| plus Modultests je `rt2_*`-Datei (`rt2_turbine`, `rt2_reactor`, `rt2_state_machine`, `rt2_orchestrator`, `rt2_engine`, `rt2_adapter`, `rt2_safety`, `rt2_projection`, `rt2_master_link`, `rt2_command_handler`) | |
 
 ## Stand im Betrieb
 
