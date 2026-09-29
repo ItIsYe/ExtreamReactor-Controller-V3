@@ -47,6 +47,30 @@ M.MIN_FLOW = 0
 M.MAX_FLOW = 2000
 M.TRIM_STEP = 35
 
+-- Groesster Bremsschritt. Beschleunigen und Bremsen sind NICHT symmetrisch:
+--
+-- Der Schritt wird als TRIM_STEP * Abweichung / RPM_BAND gerechnet und war
+-- danach in BEIDE Richtungen auf TRIM_STEP gedeckelt. Damit war er fuer
+-- jede Abweichung ab Bandbreite derselbe -- 35, egal ob die Turbine 40 oder
+-- 350 Umdrehungen zu schnell dreht. Aus dem Regelgesetz wurde so ausserhalb
+-- des Bands ein fester Schritt, und die Verstaerkung, die der Kommentar
+-- unten beschreibt, gab es nur INNERHALB des Bands.
+--
+-- Nachgemessen am 2026-09-29, Ziel 900, Durchfluss 2000: bei 1000 und bei
+-- 1250 U/min kam derselbe Schritt heraus (35), und den Durchfluss von 2000
+-- auf 0 zurueckzunehmen brauchte 58 Takte -- rund 35 Sekunden. In dieser
+-- Zeit bekommt der Rotor fast vollen Dampf und dreht weiter hoch. Genau das
+-- war die Betriebsmeldung "geht in Overspeed" und "der Regler hat reagiert,
+-- aber sehr spaet": gerettet hat am Ende nur die harte Abschaltung bei
+-- OVERSPEED_RPM.
+--
+-- Warum nur nach unten: zu viel Dampf endet in Ueberdrehzahl, zu wenig
+-- Dampf kostet kurz Leistung. Die eine Richtung schuetzt die Maschine, die
+-- andere nicht -- und ein ebenso schneller Schritt nach OBEN wuerde das
+-- Ueberschwingen vergroessern, das ueberhaupt erst in diese Lage fuehrt.
+-- Nach oben bleibt deshalb alles wie es war.
+M.MAX_TRIM_STEP_DOWN = 400
+
 -- So lange bleibt eine Durchflussvorgabe stehen, bevor die naechste kommt.
 --
 -- Der Regler lief bisher in jedem Takt -- mehrmals pro Sekunde -- gegen
@@ -227,25 +251,43 @@ function M.compute_flow_decision(input)
   -- Rueckmesswert, der Orchestrator schreibt wieder, und dabei wird
   -- last_change_ms auf die neue Zeit gesetzt. Der Fehler heilt sich in
   -- einem einzigen Takt.
+  --
+  -- Ausserhalb des Bands nach OBEN gilt sie nicht. Oberhalb von
+  -- target+band bremst schon die Spule (compute_coil_decision's
+  -- BRAKE_TO_TARGET) -- dieselbe Schwelle, dieselbe Begruendung: dort wird
+  -- nicht mehr fein geregelt, sondern Dampf weggenommen, und das ist eine
+  -- Schutzentscheidung. Die Stellsperre wuerde jeden zweiten Takt
+  -- verschenken, waehrend der Rotor weiter hochlaeuft.
   local now_ms = tonumber(input.now_ms)
   local last_change_ms = tonumber(input.last_change_ms)
   local interval_ms = tonumber(input.min_adjust_interval_ms) or M.MIN_ADJUST_INTERVAL_MS
-  if now_ms and last_change_ms then
+  local braking = rpm > target_rpm + band
+  if now_ms and last_change_ms and not braking then
     local since = now_ms - last_change_ms
     if since >= 0 and since < interval_ms then
       return hold("SETTLING")
     end
   end
 
-  -- Proportionalschritt, gedeckelt. Am Bandrand genau TRIM_STEP, naeher am
-  -- Ziel entsprechend weniger, mindestens aber 1 -- sonst bliebe eine
-  -- kleine Abweichung ewig stehen.
+  -- Proportionalschritt. Am Bandrand genau TRIM_STEP, naeher am Ziel
+  -- entsprechend weniger, mindestens aber 1 -- sonst bliebe eine kleine
+  -- Abweichung ewig stehen. Weiter weg waechst er mit der Abweichung; nur
+  -- die Deckelung unterscheidet die Richtungen (siehe MAX_TRIM_STEP_DOWN).
   local step = M.TRIM_STEP * math.abs(error_rpm) / band
-  step = math.max(1, math.min(M.TRIM_STEP, math.floor(step + 0.5)))
+
   if error_rpm > 0 then
-    return { flow = clamp(current_flow + step, min_flow, max_flow), reason = "TRIM_UP" }
+    -- Zu langsam: gemaechlich nachlegen. Ein grosser Schritt hier erzeugt
+    -- genau das Ueberschwingen, das die Turbine ueber das Band traegt.
+    local up = math.max(1, math.min(M.TRIM_STEP, math.floor(step + 0.5)))
+    return { flow = clamp(current_flow + up, min_flow, max_flow), reason = "TRIM_UP" }
   end
-  return { flow = clamp(current_flow - step, min_flow, max_flow), reason = "TRIM_DOWN" }
+
+  -- Zu schnell: mit der Abweichung wachsend zuruecknehmen. Je weiter die
+  -- Turbine ueber dem Ziel steht, desto entschiedener wird der Dampf
+  -- weggenommen -- und weil die Drehzahl bei zu viel Dampf weiter steigt,
+  -- verstaerkt sich die Bremsung von selbst, statt bei 35 stehenzubleiben.
+  local down = math.max(1, math.min(M.MAX_TRIM_STEP_DOWN, math.floor(step + 0.5)))
+  return { flow = clamp(current_flow - down, min_flow, max_flow), reason = "TRIM_DOWN" }
 end
 
 -- ── Coil decision ────────────────────────────────────────────────────────
