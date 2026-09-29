@@ -73,11 +73,40 @@ M.TRIM_STEP = 35
 --   nur kurzer Vorhalt 0,25 s     Spanne 42, im Band nach 38,0 s
 --   beides                        Spanne 41, im Band nach 45,5 s
 --
--- Der kurze Vorhalt bringt fast die ganze Ruhe und kostet anderthalb
--- Sekunden; der Schrittdeckel kostet zehn und bringt kaum mehr. Also nur
--- der Vorhalt wird verkuerzt. Der Deckel bleibt als Grenze bestehen, greift
--- aber im Normalfall nicht -- er faengt nur einen Rauschausreisser ab,
--- damit im Zielbereich nie ein grosser Schritt entsteht.
+-- Der Vorhalt bringt fast die ganze Ruhe und kostet anderthalb Sekunden;
+-- der Schrittdeckel kostet zehn und bringt kaum mehr.
+--
+-- Zweiter Durchgang, Betreiberwunsch "bei fine noch feiner" -- dieselbe
+-- Messung, jetzt auch die mittlere SCHRITTWEITE je Verstellung, weil genau
+-- die "feiner" ausmacht (Rotor lag=0.04):
+--
+--   Vorhalt 0,25 s, Deckel 20     Spanne 49, Schritt 6,4, im Band nach 38,0 s
+--   Vorhalt AUS,    Deckel 20     Spanne 41, Schritt 4,4, im Band nach 38,0 s
+--   Vorhalt AUS,    Deckel 10     Spanne 41, Schritt 4,4, im Band nach 38,0 s
+--   Vorhalt AUS,    Deckel 6      Spanne 37, Schritt 4,2, im Band nach 46,5 s
+--   Vorhalt AUS,    Deckel 3      Spanne 24, Schritt 2,9, im Band nach 59,0 s
+--
+-- In der Feinzone ist die hochgerechnete Rate fast nur noch Rauschen --
+-- auch die verbliebenen 0,25 s davon. Ganz abzuschalten macht den Schritt
+-- um ein Drittel kleiner und kostet NICHTS. Darunter wird es teuer: Deckel
+-- 6 kostet achteinhalb Sekunden, Deckel 3 kostet einundzwanzig.
+--
+-- Der Vorhalt ist deshalb in der Feinzone aus -- aber nicht bedingungslos.
+-- Ihn dort einfach abzuschalten hat einen Fall mitgenommen, fuer den er
+-- gerade gebraucht wird: eine Turbine, die mit +100 U/min/s mitten durch
+-- das Ziel beschleunigt, wurde dann nur noch gehalten statt gebremst (sie
+-- faellt erst 15 Umdrehungen spaeter aus der Feinzone und wird dort
+-- gefangen -- zu spaet, und der Sinn der Ratenpruefung war, genau das zu
+-- verhindern).
+--
+-- Also ein Tor statt eines Schalters: in der Feinzone zaehlt die Rate erst
+-- ab FINE_RATE_GATE_RPM_PER_S. Darunter ist sie Rauschen und wird
+-- vollstaendig ignoriert; darueber gilt der volle Vorhalt, und es wird
+-- gebremst wie ausserhalb.
+--
+-- Der Wert liegt ueber dem, was Messrauschen erzeugen kann: +/-6 U/min
+-- Lesefehler auf einen halben Takt sind bis zu 24 U/min/s. Eine echte
+-- Durchfahrt liegt um ein Vielfaches darueber.
 --
 -- Die Feinzone wird am GEMESSENEN Abstand festgemacht, nicht am
 -- vorhergesagten: "nah am Zielbereich" ist eine Aussage darueber, wo die
@@ -85,8 +114,8 @@ M.TRIM_STEP = 35
 -- zulaeuft, gehoert nicht hinein -- die soll weiter kraeftig
 -- zurueckgenommen werden duerfen.
 M.FINE_BAND_RPM = 15
-M.FINE_LOOKAHEAD_S = 0.25
-M.FINE_TRIM_STEP = 20
+M.FINE_RATE_GATE_RPM_PER_S = 40
+M.FINE_TRIM_STEP = 10
 
 -- Groesster Bremsschritt. Beschleunigen und Bremsen sind NICHT symmetrisch:
 --
@@ -347,16 +376,24 @@ function M.compute_flow_decision(input)
   -- Der Vorhalt: geregelt wird auf die Drehzahl, die in LOOKAHEAD_S
   -- Sekunden anliegt, wenn es so weitergeht. Ohne Rate bleibt es beim
   -- Istwert.
-  -- Nah am Ziel wird der Vorhalt verkuerzt (siehe FINE_BAND_RPM): dort ist
-  -- die hochgerechnete Rate ueberwiegend Messrauschen, und der Regler
-  -- wuerde dieses Rauschen nachstellen.
+  -- Nah am Ziel entfaellt der Vorhalt (siehe FINE_BAND_RPM): dort ist die
+  -- hochgerechnete Rate fast nur noch Messrauschen, und der Regler wuerde
+  -- dieses Rauschen nachstellen. Die Rate selbst wird weiter gebildet --
+  -- die Ruhezone unten braucht sie.
   local fine_band = tonumber(input.fine_band_rpm) or M.FINE_BAND_RPM
   local in_fine_zone = math.abs(error_rpm) <= fine_band
-  local lookahead_s = tonumber(input.lookahead_s)
-    or (in_fine_zone and (tonumber(input.fine_lookahead_s) or M.FINE_LOOKAHEAD_S))
-    or M.LOOKAHEAD_S
+  local lookahead_s = tonumber(input.lookahead_s) or M.LOOKAHEAD_S
+
+  -- In der Feinzone zaehlt die Rate erst ab dem Tor: darunter ist sie
+  -- Rauschen, und der Regler wuerde Rauschen nachstellen.
+  local rate_gate = tonumber(input.fine_rate_gate_rpm_per_s) or M.FINE_RATE_GATE_RPM_PER_S
+  local use_rate = rate_rpm_per_s ~= nil
+  if use_rate and in_fine_zone and math.abs(rate_rpm_per_s) < rate_gate then
+    use_rate = false
+  end
+
   local control_error = error_rpm
-  if rate_rpm_per_s then
+  if use_rate then
     -- Die Vorhersage wird begrenzt. Eine aus zwei dicht aufeinander
     -- folgenden Messpunkten gerechnete Rate kann voellig ueberzogen sein
     -- (ein Sprung von 40 Umdrehungen in 100 ms ergibt 400 U/min/s), und
@@ -466,7 +503,7 @@ function M.compute_flow_decision(input)
     -- Zu langsam. Wie entschieden nachgelegt werden darf, haengt daran, ob
     -- eine Rate vorliegt: mit Vorhalt bremst die Vorhersage rechtzeitig
     -- wieder ein, ohne ihn wuerde ein grosser Schritt ueberschwingen.
-    local cap = rate_rpm_per_s and M.MAX_TRIM_STEP_UP or M.TRIM_STEP
+    local cap = use_rate and M.MAX_TRIM_STEP_UP or M.TRIM_STEP
     local up = math.max(1, math.min(cap, math.floor(step + 0.5)))
     return { flow = clamp(current_flow + up, min_flow, max_flow), reason = "TRIM_UP" }
   end

@@ -225,18 +225,27 @@ end
 --     gedeckelt. Betreibervorgabe: "wenn die Turbine nah dem Zielbereich
 --     ist, dass der feiner regelt."
 do
-  -- Innerhalb der Feinzone: derselbe Rauschimpuls erzeugt einen deutlich
-  -- kleineren Schritt als knapp ausserhalb. Das IST die Feinheit -- nah am
-  -- Ziel ist die hochgerechnete Rate ueberwiegend Messrauschen.
-  local inside = decide(890, 878, 900, 1000)   -- 10 unter Ziel, +24 U/min/s
-  local outside = decide(870, 858, 900, 1000)  -- 30 unter Ziel, +24 U/min/s
-  assert_eq(inside.reason, "FINE_UP", "innerhalb der Feinzone regelt es fein")
-  assert_eq(outside.reason, "TRIM_UP", "ausserhalb ganz normal")
-  local step_inside = inside.flow - 1000
-  local step_outside = outside.flow - 1000
-  if not (step_inside < step_outside) then
-    error("in der Feinzone muss der Schritt kleiner sein -- " ..
-      step_inside .. " vs " .. step_outside, 0)
+  -- Das Tor: in der Feinzone wird eine Rate auf Rauschniveau vollstaendig
+  -- ignoriert. Die Entscheidung muss dieselbe sein, als laege gar keine
+  -- Vorgeschichte vor -- DAS ist die Feinheit.
+  local noisy = decide(890, 878, 900, 1000)    -- 10 unter Ziel, +24 U/min/s
+  local no_rate = t.compute_flow_decision({ rpm = 890, target_rpm = 900, current_flow = 1000 })
+  assert_eq(noisy.reason, "FINE_UP", "innerhalb der Feinzone regelt es fein")
+  assert_eq(noisy.flow, no_rate.flow,
+    "eine Rate auf Rauschniveau darf in der Feinzone nichts aendern")
+
+  -- Ohne das Tor kippt derselbe Rauschimpuls die Entscheidung sogar um:
+  -- 890 plus 24 hochgerechnet ergibt 914, also "zu schnell".
+  local ungated = decide(890, 878, 900, 1000, { fine_rate_gate_rpm_per_s = 0 })
+  assert_eq(ungated.reason, "FINE_DOWN",
+    "ohne Tor wuerde das Rauschen die Richtung umdrehen -- genau das faengt es ab")
+
+  -- Oberhalb des Tors zaehlt die Rate weiterhin, auch in der Feinzone:
+  -- eine echte Durchfahrt wird gebremst, nicht gehalten.
+  local passing = decide(900, 850, 900, 1000)  -- +100 U/min/s
+  assert_eq(passing.reason, "FINE_DOWN", "eine echte Durchfahrt wird gebremst")
+  if not (passing.flow < 1000) then
+    error("und zwar wirklich -- der Durchfluss muss sinken", 0)
   end
 
   -- Der Deckel gilt in beide Richtungen.

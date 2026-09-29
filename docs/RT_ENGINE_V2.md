@@ -301,8 +301,8 @@ Aufschwingen, wenn der Vorhalt die Zeitkonstante der Strecke ueberholt.
 ### Feinzone — nah am Ziel feiner stellen
 
 Innerhalb von `FINE_BAND_RPM` (15 RPM, dasselbe Zielband wie beim
-Einlernen) wird der Vorhalt auf `FINE_LOOKAHEAD_S` (0,25 s) verkuerzt und
-der Schritt auf `FINE_TRIM_STEP` (20) gedeckelt.
+Einlernen) zaehlt die Aenderungsrate erst ab `FINE_RATE_GATE_RPM_PER_S`
+(40 U/min/s), und der Schritt ist auf `FINE_TRIM_STEP` (10) gedeckelt.
 
 Grund: was nah am Ziel grob macht, ist nicht die Verstaerkung — der Schritt
 ist dort ohnehin klein. Es ist der Vorhalt. Die Rate entsteht aus zwei
@@ -322,8 +322,33 @@ der Ruhelage ueber 100 Takte):
 | beides | 41 | 45,5 s |
 
 Der kurze Vorhalt bringt fast die ganze Ruhe und kostet anderthalb
-Sekunden; der Schrittdeckel kostet zehn und bringt kaum mehr. Der Deckel
-bleibt trotzdem als Grenze stehen — er greift im Normalfall nicht und
+Sekunden; der Schrittdeckel kostet zehn und bringt kaum mehr.
+
+Zweiter Durchgang („bei fine noch feiner"), dieselbe Messung plus die
+mittlere **Schrittweite** je Verstellung — genau die macht „feiner" aus:
+
+| Feinzone | Spanne | Schritt | im Band nach |
+|---|---|---|---|
+| Vorhalt 0,25 s, Deckel 20 | 49 | 6,4 | 38,0 s |
+| **Vorhalt aus, Deckel 10** | **41** | **4,4** | **38,0 s** |
+| Vorhalt aus, Deckel 6 | 37 | 4,2 | 46,5 s |
+| Vorhalt aus, Deckel 3 | 24 | 2,9 | 59,0 s |
+
+Auch die verbliebenen 0,25 s Vorhalt sind in der Feinzone fast nur noch
+Rauschen. Ganz abzuschalten macht den Schritt um ein Drittel kleiner und
+kostet nichts; darunter wird es teuer.
+
+**Aber nicht bedingungslos abschalten.** Das nimmt einen Fall mit, fuer den
+der Vorhalt gerade gebraucht wird: eine Turbine, die mit +100 U/min/s mitten
+durch das Ziel beschleunigt, wird dann nur noch gehalten statt gebremst —
+sie faellt erst 15 Umdrehungen spaeter aus der Feinzone. Deshalb ein **Tor**
+statt eines Schalters: unter `FINE_RATE_GATE_RPM_PER_S` ist die Rate
+Rauschen und wird vollstaendig ignoriert, darueber gilt der volle Vorhalt.
+Der Wert liegt ueber dem, was Messrauschen erzeugen kann (±6 U/min auf einen
+halben Takt sind bis zu 24 U/min/s); eine echte Durchfahrt liegt um ein
+Vielfaches darueber.
+
+Der Deckel bleibt als Grenze stehen — er greift im Normalfall nicht und
 faengt nur einen Rauschausreisser ab.
 
 Die Feinzone haengt am **gemessenen** Abstand, nicht am vorhergesagten:
