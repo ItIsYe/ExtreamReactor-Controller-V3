@@ -245,8 +245,13 @@ function rules:evaluate(context)
         and has_reason(node_reasons, health.reasons.NO_MATRIX)
       local matrix_key = string.format("MATRIX_MISSING|%s", tostring(node.id))
       emit(matrix_key, matrix_missing, base_opts, function()
-        local matrix_count = node.matrix_count or node.matrix_bound or 0
-        local storage_count = node.storage_bound_count or 0
+        -- Die Zaehler stehen im Energy-Payload, nicht in der Node-Tabelle:
+        -- master/message_handlers.lua legt das Payload unter node.energy ab
+        -- und kopiert diese beiden Felder nicht nach oben. Vorher stand
+        -- hier deshalb immer 0/0, und die Schwere war immer CRITICAL.
+        local e = (type(node.energy) == "table" and node.energy) or node
+        local matrix_count = e.matrix_count or node.matrix_count or node.matrix_bound or 0
+        local storage_count = e.storage_bound_count or node.storage_bound_count or 0
         local severity = (storage_count == 0 and matrix_count == 0) and "CRITICAL" or "WARN"
         return {
           code = "MATRIX_MISSING",

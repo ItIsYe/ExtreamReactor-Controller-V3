@@ -288,17 +288,19 @@ local function build_status_payload()
   if not actuator_ready then valve_health.reasons[health.reasons.CONTROL_DEGRADED] = true end
   valve_health.last_seen_ts = os.epoch("utc")
   local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"), role = config.role, node_id = node_id,
+    role = config.role, node_id = node_id,
     health = { status = valve_health.status, reasons = health.reasons_list(valve_health),
       last_seen_ts = valve_health.last_seen_ts },
     master_connected = master_reachable,
     queue = comms and comms:get_diagnostics().queue_depth or 0,
   })
-  payload.blocked = state.initialized and state.current_high or nil
-  payload.actuator_ready = actuator_ready
-  payload.actuator_name = state.sorter_name
-  payload.actuator_mode = state.actuator_mode
-  payload.write_error = state.last_write_error
+  -- Kommunikations-Durchgang 2026-09-29: blocked, actuator_ready,
+  -- actuator_name, actuator_mode und write_error hatten keinen Leser.
+  -- Die eigene Oberflaeche (local_ui.lua) liest state.* direkt, FUELs
+  -- router_scada.lua nur die Peer-Liste (id/label/down), und MASTER zeigt
+  -- von einem VALVE-Knoten nur die allgemeinen Felder. Ein klemmender
+  -- Aktor bleibt sichtbar: er setzt actuator_ready=false und damit
+  -- CONTROL_DEGRADED in health.reasons -- und das liest MASTER.
   return payload
 end
 

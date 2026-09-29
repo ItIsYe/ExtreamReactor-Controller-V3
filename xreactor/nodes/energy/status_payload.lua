@@ -33,32 +33,31 @@ function M.new(opts)
     local registry_summary = runtime.devices.registry_summary or runtime.registry:get_summary()
     local effective_matrix_count = #(runtime.devices.matrix_groups or {})
     local effective_storage_count = #(runtime.devices.storages or {})
-    energy.monitor_bound = runtime.devices.monitor ~= nil
-    energy.storage_bound_count = effective_storage_count
-    energy.bound_storage_names = runtime.devices.bound_storage_names or {}
+    -- Kommunikations-Durchgang 2026-09-29: raus ist, wofuer sich im ganzen
+    -- Baum kein Leser finden liess -- monitor_bound, bound_storage_names,
+    -- matrix_snapshot_freshness_ms/_stale, matrix_present, matrix_percent,
+    -- storages_count, storage_snapshot_freshness_ms/_stale sowie
+    -- storage_stored/_capacity/_input/_output. Was davon hier drin noch
+    -- gebraucht wird, steht jetzt in lokalen Variablen und geht nicht mehr
+    -- ueber Funk.
+    local monitor_bound = runtime.devices.monitor ~= nil
+    local matrix_stale = matrix.stale == true
+    local storage_stale = energy.stale == true
     energy.matrices = matrix.matrices
     energy.total = matrix.total
-    energy.matrix_snapshot_freshness_ms = matrix.freshness_ms
-    energy.matrix_snapshot_stale = matrix.stale == true
-    energy.matrix_present = effective_matrix_count > 0
     energy.matrix_energy = matrix.total.stored
     energy.matrix_capacity = matrix.total.capacity
-    energy.matrix_percent = matrix.total.percent
     energy.matrix_in = matrix.total.input
     energy.matrix_out = matrix.total.output
-    energy.storages_count = effective_storage_count
-    energy.storage_snapshot_freshness_ms = energy.freshness_ms
-    energy.storage_snapshot_stale = energy.stale == true
-    energy.data_stale = (effective_storage_count > 0 and energy.storage_snapshot_stale)
-      or (effective_matrix_count > 0 and energy.matrix_snapshot_stale)
+    -- Die beiden Zaehler liest core/alert_rules.lua fuer MATRIX_MISSING.
+    energy.storage_bound_count = effective_storage_count
+    energy.matrix_count = effective_matrix_count
+    energy.data_stale = (effective_storage_count > 0 and storage_stale)
+      or (effective_matrix_count > 0 and matrix_stale)
     energy.aggregate_stored = total_stored
     energy.aggregate_capacity = total_capacity
     energy.aggregate_input = total_input
     energy.aggregate_output = total_output
-    energy.storage_stored = energy.stored
-    energy.storage_capacity = energy.capacity
-    energy.storage_input = energy.input
-    energy.storage_output = energy.output
     -- C1: Kanonische Felder sind aggregate_stored/capacity/input/output.
     -- stored/capacity/input/output werden als Aliase beibehalten (Abwärtskompatibilität).
     -- Master liest: aggregate_stored (Gesamtspeicher), matrix_energy (nur Matrix),
@@ -67,23 +66,20 @@ function M.new(opts)
     energy.capacity = total_capacity
     energy.input    = total_input
     energy.output   = total_output
-    local summary = {}
+    -- Sortierung bleibt: die eigene Oberflaeche zeigt die Speicher in
+    -- dieser Reihenfolge. Die daraus gebaute storages_summary (Top 3) ist
+    -- raus -- gelesen hat sie niemand.
     table.sort(energy.stores, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
-    for i = 1, math.min(3, #energy.stores) do
-      local s = energy.stores[i]
-      local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
-      table.insert(summary, { name = s.id, percent = pct })
-    end
-    energy.storages_summary = summary
-    energy.last_scan_ts = runtime.devices.last_scan_ts
-    energy.last_scan_result = runtime.devices.last_scan_result
+    -- last_error/last_error_ts liest master/message_handlers.lua.
+    -- last_scan_ts, last_scan_result und peripheral_count sind raus: die
+    -- eigene Oberflaeche holt sie direkt aus runtime.devices (ui_model.lua),
+    -- MASTER fragt sie nie.
     energy.last_error = runtime.devices.last_error
     energy.last_error_ts = runtime.devices.last_error_ts
-    energy.peripheral_count = runtime.devices.peripheral_count
 
     local reasons = {}
     local degrade_reasons = {}
-    if not energy.monitor_bound then reasons[runtime.health.reasons.NO_MONITOR] = true end
+    if not monitor_bound then reasons[runtime.health.reasons.NO_MONITOR] = true end
     if effective_storage_count == 0 and effective_matrix_count == 0 then
       -- NO_STORAGE nur wenn wirklich kein Energiespeicher erkannt wurde
       -- (weder Matrix noch separater Storage-Adapter).
@@ -116,12 +112,12 @@ function M.new(opts)
     runtime.energy_health.bindings = {
       storages = effective_storage_count,
       matrices = effective_matrix_count,
-      monitor = energy.monitor_bound and 1 or 0
+      monitor = monitor_bound and 1 or 0
     }
     runtime.energy_health.capabilities = {
       storage_count = effective_storage_count,
       matrix_count = effective_matrix_count,
-      monitor = energy.monitor_bound
+      monitor = monitor_bound
     }
     energy.health = {
       status = runtime.energy_health.status,
@@ -131,13 +127,13 @@ function M.new(opts)
       capabilities = runtime.energy_health.capabilities
     }
     energy.bindings_summary = runtime.health.summarize_bindings(runtime.energy_health.bindings)
-    energy.-- Nur die SUMME: devices/diagnostics waren die komplette
--- Geraeteliste und wurden nirgends gelesen (siehe RT-
--- status_snapshot.lua). Die eigene Oberflaeche liest die
--- Registry direkt (ui_model.lua), nicht ueber das Payload.
-registry = {
-  summary = registry_summary,
-}
+    -- Nur die SUMME: devices/diagnostics waren die komplette Geraeteliste
+    -- und wurden nirgends gelesen (siehe RT-status_snapshot.lua). Die
+    -- eigene Oberflaeche liest die Registry direkt (ui_model.lua), nicht
+    -- ueber das Payload.
+    energy.registry = {
+      summary = registry_summary
+    }
 
     local total_duration = runtime.now_ms() - started_at
     local matrix_mode = (effective_matrix_count > 0 and effective_storage_count > 0 and "mixed") or (effective_matrix_count > 0 and "matrix_only") or (effective_storage_count > 0 and "storage_only") or "empty"

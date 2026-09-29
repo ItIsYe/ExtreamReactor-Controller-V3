@@ -230,13 +230,11 @@ local function build_status_payload_uncached()
   reproc_health.reasons = reasons
   reproc_health.last_seen_ts = os.epoch("utc")
   local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"), role = config.role, node_id = config.node_id,
+    role = config.role, node_id = config.node_id,
     health = { status = reproc_health.status, reasons = health.reasons_list(reproc_health), last_seen_ts = reproc_health.last_seen_ts },
-    discovery_failed = devices.discovery_failed, master_connected = master_ok,
-    master_seen_s = master_seen and math.max(0, math.floor((os.epoch("utc") - master_seen) / 1000)) or nil,
+    master_connected = master_ok,
     queue = comms and comms:get_diagnostics().queue_depth or 0,
-    peers = comms and comms.peer_state and comms.peer_state.peers or nil,
-    alerts = master_alerts, protocol_mismatch = devices.proto_mismatch,
+    protocol_mismatch = devices.proto_mismatch,
     last_command = devices.last_command, last_command_ts = devices.last_command_ts,
     -- Nur die SUMME: devices/diagnostics waren die komplette
     -- Geraeteliste und wurden nirgends gelesen (siehe RT-
