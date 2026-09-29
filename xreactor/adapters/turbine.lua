@@ -77,6 +77,20 @@ local capability_cache = {}
 local RPM_METHODS  = { "getRotorSpeed", "getRotorRPM" }
 local FLOW_METHODS = { "getFluidFlowRateMax", "getFluidFlowRate" }
 
+-- Der Ausstoss hatte als EINZIGER Messwert keine Kandidatenliste: ein fest
+-- verdrahtetes getEnergyProducedLastTick, und wenn die Turbine das nicht
+-- kennt, kam still eine 0 heraus. Das ist teurer als es klingt -- das
+-- Einlernen zaehlt eine Turbine nur dann als "im Zielband", wenn sie
+-- energy > 0 meldet (rt2_orchestrator.lua's measure()). Ohne lesbaren
+-- Ausstoss erreicht also NIE eine Turbine das Band, das Einlernen wartet
+-- endlos, und die Anzeige sagt dazu nur "0 von 50 im Zielband" -- als
+-- laege es an der Drehzahl.
+--
+-- getEnergyStats() ist kein geratener Name: adapters/reactor.lua liest
+-- daraus seit jeher energyProducedLastTick, dieselbe Groesse unter
+-- demselben Feldnamen.
+local ENERGY_METHODS = { "getEnergyProducedLastTick" }
+
 -- Auch das SCHREIBEN wird ermittelt, nicht angenommen.
 --
 -- Der Lesepfad ist seit v739 durch has_method() gedeckt und vertraegt
@@ -101,6 +115,17 @@ local function first_available(set, candidates)
 end
 
 -- Gibt die Methodenmenge zurueck, oder nil wenn sie (noch) unbekannt ist.
+-- Ein Stellbefehl, der dauerhaft nicht angenommen wird, ist der Grund
+-- dafuer, dass "der Regler nichts tut" -- und er gehoert deshalb auf den
+-- Rechner selbst. utils.log()/log_once() routen zum Log-Collector; das
+-- ist keine Anzeige.
+local shouted = {}
+local function shout(key, msg)
+  if shouted[key] then return end
+  shouted[key] = true
+  pcall(print, "[RT] " .. msg)
+end
+
 local function capabilities(name, log_prefix)
   local cached = capability_cache[name]
   if cached then return cached end
@@ -119,6 +144,8 @@ local function capabilities(name, log_prefix)
     methods = methods, set = set,
     rpm_method = first_available(set, RPM_METHODS),
     flow_method = first_available(set, FLOW_METHODS),
+    energy_method = first_available(set, ENERGY_METHODS),
+    energy_stats = has_method(set, "getEnergyStats"),
     set_flow_method = first_available(set, SET_FLOW_METHODS),
     set_coil_method = first_available(set, SET_COIL_METHODS),
     set_active_method = first_available(set, SET_ACTIVE_METHODS),
@@ -128,6 +155,12 @@ local function capabilities(name, log_prefix)
   -- kein getFluidFlowRateMax meldete, wurde dauerhaft ohne Durchfluss-
   -- Methode gemerkt. Ihr Rueckmesswert blieb damit fuer immer unbekannt,
   -- obwohl die Drehzahl sauber las -- genau das Bild aus dem Betrieb.
+  if entry.rpm_method and not (entry.energy_method or entry.energy_stats) then
+    log_once(log_prefix, tostring(name) .. ":no-energy-method",
+      "Turbine " .. tostring(name) .. " kennt noch keine Ausstoss-Methode --"
+        .. " es wird bei jedem Takt neu nachgesehen")
+    return entry
+  end
   if entry.rpm_method and not entry.flow_method then
     log_once(log_prefix, tostring(name) .. ":no-flow-method",
       "Turbine " .. tostring(name) .. " kennt keine der bekannten Durchfluss-Methoden ("
@@ -192,8 +225,35 @@ function turbine.inspect(name, log_prefix)
     and (safe_call(name, "getActive", log_prefix) == true) or false
   local rpm = read_number(name, caps and caps.rpm_method or nil, log_prefix)
   local flow = read_number(name, caps and caps.flow_method or nil, log_prefix)
-  local energy = read_number(name,
-    has_method(method_set, "getEnergyProducedLastTick") and "getEnergyProducedLastTick" or nil, log_prefix)
+  -- Erst die direkte Methode, dann die Statistik-Tabelle. Findet sich
+  -- keine von beiden, bleibt der Wert UNBEKANNT (nil) -- nicht 0. Eine
+  -- erfundene 0 hiesse "die Turbine liefert nichts", und genau das hat das
+  -- Einlernen endlos warten lassen.
+  local energy = nil
+  local energy_readable = false
+  if caps and caps.energy_method then
+    energy_readable = true
+    local value = read_number(name, caps.energy_method, log_prefix)
+    if type(value) == "number" then energy = value end
+  elseif caps and caps.energy_stats then
+    energy_readable = true
+    local stats = safe_call(name, "getEnergyStats", log_prefix)
+    if type(stats) == "table" and type(stats.energyProducedLastTick) == "number" then
+      energy = stats.energyProducedLastTick
+    end
+  end
+  if caps and caps.rpm_method and not energy_readable then
+    -- Laut sagen, nicht nur ins Log: ohne diesen Wert kommt das Einlernen
+    -- nie zu einem Ergebnis, und von aussen sieht das nach einem
+    -- Drehzahlproblem aus.
+    local msg = string.format(
+      "Turbine %s kennt weder %s noch getEnergyStats -- ihr Ausstoss ist"
+        .. " nicht lesbar, und ohne ihn kommt das EINLERNEN nie zu einem"
+        .. " Ergebnis (es zaehlt nur Turbinen, die Leistung melden)",
+      tostring(name), table.concat(ENERGY_METHODS, "/"))
+    log_once(log_prefix, tostring(name) .. ":no-energy", msg)
+    shout(tostring(name) .. ":no-energy", msg)
+  end
   local coil = has_method(method_set, "getInductorEngaged")
     and safe_call(name, "getInductorEngaged", log_prefix) or nil
   return {
@@ -204,7 +264,7 @@ function turbine.inspect(name, log_prefix)
       active = has_method(method_set, "getActive"),
       rpm = caps ~= nil and caps.rpm_method ~= nil,
       flow = caps ~= nil and caps.flow_method ~= nil,
-      energy = has_method(method_set, "getEnergyProducedLastTick"),
+      energy = energy_readable,
       coils = has_method(method_set, "getInductorEngaged")
     },
     schema = {
@@ -223,17 +283,6 @@ function turbine.inspect(name, log_prefix)
   }
 end
 
-
--- Ein Stellbefehl, der dauerhaft nicht angenommen wird, ist der Grund
--- dafuer, dass "der Regler nichts tut" -- und er gehoert deshalb auf den
--- Rechner selbst. utils.log()/log_once() routen zum Log-Collector; das
--- ist keine Anzeige.
-local shouted = {}
-local function shout(key, msg)
-  if shouted[key] then return end
-  shouted[key] = true
-  pcall(print, "[RT] " .. msg)
-end
 
 local function write_with(name, candidates, label, value, log_prefix)
   if not name then return nil, "missing peripheral" end

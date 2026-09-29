@@ -157,7 +157,23 @@ local function measure_capacity(previous, turbines, now_ms)
       state.pending_total = total
       state.pending_since_ms = now_ms
     end
-    if (not state.learning)
+    -- Die Entprellung gilt AUCH waehrend des Einlernens. Vorher stand hier
+    -- "not state.learning", und das hiess: jede Schwankung der
+    -- Turbinenzahl setzte das laufende Einlernen sofort zurueck --
+    -- best_output, last_improved_ms, alles. Ein Peripheral, das einen Takt
+    -- lang nicht antwortet, sieht aber genauso aus wie eine abgebaute
+    -- Turbine. Flackert die Zahl, faengt das Einlernen endlos von vorn an,
+    -- und seit es keinen Abbruch auf Zeit mehr gibt, faellt das auch
+    -- niemandem mehr durch ein Ende auf.
+    --
+    -- Der Grund, aus dem die Entprellung beim Einlernen ausgenommen war --
+    -- ein echter Umbau soll sofort neu vermessen werden -- bleibt gewahrt:
+    -- nach TOPOLOGY_DEBOUNCE_MS wird auch hier zurueckgesetzt.
+    -- Nicht beim ERSTEN Erkennen: der Sprung von "noch keine Turbine
+    -- bekannt" auf N ist kein Umbau, sondern die erste Messung ueberhaupt.
+    -- Ihn zu entprellen wuerde den Knoten nach jedem Start drei Sekunden
+    -- lang behaupten lassen, die Anlage schwanke.
+    if (state.total_turbines or 0) > 0
         and (now_ms - (state.pending_since_ms or now_ms)) < M.TOPOLOGY_DEBOUNCE_MS then
       state.at_target, state.saturated = 0, 0
       state.reason = "TOPOLOGY_PENDING"

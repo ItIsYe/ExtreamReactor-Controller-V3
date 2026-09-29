@@ -307,4 +307,72 @@ do
     'und der Betreiber muss es am Rechner sehen: ' .. said)
 end
 
+-- ══ Der Ausstoss: Ausweichweg und lautes Melden ═════════════════════════
+--
+-- Betriebsmeldung 2026-09-29: "kein Wert genommen" -- das Einlernen kam nie
+-- zu einem Ergebnis. Ursache eine Ebene tiefer: der Ausstoss war der
+-- EINZIGE Messwert ohne Kandidatenliste. Ein fest verdrahtetes
+-- getEnergyProducedLastTick, und kannte die Turbine das nicht, kam still
+-- eine 0 heraus.
+--
+-- Teuer ist das, weil rt2_orchestrator.lua's measure() eine Turbine nur
+-- dann als "im Zielband" zaehlt, wenn sie energy > 0 meldet. Ohne lesbaren
+-- Ausstoss erreicht also NIE eine Turbine das Band, das Einlernen wartet
+-- endlos -- und die Anzeige sagt dazu nur "0 von 50 im Zielband", als laege
+-- es an der Drehzahl.
+
+-- 1. Kennt die Turbine nur getEnergyStats, wird daraus gelesen.
+do
+  local methods = {
+    'getActive', 'getRotorSpeed', 'getFluidFlowRateMax',
+    'getInductorEngaged', 'getEnergyStats',
+  }
+  install_peripheral(methods, {
+    getActive = true, getRotorSpeed = 900, getFluidFlowRateMax = 1500,
+    getInductorEngaged = true,
+    getEnergyStats = { energyProducedLastTick = 3300, energyStored = 10 },
+  })
+  local turbine = fresh_adapter()
+  local info = turbine.inspect('T1', 'RT')
+  assert_eq(info.energy, 3300,
+    'ohne getEnergyProducedLastTick muss getEnergyStats einspringen')
+  assert_eq(info.features.energy, true, 'und der Wert gilt als lesbar')
+end
+
+-- 2. Die direkte Methode hat weiterhin Vorrang.
+do
+  install_peripheral(ER2_METHODS, VALUES)
+  local turbine = fresh_adapter()
+  local info = turbine.inspect('T1', 'RT')
+  assert_eq(info.energy, 4200, 'getEnergyProducedLastTick bleibt der erste Weg')
+  for _, m in ipairs(calls) do
+    assert_true(m ~= 'getEnergyStats',
+      'getEnergyStats darf nicht zusaetzlich gerufen werden, wenn der direkte Weg existiert')
+  end
+end
+
+-- 3. Kennt sie keinen von beiden: der Wert bleibt UNBEKANNT (nicht 0), und
+--    der Betreiber erfaehrt es am Rechner -- sonst wartet das Einlernen
+--    endlos, ohne dass irgendwo steht, warum.
+do
+  local methods = { 'getActive', 'getRotorSpeed', 'getFluidFlowRateMax', 'getInductorEngaged' }
+  install_peripheral(methods, {
+    getActive = true, getRotorSpeed = 900, getFluidFlowRateMax = 1500,
+    getInductorEngaged = true,
+  })
+  local turbine = fresh_adapter()
+  local printed = {}
+  local real_print = print
+  _G.print = function(msg) printed[#printed + 1] = tostring(msg) end
+  local info = turbine.inspect('T1', 'RT')
+  _G.print = real_print
+
+  assert_true(info.energy == nil,
+    'ein unlesbarer Ausstoss bleibt nil -- eine erfundene 0 hiesse "liefert nichts"')
+  assert_eq(info.features.energy, false, 'und er gilt als nicht lesbar')
+  local said = table.concat(printed, ' | ')
+  assert_true(said:find('EINLERNEN', 1, true) ~= nil,
+    'der Hinweis muss sagen, was daran haengt: ' .. said)
+end
+
 print('turbine_adapter_capability_probe_test.lua: ok')

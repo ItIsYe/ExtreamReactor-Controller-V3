@@ -205,6 +205,66 @@ do
   assert_eq(r.capacity.reason, 'MEASURED', 'und die Zahl ist gemessen, nicht geschaetzt')
 end
 
+-- ══ 6b. Ein Zaehl-Aussetzer darf das Einlernen nicht zuruecksetzen ═════
+--
+-- Betriebsmeldung 2026-09-29: "kein Wert genommen". Eine der beiden
+-- Ursachen lag hier: die Entprellung der Turbinenzahl
+-- (TOPOLOGY_DEBOUNCE_MS) galt nur, wenn GERADE NICHT gelernt wurde --
+-- "if (not state.learning) and ...". Waehrend des Einlernens setzte damit
+-- jede Schwankung der Zahl sofort alles zurueck: best_output,
+-- last_improved_ms, den ganzen Fortschritt. Ein Peripheral, das einen Takt
+-- lang nicht antwortet, sieht aber genauso aus wie eine abgebaute Turbine.
+-- Flackert die Zahl, faengt das Einlernen endlos von vorn an -- und seit es
+-- keinen Abbruch auf Zeit mehr gibt, faellt das auch niemandem mehr durch
+-- ein Ende auf.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  local full = fleet(10, 10, 50)
+  local missing = fleet(9, 9, 50)     -- eine Turbine antwortet kurz nicht
+
+  o.tick({ now_ms = 1000, hardware_ready = true, master_percent = 40,
+    turbines = full, reactor = {} })
+  local r = o.tick({ now_ms = 2000, hardware_ready = true, master_percent = 40,
+    turbines = full, reactor = {} })
+  assert_eq(r.capacity.total_turbines, 10, 'zehn Turbinen sind bekannt')
+  local best_before = r.capacity.best_output
+  assert_true((best_before or 0) > 0, 'und es wurde schon etwas gemessen')
+
+  -- Ein einzelner Aussetzer: entprellt, der Fortschritt bleibt stehen.
+  r = o.tick({ now_ms = 2500, hardware_ready = true, master_percent = 40,
+    turbines = missing, reactor = {} })
+  assert_eq(r.capacity.reason, 'TOPOLOGY_PENDING', 'ein Aussetzer wird erst einmal entprellt')
+  assert_eq(r.capacity.best_output, best_before,
+    'und der bisher gemessene Hoechstwert darf dabei NICHT verloren gehen')
+  assert_eq(r.capacity.total_turbines, 10, 'die bekannte Zahl bleibt ebenfalls stehen')
+
+  -- Haelt die neue Zahl an, ist es ein echter Umbau -- dann wird sehr wohl
+  -- neu vermessen.
+  r = o.tick({ now_ms = 2500 + orchestrator.TOPOLOGY_DEBOUNCE_MS + 1,
+    hardware_ready = true, master_percent = 40, turbines = missing, reactor = {} })
+  assert_eq(r.capacity.reason, 'TOPOLOGY_CHANGED', 'eine anhaltende Aenderung ist ein Umbau')
+  assert_eq(r.capacity.total_turbines, 9, 'und die neue Zahl gilt')
+  assert_eq(r.capacity.best_output, 0, 'der alte Messwert ist dann zu Recht weg')
+end
+
+-- ══ 6c. Das ERSTE Erkennen wird nicht entprellt ═════════════════════════
+--
+-- Der Sprung von "noch keine Turbine bekannt" auf N ist kein Umbau,
+-- sondern die erste Messung ueberhaupt. Ihn zu entprellen wuerde den
+-- Knoten nach jedem Start drei Sekunden lang behaupten lassen, die Anlage
+-- schwanke -- genau das ist mir beim Bauen der Entprellung passiert.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  local r = o.tick({ now_ms = 1000, hardware_ready = true, master_percent = 40,
+    turbines = fleet(50, 50, 100), reactor = {} })
+  assert_true(r.capacity.reason ~= 'TOPOLOGY_PENDING',
+    'die erste Erkennung darf nicht als Schwanken gelten')
+  assert_eq(r.capacity.total_turbines, 50, 'die Flotte ist sofort bekannt')
+  assert_eq(r.capacity.required_at_target, 40, '80 % von 50 Turbinen sind 40')
+end
+
 -- ══ 7. Saettigung ist eine Diagnose, keine Regelgroesse ════════════════
 --
 -- Eine Turbine, die vollen Durchfluss faehrt und TROTZDEM zu langsam ist,

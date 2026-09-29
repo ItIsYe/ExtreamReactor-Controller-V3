@@ -31,7 +31,12 @@ function M.read_turbine(name, turbine_info)
   return {
     name = name,
     rpm = num_or_nil(turbine_info.rpm),
-    energy = num_or_nil(turbine_info.energy) or 0,
+    -- NICHT auf 0 vorbelegen, aus demselben Grund wie beim Durchfluss:
+    -- das Einlernen zaehlt eine Turbine nur, wenn sie Leistung MELDET
+    -- (rt2_orchestrator.lua's measure()). Eine erfundene 0 heisst dort
+    -- "liefert nichts" -- und damit wartet das Einlernen endlos, obwohl
+    -- der Wert nur nicht lesbar war.
+    energy = num_or_nil(turbine_info.energy),
     coil_engaged = turbine_info.coil_engaged == true,
     -- NICHT auf 0 vorbelegen. adapters/turbine.lua's read_number() liefert
     -- bei einem fehlgeschlagenen Peripherieaufruf den String "n/a" -- daraus

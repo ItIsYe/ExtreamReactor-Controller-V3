@@ -23,7 +23,13 @@ end
 do
   local r = adapter.read_turbine('T1', { rpm = 'n/a', energy = 'n/a', coil_engaged = nil, flow = 'n/a' })
   assert_true(r.rpm == nil, 'a non-numeric rpm reading ("n/a") must normalize to nil, not pass through as-is')
-  assert_eq(r.energy, 0, 'a non-numeric energy reading must default to 0')
+  -- Der Ausstoss bleibt UNBEKANNT, nicht 0 -- dieselbe Regel wie beim
+  -- Durchfluss und aus demselben Grund: das Einlernen zaehlt eine Turbine
+  -- nur, wenn sie Leistung MELDET. Eine erfundene 0 hiesse dort "liefert
+  -- nichts", und das Einlernen wartet endlos auf ein Zielband, das nie
+  -- erreicht werden kann (Betriebsmeldung 2026-09-29: "kein Wert
+  -- genommen").
+  assert_true(r.energy == nil, 'ein unlesbarer Ausstoss muss nil bleiben, nicht 0 werden')
   assert_eq(r.coil_engaged, false, 'a missing coil reading must default to false, never nil')
   assert_eq(r.active, false, 'a missing active reading must default to false, never nil')
 end

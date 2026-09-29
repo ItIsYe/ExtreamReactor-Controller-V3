@@ -1,6 +1,6 @@
 # RT-Regel-Engine v2
 
-**Stand: 2026-09-29 | manifest-v790 | Zweig `beta`**
+**Stand: 2026-09-29 | manifest-v792 | Zweig `beta`**
 
 Der RT-Knoten hat **genau eine** Regel-Engine (`rt2_*.lua`). Der
 Vorgaenger v1 (`reactor_control.lua`, `turbine_control.lua`,
@@ -161,6 +161,25 @@ nachweislich GLEICHZEITIG geliefert hat**:
 | Abschluss | Hoechstwert steigt 6 s nicht mehr (`LEARN_STABLE_MS`) |
 | Reserve | gemeldet werden 95 % davon (`LEARN_SAFETY_MARGIN`) |
 | Abbruch auf Zeit | **gibt es nicht** — es wird gewartet, bis die geforderten Turbinen da sind |
+
+Eine Turbine zaehlt in einem Takt nur, wenn **alle vier** Bedingungen
+gleichzeitig gelten (`measure()`):
+
+| | |
+|---|---|
+| Drehzahl | lesbar (nicht `nil`) |
+| Spule | eingehaengt |
+| Drehzahl im Band | `abs(rpm − 900) <= 15` |
+| **Ausstoss** | **`energy > 0`** — sie muss in diesem Takt Leistung melden |
+
+Die vierte ist die unscheinbarste und hat im Betrieb am meisten gekostet:
+war der Ausstoss nicht lesbar, lieferte `adapters/turbine.lua` still eine
+0, keine Turbine erreichte je das Band, und das Einlernen wartete endlos —
+waehrend die Anzeige nur „0 von 50 im Zielband" sagte, als laege es an der
+Drehzahl. Seit v793 hat der Ausstoss einen Ausweichweg
+(`getEnergyStats().energyProducedLastTick`, derselbe Feldname, den
+`adapters/reactor.lua` schon immer liest), bleibt bei Unlesbarkeit
+**unbekannt statt 0**, und die Node sagt es laut auf dem Rechner.
 
 Ein Takt zaehlt nur, wenn genug Turbinen gleichzeitig im Band stehen,
 gekuppelt sind und wirklich liefern — eine Summe aus drei zufaellig
