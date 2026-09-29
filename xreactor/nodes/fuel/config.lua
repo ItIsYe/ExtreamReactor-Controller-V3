@@ -44,26 +44,6 @@ local CONFIG = {
     enabled            = false,
     interval           = 5,       -- seconds between supply checks (short for responsiveness)
     discovery_interval = 60,
-    --
-    -- parallel_deliveries: wie viele Reaktoren EINE Lieferung gleichzeitig
-    -- bedienen darf. 1 ist das alte Verhalten -- ein Reaktor je Ventil-
-    -- Transaktion, und die Zuordnung "welches Item zu wem" entsteht allein
-    -- daraus, dass immer nur ein Weg offen ist.
-    --
-    -- Groesser als 1 heisst: die Wege mehrerer Reaktoren sind gleichzeitig
-    -- offen, es wird je Reaktor seine eigene Menge in die Uebergabekiste
-    -- exportiert, und WER WIE VIEL bekommt, entscheiden ab da die Sorter
-    -- anhand ihrer Mengenfilter. Das setzt voraus, dass die Sorter
-    -- tatsaechlich je Ziel gefiltert und mengenbegrenzt sind -- sind sie
-    -- es nicht, teilt das Transportnetz beliebig auf und fill_amount je
-    -- Reaktor verliert seine Wirkung. Im Zweifel auf 1 stellen.
-    --
-    -- Zwei Dinge gelten dann zusaetzlich: das Ventilfenster richtet sich
-    -- nach dem LAENGSTEN Weg der Gruppe (sonst ginge die letzte Ladung
-    -- unterwegs verloren), und hop_timing.lua lernt aus einer
-    -- Sammellieferung nichts mehr -- bei mehreren gleichzeitigen
-    -- Lieferungen laesst sich eine Ankunft keiner von ihnen zuordnen.
-    parallel_deliveries = 4,
     me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
     --
     -- export_chest: the ONE physical hand-off point every delivery, for

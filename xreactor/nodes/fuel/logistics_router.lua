@@ -352,11 +352,7 @@ end
 local function account_async_export(self, request, moved, move_line)
   if moved <= 0 then return end
   self._state.total_exported = self._state.total_exported + moved
-  -- move_line darf fehlen: eine Sammellieferung schreibt ihre Zeilen schon
-  -- je Reaktor, waehrend hier nur noch die Gesamtmenge verbucht wird.
-  if move_line and request.cycle_log then
-    request.cycle_log[#request.cycle_log + 1] = move_line
-  end
+  if request.cycle_log then request.cycle_log[#request.cycle_log + 1] = move_line end
   if request.cycle_result then
     request.cycle_result.exported = (request.cycle_result.exported or 0) + moved
   end
@@ -884,24 +880,21 @@ function M:_run_supply(cycle_log)
   -- NICHTS). Der Sammelgrund unten darf ihn dann nicht ueberschreiben.
   local delivery_attempted = false
 
-  -- Phase 2: Zuteilung. Erst bekommen so viele Kandidaten eine Menge
-  -- zugewiesen, wie gleichzeitig geliefert werden darf -- exportiert wird
-  -- noch nichts. Der ME-Bestand wird dabei mitgefuehrt, sonst wuerden sich
-  -- die Lieferungen einer Sammellieferung gegenseitig Bestand zuteilen,
-  -- den es nur einmal gibt.
-  --
-  -- parallel_deliveries > 1 gibt es nur mit Ventil-Routing: ohne Routing
-  -- geht ohnehin alles in dieselbe Kiste, da waere "parallel" nur ein
-  -- anderes Wort fuer "alles auf einmal".
-  local parallel_limit = 1
-  if routed then
-    parallel_limit = math.max(1, math.floor(tonumber(cfg_l.parallel_deliveries) or 1))
-  end
-
-  local group = {}
   for _, cand in ipairs(candidates) do
-    if #group >= parallel_limit then break end
-    local r = cand.r
+    local r, fuel_pct = cand.r, cand.fuel_pct
+
+    -- current_request VOR dem Export setzen (nicht erst waehrend des kurzen
+    -- Ventil-Fensters) -- deckt den gesamten Entscheidungs- bis
+    -- Lieferzyklus ab, Grundlage fuer die UI-Hervorhebung (get_summary()).
+    self._state.current_request = {
+      reactor_id = r.reactor_id, label = r.label, state = "requesting", phase = "REQUESTING",
+      started_ts = os.epoch and os.epoch("utc") or 0,
+      cycle_log = cycle_log,
+    }
+
+    if not family then goto continue end
+
+    -- ME availability, in ingot-equivalent units of the chosen family.
     if family.total < r.min_in_me then
       skip(r.label, string.format(
         "nur %d %s im ME, die Mindestreserve min_in_me=%d haelt alles zurueck",
@@ -909,240 +902,178 @@ function M:_run_supply(cycle_log)
       self.log("DEBUG", string.format(
         "Logistics: %s: ME has %d %s-equivalent (need >%d) — skip",
         r.label, family.total, family.element, r.min_in_me))
-    else
-      local push = math.min(r.fill_amount, family.total - r.min_in_me)
-      if push <= 0 then
-        skip(r.label, string.format(
-          "ueber der Mindestreserve min_in_me=%d bleibt nichts uebrig (%d %s im ME)",
-          r.min_in_me, family.total, family.element))
-      else
-        local item, count, units = pick_fuel_form(family, push)
-        if not item or count <= 0 then
-          skip(r.label, string.format(
-            "keine lieferbare Form von %s im ME (weder Barren noch Block)", family.element))
-        else
-          -- Bestand mitfuehren, damit der naechste Kandidat dieser
-          -- Sammellieferung nur noch sieht, was wirklich uebrig ist.
-          family.total = family.total - units
-          if item == family.block then
-            family.block_amt = family.block_amt - count
-          else
-            family.ingot_amt = family.ingot_amt - count
-          end
-          group[#group + 1] = {
-            r = r, fuel_pct = cand.fuel_pct,
-            item = item, count = count, units = units,
-          }
-        end
-      end
-    end
-  end
-
-  if #group > 0 then
-    local lead = group[1]
-    local group_label = lead.r.label
-    if #group > 1 then
-      group_label = string.format("%s +%d", tostring(lead.r.label), #group - 1)
+      goto continue
     end
 
-    -- current_request VOR dem Export setzen (nicht erst waehrend des
-    -- kurzen Ventil-Fensters) -- deckt den gesamten Entscheidungs- bis
-    -- Lieferzyklus ab, Grundlage fuer die UI-Hervorhebung (get_summary()).
-    -- reactor_id bleibt das fuehrende Ziel; targets traegt die ganze
-    -- Sammellieferung, damit die Oberflaeche nicht nur einen Namen zeigt,
-    -- waehrend drei Reaktoren beliefert werden.
-    local request = {
-      reactor_id = lead.r.reactor_id, label = group_label,
-      state = "requesting", phase = "REQUESTING",
-      started_ts = os.epoch and os.epoch("utc") or 0,
-      cycle_log = cycle_log,
-      targets = {},
-    }
-    for _, entry in ipairs(group) do
-      request.targets[#request.targets + 1] = {
-        reactor_id = entry.r.reactor_id, label = entry.r.label,
-        item = entry.item, count = entry.count,
-      }
-    end
-    self._state.current_request = request
-    request.transaction_id = next_delivery_id(self, group_label)
-    request.item = lead.item
-    request.element = family.element
-
-    local function pct_of(entry)
-      return entry.fuel_pct and string.format(" (%.0f%%)", entry.fuel_pct * 100) or ""
+    local push = math.min(r.fill_amount, family.total - r.min_in_me)
+    if push <= 0 then
+      skip(r.label, string.format(
+        "ueber der Mindestreserve min_in_me=%d bleibt nichts uebrig (%d %s im ME)",
+        r.min_in_me, family.total, family.element))
+      goto continue
     end
 
-    if routed then
+    local deliver_item, deliver_count = pick_fuel_form(family, push)
+    if not deliver_item or deliver_count <= 0 then
+      skip(r.label, string.format(
+        "keine lieferbare Form von %s im ME (weder Barren noch Block)", family.element))
+      goto continue
+    end
+
+    do
       local default_valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
       -- Distanzabhaengiger Timeout statt eines festen Werts fuer alle
-      -- Reaktoren -- siehe hop_timing.lua. Bei einer Sammellieferung zaehlt
-      -- der LAENGSTE Weg: die Ventile duerfen erst zu, wenn auch die letzte
-      -- Ladung angekommen ist.
-      local valve_ms = default_valve_ms
-      for _, entry in ipairs(group) do
-        local entry_ms = self.hop_timing
-          and self.hop_timing:compute_timeout_ms(entry.r.path, default_valve_ms)
-          or default_valve_ms
-        if entry_ms > valve_ms then valve_ms = entry_ms end
-      end
+      -- Reaktoren -- siehe hop_timing.lua. compute_timeout_ms() liefert
+      -- exakt default_valve_ms zurueck, solange kein Pfad-Hop kalibriert
+      -- ist (unabhaengig von dessen Laenge); erst gelernte Kanten
+      -- verschieben das Ergebnis nach oben/unten davon weg.
+      local valve_ms = (routed and self.hop_timing)
+        and self.hop_timing:compute_timeout_ms(r.path, default_valve_ms)
+        or default_valve_ms
+      local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
+      local request = self._state.current_request
+      request.transaction_id = request.transaction_id or next_delivery_id(self, r.label)
+      request.item = deliver_item
+      request.element = family.element
 
-      -- hop_timing lernt nur aus EINZELlieferungen. Sein Modell hat einen
-      -- einzigen aktiven Platz, und das aus gutem Grund: laufen mehrere
-      -- Lieferungen gleichzeitig, laesst sich eine Ankunft an einem Hop
-      -- keiner von ihnen mehr zuordnen. Eine Sammellieferung wuerde die
-      -- gelernten Kanten also nicht verbessern, sondern verfaelschen.
-      if #group == 1 and self.hop_timing then
-        self.hop_timing:begin_delivery(lead.r.reactor_id, lead.r.path, lead.item, request.started_ts)
-      end
-
-      local function do_export()
-        delivery_attempted = true
-        request.phase = "EXPORTING"
-        request.state = "delivering"
-        local any_ok, total_moved, last_err = false, 0, nil
-        for _, entry in ipairs(group) do
+      if routed then
+        if self.hop_timing then
+          self.hop_timing:begin_delivery(r.reactor_id, r.path, deliver_item, request.started_ts)
+        end
+        local function do_export()
+          delivery_attempted = true
+          request.phase = "EXPORTING"
+          request.state = "delivering"
           local ok, result, convention = me_bridge_compat.export_to(bridge.wrapped,
-            { name = entry.item, count = entry.count }, export_chest.name)
+            { name = deliver_item, count = deliver_count }, export_chest.name)
           announce_convention(self, convention)
           if not ok then
-            last_err = tostring(result)
-            note_export_failed(self, bridge.wrapped, entry.r.label, entry.item,
-              export_chest.name, last_err)
+            local err = tostring(result)
+            -- warn_once() schreibt in den Log-Collector, nicht auf den
+            -- Schirm, und ausserdem nur ein einziges Mal. Ein dauerhaft
+            -- scheiternder Export war damit unsichtbar -- obwohl er genau
+            -- der Grund ist, dass nichts aus dem ME kommt.
+            note_export_failed(self, bridge.wrapped, r.label, deliver_item, export_chest.name, err)
             self.warn_once("exp_err:" .. export_chest.name,
-              "exportItemToPeripheral → " .. export_chest.name .. ": " .. last_err)
+              "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
+            account_async_error(self, request)
+            request.error = err
+            return false, err
+          end
+          local moved = type(result) == "number" and result or 0
+          request.moved = moved
+          request.exported_at = os.epoch and os.epoch("utc") or 0
+          if moved <= 0 then
+            note_export_nothing(self, r.label, deliver_item, deliver_count,
+              export_chest.name, result)
+          end
+          if moved > 0 then
+            -- Eine geroutete Lieferung kehrt sofort zurueck (sie laeuft
+            -- asynchron weiter), also erreicht sie das exported > 0 am Ende
+            -- von _run_supply() nie -- der letzte Grund blieb dadurch fuer
+            -- immer in der Oberflaeche stehen, auch waehrend alles lief.
+            note_block(self, nil)
+            record_export(self, request.reactor_id, moved)
+            local move_line = string.format(
+              "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
+            account_async_export(self, request, moved, move_line)
+            self.log("INFO", string.format("ME→[%s]%s %s x%d via %s [tx=%s]",
+              r.label, pct_str, deliver_item, moved, export_chest.name, tostring(request.transaction_id)))
+          end
+          return true, moved
+        end
+
+        local function on_transaction_error(reason)
+          self.warn_once("routing_failed:" .. tostring(r.label),
+            "Logistics: Routing-Transaktion fuer " .. r.label .. " abgebrochen (" .. tostring(reason) .. ")")
+          account_async_error(self, request)
+          finish_delivery(self, request, "ERROR", "CANCELLED", tostring(reason))
+        end
+
+        local function on_transaction_complete(info)
+          local terminal = type(info) == "table" and info.state or "ERROR"
+          if terminal == "COMPLETE_SAFE" then
+            finish_delivery(self, request, "COMPLETE", terminal, nil)
           else
-            any_ok = true
-            local moved = type(result) == "number" and result or 0
-            if moved <= 0 then
-              note_export_nothing(self, entry.r.label, entry.item, entry.count,
-                export_chest.name, result)
-            else
-              total_moved = total_moved + moved
-              record_export(self, entry.r.reactor_id, moved)
-              local move_line = string.format("ME→[%s]%s %s x%d via %s",
-                entry.r.label, pct_of(entry), entry.item, moved, export_chest.name)
-              cycle_log[#cycle_log + 1] = move_line
-              self.log("INFO", string.format("%s [tx=%s]",
-                move_line, tostring(request.transaction_id)))
-            end
+            account_async_error(self, request)
+            finish_delivery(self, request, "ERROR", terminal,
+              type(info) == "table" and info.reason or "transaction failed")
           end
         end
-        request.moved = total_moved
-        request.exported_at = os.epoch and os.epoch("utc") or 0
-        -- Fehlgeschlagen ist die Lieferung nur, wenn KEINE Teilmenge
-        -- rausging. Ist auch nur eine unterwegs, muss das Ventilfenster
-        -- regulaer zu Ende laufen -- ein vorzeitiges Blockieren liesse sie
-        -- im Rohr stehen.
-        if not any_ok then
-          account_async_error(self, request)
-          request.error = last_err
-          return false, last_err
-        end
-        if total_moved > 0 then
-          -- Eine geroutete Lieferung kehrt sofort zurueck (sie laeuft
-          -- asynchron weiter), also erreicht sie das exported > 0 am Ende
-          -- von _run_supply() nie -- der letzte Grund blieb dadurch fuer
-          -- immer in der Oberflaeche stehen, auch waehrend alles lief.
-          note_block(self, nil)
-          account_async_export(self, request, total_moved, nil)
-        end
-        return true, total_moved
-      end
 
-      local function on_transaction_error(reason)
-        self.warn_once("routing_failed:" .. tostring(group_label),
-          "Logistics: Routing-Transaktion fuer " .. group_label .. " abgebrochen (" .. tostring(reason) .. ")")
-        account_async_error(self, request)
-        finish_delivery(self, request, "ERROR", "CANCELLED", tostring(reason))
-      end
-
-      local function on_transaction_complete(info)
-        local terminal = type(info) == "table" and info.state or "ERROR"
-        if terminal == "COMPLETE_SAFE" then
-          finish_delivery(self, request, "COMPLETE", terminal, nil)
-        else
-          account_async_error(self, request)
-          finish_delivery(self, request, "ERROR", terminal,
-            type(info) == "table" and info.reason or "transaction failed")
+        local started, reason, router_tx_id = rs:begin_transaction(r.reactor_id, do_export, valve_ms, {
+          on_error = on_transaction_error,
+          on_complete = on_transaction_complete,
+          transaction_id = request.transaction_id,
+        })
+        if not started then
+          -- begin_delivery() above already primed hop_timing's baseline for
+          -- this reactor; the transaction never opened a path, so there is
+          -- nothing to learn from -- clear it the same way a terminal
+          -- outcome would (finish_delivery() is a no-op learning-wise when
+          -- no hop ever recorded an arrival).
+          if self.hop_timing then self.hop_timing:finish_delivery(r.reactor_id) end
+          self._state.current_request = nil
+          if reason == "busy" then
+            note_block(self, "ROUTER_BESCHAEFTIGT",
+              "eine andere Transaktion laeuft noch -- der Router faehrt immer nur EINE")
+            self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
+            return exported, errors
+          end
+          if reason == "safety_latched" or reason == "quiescing" then
+            note_block(self, "ROUTER_GESPERRT", "Sicherheitssperre aktiv (" .. tostring(reason)
+              .. ") -- es wird kein Ventil gestellt und nichts exportiert")
+            self.log("WARN", "Logistics: Router sicherheitsgesperrt (" .. tostring(reason) .. ") — keine weitere Lieferung")
+            return exported, errors
+          end
+          -- Der haeufigste Fall hinter "die Ventile werden nicht gestellt":
+          -- der Router findet den Weg zu diesem Reaktor nicht.
+          skip(r.label, "Ventilweg nicht stellbar (" .. tostring(reason) .. ")")
+          self.log("DEBUG", "Logistics: " .. r.label .. ": Routing nicht moeglich (" .. tostring(reason) .. ") — naechster Kandidat")
+          goto continue
         end
-      end
-
-      local extra_targets = {}
-      for i = 2, #group do extra_targets[#extra_targets + 1] = group[i].r.reactor_id end
-
-      local started, reason, router_tx_id = rs:begin_transaction(lead.r.reactor_id, do_export, valve_ms, {
-        on_error = on_transaction_error,
-        on_complete = on_transaction_complete,
-        transaction_id = request.transaction_id,
-        extra_targets = extra_targets,
-      })
-      if not started then
-        -- begin_delivery() oben hat hop_timings Grundlinie fuer diesen
-        -- Reaktor schon gesetzt; die Transaktion hat nie einen Weg
-        -- geoeffnet, es gibt also nichts zu lernen -- genauso aufraeumen
-        -- wie bei einem regulaeren Ausgang (finish_delivery() ist
-        -- lern-seitig ein No-Op, solange kein Hop eine Ankunft gemeldet hat).
-        if self.hop_timing then self.hop_timing:finish_delivery(lead.r.reactor_id) end
-        self._state.current_request = nil
-        if reason == "busy" then
-          note_block(self, "ROUTER_BESCHAEFTIGT",
-            "eine andere Transaktion laeuft noch -- der Router faehrt immer nur EINE")
-          self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — Zyklus uebersprungen")
-          return exported, errors
-        end
-        if reason == "safety_latched" or reason == "quiescing" then
-          note_block(self, "ROUTER_GESPERRT", "Sicherheitssperre aktiv (" .. tostring(reason)
-            .. ") -- es wird kein Ventil gestellt und nichts exportiert")
-          self.log("WARN", "Logistics: Router sicherheitsgesperrt (" .. tostring(reason) .. ") — keine weitere Lieferung")
-          return exported, errors
-        end
-        -- Der haeufigste Fall hinter "die Ventile werden nicht gestellt":
-        -- der Router findet den Weg zu einem der Ziele nicht.
-        skip(group_label, "Ventilweg nicht stellbar (" .. tostring(reason) .. ")")
-        self.log("DEBUG", "Logistics: " .. group_label .. ": Routing nicht moeglich (" .. tostring(reason) .. ")")
+        delivery_attempted = true
+        request.transaction_id = router_tx_id or request.transaction_id
+        request.state = "delivering"
+        local active = type(rs.get_active_transaction) == "function" and rs:get_active_transaction() or nil
+        request.phase = active and active.phase or "BLOCKING"
         return exported, errors
       end
-      delivery_attempted = true
-      request.transaction_id = router_tx_id or request.transaction_id
+
+      -- No redstone routing configured: synchronous export with the same
+      -- stable transaction identity/terminal semantics.
       request.state = "delivering"
-      local active = type(rs.get_active_transaction) == "function" and rs:get_active_transaction() or nil
-      request.phase = active and active.phase or "BLOCKING"
-      return exported, errors
+      request.phase = "EXPORTING"
+      delivery_attempted = true
+      local ok, result, convention = me_bridge_compat.export_to(bridge.wrapped,
+        { name = deliver_item, count = deliver_count }, export_chest.name)
+      announce_convention(self, convention)
+      if not ok then
+        local err = tostring(result)
+        note_export_failed(self, bridge.wrapped, r.label, deliver_item, export_chest.name, err)
+        self.warn_once("exp_err:" .. export_chest.name,
+          "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
+        errors = errors + 1
+        request.error_counted = true
+        finish_delivery(self, request, "ERROR", "EXPORT_FAILED", err)
+      else
+        local moved = type(result) == "number" and result or 0
+        request.moved = moved
+        if moved <= 0 then
+          note_export_nothing(self, r.label, deliver_item, deliver_count,
+            export_chest.name, result)
+        end
+        if moved > 0 then
+          record_export(self, request.reactor_id, moved)
+          exported = exported + moved
+          cycle_log[#cycle_log + 1] = string.format(
+            "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
+        end
+        finish_delivery(self, request, "COMPLETE", "COMPLETE_SAFE", nil)
+      end
     end
 
-    -- Kein Ventil-Routing konfiguriert: synchroner Export mit derselben
-    -- stabilen Transaktions-Identitaet/Abschluss-Semantik. parallel_limit
-    -- ist hier immer 1, die Gruppe hat also genau einen Eintrag.
-    request.state = "delivering"
-    request.phase = "EXPORTING"
-    delivery_attempted = true
-    local ok, result, convention = me_bridge_compat.export_to(bridge.wrapped,
-      { name = lead.item, count = lead.count }, export_chest.name)
-    announce_convention(self, convention)
-    if not ok then
-      local err = tostring(result)
-      note_export_failed(self, bridge.wrapped, lead.r.label, lead.item, export_chest.name, err)
-      self.warn_once("exp_err:" .. export_chest.name,
-        "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
-      errors = errors + 1
-      request.error_counted = true
-      finish_delivery(self, request, "ERROR", "EXPORT_FAILED", err)
-    else
-      local moved = type(result) == "number" and result or 0
-      request.moved = moved
-      if moved <= 0 then
-        note_export_nothing(self, lead.r.label, lead.item, lead.count,
-          export_chest.name, result)
-      end
-      if moved > 0 then
-        record_export(self, lead.r.reactor_id, moved)
-        exported = exported + moved
-        cycle_log[#cycle_log + 1] = string.format(
-          "ME→[%s]%s %s x%d via %s", lead.r.label, pct_of(lead), lead.item, moved, export_chest.name)
-      end
-      finish_delivery(self, request, "COMPLETE", "COMPLETE_SAFE", nil)
-    end
+    ::continue::
   end
   if exported > 0 then note_block(self, nil) end
   -- Alle Kandidaten uebersprungen, kein Export auch nur versucht: bisher

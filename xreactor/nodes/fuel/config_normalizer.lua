@@ -67,19 +67,6 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.discovery_interval) ~= "number" or lg.discovery_interval <= 0 then
     lg.discovery_interval = (defaults.logistics and defaults.logistics.discovery_interval) or 60
   end
-  -- parallel_deliveries: ganzzahlig, mindestens 1. 1 ist das serielle
-  -- Verhalten; ein unsinniger Wert darf nicht dazu fuehren, dass gar nicht
-  -- mehr geliefert wird, also faellt er auf die Vorgabe zurueck.
-  if type(lg.parallel_deliveries) ~= "number" or lg.parallel_deliveries < 1 then
-    if lg.parallel_deliveries ~= nil then
-      add_warning(string.format(
-        "logistics.parallel_deliveries=%s ungueltig; erwartet eine ganze Zahl >= 1 -- Vorgabe wird benutzt",
-        tostring(lg.parallel_deliveries)))
-    end
-    lg.parallel_deliveries = (defaults.logistics and defaults.logistics.parallel_deliveries) or 1
-  else
-    lg.parallel_deliveries = math.floor(lg.parallel_deliveries)
-  end
   if type(lg.max_per_cycle) ~= "number" or lg.max_per_cycle <= 0 then
     lg.max_per_cycle = (defaults.logistics and defaults.logistics.max_per_cycle) or 64
   end

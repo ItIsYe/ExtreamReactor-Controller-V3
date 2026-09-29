@@ -109,32 +109,6 @@ local function path_key(path)
   return table.concat(path or {}, ">")
 end
 
--- Vereinigung mehrerer Zielpfade, Reihenfolge des ersten Auftretens, ohne
--- Doppelte. Grundlage der Sammellieferung: mehrere Reaktoren werden in
--- EINER Transaktion beliefert, indem alle ihre Wege gleichzeitig offen
--- sind. Welcher Reaktor davon wie viel bekommt, entscheiden dann die
--- Sorter anhand ihrer Mengenfilter -- nicht mehr die Ausschliesslichkeit
--- des offenen Wegs. Ein gemeinsamer Stamm (derselbe VALVE in mehreren
--- Pfaden) faellt dabei von selbst zusammen.
---
--- Rueckgabe nil plus die schuldige Kennung, wenn zu einem Ziel kein Weg
--- bekannt ist -- die Sammellieferung faellt dann komplett aus, statt
--- stillschweigend einen Reaktor auszulassen.
-local function union_paths(routes, target_ids)
-  local seen, out = {}, {}
-  for _, target_id in ipairs(target_ids or {}) do
-    local path = find_path(routes, target_id)
-    if not path then return nil, target_id end
-    for _, id in ipairs(path) do
-      if not seen[id] then
-        seen[id] = true
-        out[#out + 1] = id
-      end
-    end
-  end
-  return out
-end
-
 -- Normalisiert die rohe Config (siehe Formen 1-3 oben) in eine flache
 -- Routenliste. Sammelt strukturelle Fehler dabei im selben Durchlauf ein
 -- (Rueckgabe: routes, errors) -- normalize_tree() (oeffentlich, nur
@@ -760,18 +734,9 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
     return false, "invalid_tree", tx_id
   end
 
-  -- Sammellieferung: opts.extra_targets sind weitere Reaktoren, die in
-  -- DERSELBEN Transaktion mitbeliefert werden. target_id bleibt das
-  -- fuehrende Ziel (Protokoll, Anzeige, hop_timing); geoeffnet wird die
-  -- Vereinigung aller Wege.
-  local targets = { target_id }
-  for _, extra in ipairs(opts.extra_targets or {}) do
-    if extra ~= nil and extra ~= target_id then targets[#targets + 1] = extra end
-  end
-
-  local path, missing = union_paths(self._state.routes, targets)
+  local path = find_path(self._state.routes, target_id)
   if not path then
-    self.log("WARN", "RedstoneRouter: no path found for target: " .. tostring(missing))
+    self.log("WARN", "RedstoneRouter: no path found for target: " .. tostring(target_id))
     self:block_all()
     self._state.active_target = nil
     self._state.active_path = nil
@@ -781,7 +746,6 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
   self._state.transaction = {
     id = tx_id,
     target_id = target_id,
-    targets = targets,
     action_fn = action_fn,
     on_error = opts.on_error,
     on_complete = opts.on_complete,
@@ -1000,7 +964,6 @@ function M:get_active_transaction()
   return {
     id = tx.id, transaction_id = tx.id, target_id = tx.target_id,
     state = tx.state, phase = tx.phase or phase_for_state(tx.state), started_ts = tx.started_ts,
-    targets = tx.targets,
   }
 end
 

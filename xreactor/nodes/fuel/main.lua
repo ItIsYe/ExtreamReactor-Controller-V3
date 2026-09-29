@@ -109,10 +109,6 @@ local DEFAULT_CONFIG = {
     enabled = false,
     interval = 5,
     discovery_interval = 60,
-    -- Wie viele Reaktoren eine Lieferung gleichzeitig bedienen darf.
-    -- 1 = altes Verhalten (ein Reaktor je Ventil-Transaktion). Siehe
-    -- nodes/fuel/config.lua fuer die Voraussetzung an die Sorter.
-    parallel_deliveries = 4,
     max_per_cycle = 64,
     valve_open_ms = 2000
   },
