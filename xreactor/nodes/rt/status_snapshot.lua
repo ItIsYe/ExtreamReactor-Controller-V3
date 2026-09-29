@@ -137,10 +137,13 @@ function M.build_status_payload(ctx)
     snapshot = ctx.status_snapshot,
     turbines = turbines,
     reactors = reactors,
+    -- Nur die SUMME geht raus. devices/diagnostics waren die komplette
+    -- Geraeteliste des Knotens (bei 52 Geraeten rund 10 KB je Status, alle
+    -- 5 s) -- gelesen hat davon niemand: master/ui/resources.lua nimmt aus
+    -- dem ganzen Block genau registry.summary.total/bound/missing, also
+    -- drei Zahlen.
     registry = {
       summary = ctx.devices.registry_summary or ctx.registry:get_summary(),
-      devices = ctx.registry:get_devices_by_kind(),
-      diagnostics = ctx.registry:get_diagnostics()
     },
     control_mode = ctx.current_state,
   }

@@ -351,7 +351,10 @@ local function build_status_payload()
     peers = comms and comms.peer_state and comms.peer_state.peers or nil,
     alerts = master_alerts, protocol_mismatch = devices.proto_mismatch,
     last_command = devices.last_command, last_command_ts = devices.last_command_ts,
-    registry = { summary = devices.registry_summary or registry:get_summary(), devices = registry:get_devices_by_kind(), diagnostics = registry:get_diagnostics() }
+    -- Nur die SUMME: devices/diagnostics waren die komplette
+    -- Geraeteliste und wurden nirgends gelesen (siehe RT-
+    -- status_snapshot.lua).
+    registry = { summary = devices.registry_summary or registry:get_summary() }
   })
   payload.total_water = total
   local cluster_info = {}

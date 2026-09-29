@@ -446,8 +446,12 @@ local function send_remote_log(prefix, level, message)
       prefix = tostring(prefix or "LOG"),
       level = tostring(level or "INFO"),
       message = tostring(message or ""),
-      seq = remote_log_state.seq,
-      boot_id = boot_id,
+      -- seq und boot_id gingen frueher zusaetzlich einzeln mit. Sie stecken
+      -- beide schon in event_id ("<boot_id>:<seq>"), und gelesen hat sie
+      -- niemand: der Collector dedupliziert ueber event_id und quittiert
+      -- ueber event_id, der Sender streicht die Quittung ueber event_id aus
+      -- seiner Warteschlange. Zwei Felder je Logzeile, und Logzeilen sind
+      -- das Haeufigste auf diesem Kanal.
       event_id = tostring(boot_id) .. ":" .. tostring(remote_log_state.seq),
       ts = os and os.epoch and os.epoch("utc") or nil,
       ack = true

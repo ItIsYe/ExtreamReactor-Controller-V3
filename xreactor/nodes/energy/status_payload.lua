@@ -131,11 +131,13 @@ function M.new(opts)
       capabilities = runtime.energy_health.capabilities
     }
     energy.bindings_summary = runtime.health.summarize_bindings(runtime.energy_health.bindings)
-    energy.registry = {
-      summary = registry_summary,
-      devices = runtime.registry:get_devices_by_kind(),
-      diagnostics = runtime.registry:get_diagnostics()
-    }
+    energy.-- Nur die SUMME: devices/diagnostics waren die komplette
+-- Geraeteliste und wurden nirgends gelesen (siehe RT-
+-- status_snapshot.lua). Die eigene Oberflaeche liest die
+-- Registry direkt (ui_model.lua), nicht ueber das Payload.
+registry = {
+  summary = registry_summary,
+}
 
     local total_duration = runtime.now_ms() - started_at
     local matrix_mode = (effective_matrix_count > 0 and effective_storage_count > 0 and "mixed") or (effective_matrix_count > 0 and "matrix_only") or (effective_storage_count > 0 and "storage_only") or "empty"

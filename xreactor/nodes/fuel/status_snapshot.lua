@@ -47,7 +47,10 @@ function M.build_status_payload(ctx)
     peers = ctx.comms and ctx.comms.peer_state and ctx.comms.peer_state.peers or nil,
     alerts = ctx.master_alerts, protocol_mismatch = devices.proto_mismatch,
     last_command = devices.last_command, last_command_ts = devices.last_command_ts,
-    registry = { summary = devices.registry_summary or ctx.registry:get_summary(), devices = ctx.registry:get_devices_by_kind(), diagnostics = ctx.registry:get_diagnostics() }
+    -- Nur die SUMME: devices/diagnostics waren die komplette
+    -- Geraeteliste und wurden nirgends gelesen (siehe RT-
+    -- status_snapshot.lua).
+    registry = { summary = devices.registry_summary or ctx.registry:get_summary() }
   })
   payload.reserve = amount
   payload.minimum_reserve = ctx.reserve

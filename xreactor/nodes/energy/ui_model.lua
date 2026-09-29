@@ -31,8 +31,14 @@ function M.new(opts)
     local reasons_text = payload.health and table.concat(payload.health.reasons or {}, ",") or ""
     local matrices = runtime.utils.deep_copy(payload.matrices or {})
     local storages = runtime.utils.deep_copy(payload.stores or {})
-    local registry_entries = payload.registry and payload.registry.devices or runtime.registry:list()
-    local registry_summary = payload.registry and payload.registry.summary or runtime.registry:get_summary()
+    -- Direkt aus der Registry, nicht ueber das eigene Payload: die laeuft
+    -- auf DIESEM Rechner, eine Kopie ihrer selbst muss dafuer nicht erst
+    -- durch das Statuspayload wandern (dort steht seit v781 nur noch die
+    -- Summe, weil die Geraeteliste rund 10 KB je Status wog und sie
+    -- ausserhalb dieser Zeile niemand gelesen hat).
+    local registry_entries = runtime.registry:list()
+    local registry_summary = (payload.registry and payload.registry.summary)
+      or runtime.registry:get_summary()
 
     local registry_rows = {}
     for _, entry in ipairs(registry_entries) do
