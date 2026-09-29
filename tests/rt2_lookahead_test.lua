@@ -91,7 +91,12 @@ do
   if passing.reason == "SETTLED" then
     error("eine durch das Ziel beschleunigende Turbine darf nicht als angekommen gelten", 0)
   end
-  assert_eq(passing.reason, "TRIM_DOWN", "sie muss gebremst werden")
+  -- Sie steht im Zielbereich, also greift die Feinzone -- gebremst wird
+  -- trotzdem, nur eben fein.
+  assert_eq(passing.reason, "FINE_DOWN", "sie muss gebremst werden")
+  if not (passing.flow < 1000) then
+    error("und der Durchfluss muss wirklich sinken", 0)
+  end
 end
 
 -- 6. Messrauschen loest das nicht aus. Ein paar Umdrehungen Zittern liegen
@@ -105,14 +110,25 @@ end
 -- 7. Die Vorhersage ist gedeckelt. Eine absurde Rate (ein Sprung von 400
 --    U/min in einem halben Takt) darf die Lage nicht beliebig verschieben.
 do
-  local d = decide(900, 100, 900, 2000)   -- +1600 U/min/s
+  -- Ausserhalb der Feinzone, damit wirklich der Deckel der Vorhersage
+  -- geprueft wird und nicht der Feinschritt: 940 U/min ist 40 ueber dem
+  -- Ziel, mit +1600 U/min/s.
+  local d = decide(940, 140, 900, 2000)
   assert_eq(d.reason, "TRIM_DOWN", "eine wilde Rate bremst")
-  -- Gedeckelt auf MAX_PREDICT_RPM: Abweichung hoechstens -300, Schritt also
-  -- hoechstens TRIM_STEP * 300 / RPM_BAND.
-  local max_step = math.floor(t.TRIM_STEP * t.MAX_PREDICT_RPM / t.RPM_BAND + 0.5)
+  -- Die Vorhersage kann die Lage um hoechstens MAX_PREDICT_RPM verschieben;
+  -- dazu kommt die echte Abweichung von 40.
+  local worst_error = 40 + t.MAX_PREDICT_RPM
+  local max_step = math.min(t.MAX_TRIM_STEP_DOWN,
+    math.floor(t.TRIM_STEP * worst_error / t.RPM_BAND + 0.5))
   local step = 2000 - d.flow
   if step > max_step then
     error("die Vorhersage ist nicht gedeckelt: Schritt " .. step .. " > " .. max_step, 0)
+  end
+
+  -- Ohne Deckel waere die Vorhersage 1600 U/min gross gewesen -- der
+  -- Schritt liefe dann sofort in MAX_TRIM_STEP_DOWN.
+  if step >= t.MAX_TRIM_STEP_DOWN then
+    error("der Deckel greift nicht: der Schritt laeuft voll in die Begrenzung", 0)
   end
 end
 
@@ -203,6 +219,44 @@ do
         lag, settled_on, settled_off), 0)
     end
   end
+end
+
+-- 12. Die Feinzone: nah am Ziel wird der Vorhalt verkuerzt und der Schritt
+--     gedeckelt. Betreibervorgabe: "wenn die Turbine nah dem Zielbereich
+--     ist, dass der feiner regelt."
+do
+  -- Innerhalb der Feinzone: derselbe Rauschimpuls erzeugt einen deutlich
+  -- kleineren Schritt als knapp ausserhalb. Das IST die Feinheit -- nah am
+  -- Ziel ist die hochgerechnete Rate ueberwiegend Messrauschen.
+  local inside = decide(890, 878, 900, 1000)   -- 10 unter Ziel, +24 U/min/s
+  local outside = decide(870, 858, 900, 1000)  -- 30 unter Ziel, +24 U/min/s
+  assert_eq(inside.reason, "FINE_UP", "innerhalb der Feinzone regelt es fein")
+  assert_eq(outside.reason, "TRIM_UP", "ausserhalb ganz normal")
+  local step_inside = inside.flow - 1000
+  local step_outside = outside.flow - 1000
+  if not (step_inside < step_outside) then
+    error("in der Feinzone muss der Schritt kleiner sein -- " ..
+      step_inside .. " vs " .. step_outside, 0)
+  end
+
+  -- Der Deckel gilt in beide Richtungen.
+  local down = decide(910, 910, 900, 1000)
+  assert_eq(down.reason, "FINE_DOWN", "auch nach unten fein")
+  if (1000 - down.flow) > t.FINE_TRIM_STEP then
+    error("der Feinschritt ist gedeckelt", 0)
+  end
+
+  -- Die Feinzone haengt am GEMESSENEN Abstand, nicht am vorhergesagten:
+  -- eine Turbine 200 unter dem Ziel gehoert nicht hinein, egal wie
+  -- schnell sie sich naehert.
+  local far = decide(700, 640, 900, 1000)
+  if far.reason == "FINE_UP" or far.reason == "FINE_DOWN" then
+    error("200 unter dem Ziel ist nicht 'nah am Zielbereich'", 0)
+  end
+
+  -- Und die Schutzentscheidungen stehen weiterhin darueber.
+  local over = decide(1301, 1301, 900, 2000)
+  assert_eq(over.reason, "OVERSPEED", "die Feinzone hebelt nichts aus")
 end
 
 print("OK rt2_lookahead_test")

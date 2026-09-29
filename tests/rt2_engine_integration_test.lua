@@ -302,6 +302,9 @@ do
     -- also wird nicht gestellt. Ohne diesen Grund waere jede weitere
     -- Verstellung genau das Ueberschwingen.
     ON_PREDICTED_TARGET = true,
+    -- Feinzone nah am Ziel (rt2_turbine.lua's FINE_BAND_RPM): dieselbe
+    -- Entscheidung, nur mit verkuerztem Vorhalt und gedeckeltem Schritt.
+    FINE_UP = true, FINE_DOWN = true,
   }
   local seen_trim_up = false
   local r

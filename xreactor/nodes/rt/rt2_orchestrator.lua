@@ -65,14 +65,23 @@ M.LEARN_STABLE_MS        = 6000    -- so lange darf er sich nicht mehr verbesser
 M.TOPOLOGY_DEBOUNCE_MS   = 3000    -- so lange muss eine geaenderte Turbinenzahl anhalten
 M.SATURATION_FRACTION    = 0.95    -- ab hier gilt der Durchfluss als am Anschlag
 
--- Und die Notbremse, die es im Original NICHT gab: dort fand der
--- gestaffelte Suchlauf notfalls eine tragbare Teilmenge. Ohne ihn kann
--- eine dampfarme Anlage die 80 % nie erreichen, und dann liefe das
--- Einlernen endlos -- der Knoten wuerde MASTER dauerhaft uebersteuern.
--- Nach dieser Zeit gilt deshalb der hoechste bis dahin geflossene
--- Gesamtausstoss, das Einlernen endet, die normale Regelung uebernimmt.
--- Der Knoten sagt im Log, dass die Zahl dann zu klein ist.
-M.LEARN_TIMEOUT_MS       = 180000  -- 3 min
+-- Eine Notbremse auf Zeit gibt es NICHT (Betreibervorgabe 2026-09-29: "das
+-- Learning muss diese Zeit raus, es muss so lange gewartet werden, bis die
+-- erforderlichen Turbinen da sind"). Sie war eine Zugabe von mir, im
+-- Original stand sie nicht: nach drei Minuten galt der hoechste bis dahin
+-- geflossene Ausstoss, auch wenn die 80 % nie erreicht waren.
+--
+-- Das war der falsche Tausch. Der Messwert ist die Grundlage, auf der
+-- MASTER die ganze Anlage aufteilt -- eine zu kleine Zahl dort ist kein
+-- "etwas ungenau", sondern eine dauerhaft zu klein ausgelegte Anlage, und
+-- sie sieht von aussen genauso aus wie eine richtige. Lieber wartet das
+-- Einlernen sichtbar weiter (der Knoten sagt in jedem Takt, wie viele
+-- Turbinen noch fehlen), als still mit einer falschen Zahl weiterzulaufen.
+--
+-- Endlos ist das nicht im Sinne von "haengt": sobald die geforderten
+-- Turbinen EINMAL gemeinsam im Zielband waren, laeuft die Messung ueber
+-- LEARN_STABLE_MS in ihr Ergebnis -- auch wenn die Flotte danach wieder
+-- darunter faellt (siehe settle_measured() unten).
 
 M.LEARNING = "LEARNING"
 M.MEASURED = "MEASURED"
@@ -199,15 +208,8 @@ local function measure_capacity(previous, turbines, now_ms)
     if (state.best_output or 0) > 0 and now_ms - state.last_improved_ms >= M.LEARN_STABLE_MS then
       return settle_measured()
     end
-    if now_ms - state.learn_started_ms >= M.LEARN_TIMEOUT_MS then
-      -- Notbremse: die 80 % wurden nie erreicht.
-      state.learning = false
-      state.ready = (state.observed or 0) > 0
-      state.max_output = math.floor(state.observed or 0)
-      state.sustainable_turbines = at_target
-      state.reason = M.OBSERVED
-      return state
-    end
+    -- Kein Abbruch auf Zeit. Es wird gewartet, bis die geforderten
+    -- Turbinen da sind.
     state.reason = M.LEARNING
     return state
   end

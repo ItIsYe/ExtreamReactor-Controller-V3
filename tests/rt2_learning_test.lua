@@ -166,11 +166,15 @@ end
 
 -- ══ 6. Die Notbremse: das Einlernen endet IMMER ════════════════════════
 --
--- Im Original fand der gestaffelte Suchlauf notfalls eine tragbare
--- Teilmenge. Ohne ihn kann eine dampfarme Anlage die 80 % nie erreichen --
--- dann liefe das Einlernen endlos und der Knoten wuerde MASTER dauerhaft
--- uebersteuern. Das ist genau die Sackgasse, in der die alte Lernphase
--- stecken blieb.
+-- Betreibervorgabe (2026-09-29): "das Learning muss diese Zeit raus, es muss
+-- so lange gewartet werden, bis die erforderlichen Turbinen da sind."
+--
+-- Frueher stand hier eine Notbremse auf Zeit: nach drei Minuten endete das
+-- Einlernen in jedem Fall und der hoechste bis dahin geflossene Ausstoss
+-- galt als Ergebnis. Das war der falsche Tausch -- der Messwert ist die
+-- Grundlage, auf der MASTER die ganze Anlage aufteilt, und eine zu kleine
+-- Zahl dort ist keine Ungenauigkeit, sondern eine dauerhaft zu klein
+-- ausgelegte Anlage, die von aussen genauso aussieht wie eine richtige.
 do
   local o = orchestrator.new()
   o.note_master_seen(0)
@@ -178,16 +182,27 @@ do
   o.tick({ now_ms = 1000, hardware_ready = true, master_percent = 40,
     turbines = starved, reactor = {} })
 
-  local r = o.tick({ now_ms = 1000 + orchestrator.LEARN_TIMEOUT_MS - 1, hardware_ready = true,
-    master_percent = 40, turbines = starved, reactor = {} })
-  assert_true(r.capacity.learning, 'kurz vor der Grenze laeuft es noch')
+  -- Auch nach einer sehr langen Zeit wird weiter gewartet.
+  local r
+  for _, elapsed in ipairs({ 60000, 180000, 600000, 3600000 }) do
+    r = o.tick({ now_ms = 1000 + elapsed, hardware_ready = true,
+      master_percent = 40, turbines = starved, reactor = {} })
+    assert_true(r.capacity.learning,
+      'nach ' .. (elapsed / 1000) .. 's wird immer noch gewartet')
+    assert_eq(r.capacity.reason, 'LEARNING', 'und der Grund bleibt LEARNING')
+  end
+  assert_true(not r.capacity.ready,
+    'ohne Messpunkt bekommt MASTER keine Zahl -- lieber keine als eine falsche')
 
-  r = o.tick({ now_ms = 1000 + orchestrator.LEARN_TIMEOUT_MS + 1, hardware_ready = true,
-    master_percent = 40, turbines = starved, reactor = {} })
-  assert_true(not r.capacity.learning, 'nach der Grenze endet das Einlernen in jedem Fall')
-  assert_eq(r.capacity.reason, 'OBSERVED', 'und sagt, dass die Zahl nur geschaetzt ist')
-  assert_eq(r.capacity.max_output, 150, 'es gilt der hoechste geflossene Ausstoss (3 x 50)')
-  assert_true(r.capacity.ready, 'MASTER bekommt eine Zahl, statt den Knoten nie zuzuteilen')
+  -- Sobald die geforderten Turbinen da sind, laeuft es ganz normal durch.
+  local full = fleet(10, 10, 50)
+  r = o.tick({ now_ms = 1000 + 3600000 + 1000, hardware_ready = true,
+    master_percent = 40, turbines = full, reactor = {} })
+  assert_eq(r.capacity.reason, 'LEARNING', 'der erste volle Takt ist der Messpunkt')
+  r = o.tick({ now_ms = 1000 + 3600000 + 1000 + orchestrator.LEARN_STABLE_MS + 1,
+    hardware_ready = true, master_percent = 40, turbines = full, reactor = {} })
+  assert_true(not r.capacity.learning, 'danach ist das Einlernen fertig')
+  assert_eq(r.capacity.reason, 'MEASURED', 'und die Zahl ist gemessen, nicht geschaetzt')
 end
 
 -- ══ 7. Saettigung ist eine Diagnose, keine Regelgroesse ════════════════

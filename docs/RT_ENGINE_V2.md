@@ -1,6 +1,6 @@
 # RT-Regel-Engine v2
 
-**Stand: 2026-09-29 | manifest-v779 | Zweig `beta`**
+**Stand: 2026-09-29 | manifest-v790 | Zweig `beta`**
 
 Der RT-Knoten hat **genau eine** Regel-Engine (`rt2_*.lua`). Der
 Vorgaenger v1 (`reactor_control.lua`, `turbine_control.lua`,
@@ -160,7 +160,7 @@ nachweislich GLEICHZEITIG geliefert hat**:
 | Mindestanteil | 80 % der Flotte, gleichzeitig (`LEARN_MIN_FRACTION`) |
 | Abschluss | Hoechstwert steigt 6 s nicht mehr (`LEARN_STABLE_MS`) |
 | Reserve | gemeldet werden 95 % davon (`LEARN_SAFETY_MARGIN`) |
-| Notbremse | nach 3 min endet es in jedem Fall (`LEARN_TIMEOUT_MS`) |
+| Abbruch auf Zeit | **gibt es nicht** — es wird gewartet, bis die geforderten Turbinen da sind |
 
 Ein Takt zaehlt nur, wenn genug Turbinen gleichzeitig im Band stehen,
 gekuppelt sind und wirklich liefern — eine Summe aus drei zufaellig
@@ -192,10 +192,22 @@ Befund im Log.
 Der gestaffelte Suchlauf (v754–v757), der Turbinen stufenweise freigab und
 daraus eine „tragbare Anzahl" ableitete. Er hat im Feld 49 von 50 Turbinen
 abgestellt und war der Grund, warum das Einlernen haengenblieb. Ohne ihn
-findet der Knoten keine tragbare Teilmenge mehr — deshalb die Notbremse
-oben: bringt eine dampfarme Anlage nie 80 % ins Band, gilt nach 3 min der
-hoechste geflossene Ausstoss, und das Log sagt deutlich, dass die Zahl zu
-klein ist.
+findet der Knoten keine tragbare Teilmenge mehr. Bringt eine dampfarme
+Anlage die 80 % nie ins Band, **wartet das Einlernen** — es endet nicht auf
+Verdacht mit einer geschaetzten Zahl.
+
+Eine solche Notbremse gab es kurzzeitig (bis v789, `LEARN_TIMEOUT_MS`,
+3 min). Sie ist auf Betreibervorgabe entfallen, und das aus gutem Grund:
+der eingelernte Wert ist die Grundlage, auf der MASTER die ganze Anlage
+aufteilt. Eine zu kleine Zahl dort ist keine Ungenauigkeit, sondern eine
+dauerhaft zu klein ausgelegte Anlage — und sie sieht von aussen genauso aus
+wie eine richtige. Sichtbar warten ist besser als still falsch rechnen: der
+Knoten meldet in jedem Takt, wie viele Turbinen noch fehlen.
+
+Endlos haengen kann es dadurch nicht: sobald die geforderten Turbinen
+EINMAL gemeinsam im Zielband waren, laeuft die Messung ueber
+`LEARN_STABLE_MS` in ihr Ergebnis — auch wenn die Flotte danach wieder
+darunter faellt.
 
 ### Die Kette bis MASTER
 
@@ -215,10 +227,11 @@ Durchfluss-Schritt.
 1. Keine Drehzahlmessung   -> Dampf aus.   NO_RPM_READING
 2. Ziel 0 (Turbine steht)  -> Dampf aus.   TARGET_ZERO
 3. Echte Ueberdrehzahl     -> Dampf aus.   OVERSPEED
-4. Nah genug am Ziel       -> nichts tun.  SETTLED
+4. Am Ziel UND ruhig       -> nichts tun.  SETTLED
 5. Stellintervall nicht um -> nichts tun.  SETTLING
-6. sonst: Schritt proportional zur Abweichung, gedeckelt auf TRIM_STEP.
-                                           TRIM_UP / TRIM_DOWN
+6. Vorhersage trifft       -> nichts tun.  ON_PREDICTED_TARGET
+7. Nah am Ziel             -> feiner Schritt.  FINE_UP / FINE_DOWN
+8. sonst: Schritt proportional zur Abweichung.  TRIM_UP / TRIM_DOWN
 ```
 
 1.–3. sind Schutz, nicht Regelung: sie greifen im selben Takt und werden
@@ -232,7 +245,91 @@ Abweichung.
 
 **Stellintervall** (`MIN_ADJUST_INTERVAL_MS`, 600 ms): der Rotor haengt
 der Vorgabe um Sekunden hinterher. Ohne diese Sperre stapelt der Regler
-Schritte auf eine Wirkung, die noch gar nicht eingetreten ist.
+Schritte auf eine Wirkung, die noch gar nicht eingetreten ist. Sie
+entfaellt, sobald eine Aenderungsrate vorliegt — der Vorhalt loest
+dasselbe Problem auf dem richtigen Weg (siehe unten) — und ebenso beim
+Bremsen oberhalb des Bands.
+
+### Vorhalt — schnell reagieren, ohne zu ueberschwingen
+
+Betreibervorgabe: „fast instant reagieren, aber trotzdem nicht
+ueberschwingen." Mit einem Regler, der nur die IST-Drehzahl sieht, ist das
+nicht zu haben: schnell heisst grosse Verstaerkung, und grosse
+Verstaerkung heisst Ueberschwingen.
+
+Geregelt wird deshalb auf die Drehzahl, die in `LOOKAHEAD_S` (1 s) anliegt,
+wenn es so weitergeht — aus der Aenderungsrate zweier aufeinanderfolgender
+Messpunkte:
+
+```
+Vorhersage = Drehzahl + Rate * LOOKAHEAD_S
+```
+
+Eine Turbine bei 800 mit +250 U/min/s ist damit nicht „100 zu langsam",
+sondern „150 zu schnell": der Regler nimmt zurueck, **waehrend** sie noch
+steigt. Weit weg darf er dafuer viel entschiedener zupacken
+(`MAX_TRIM_STEP_UP`/`MAX_TRIM_STEP_DOWN`, je 400), weil ihn die Rate
+rechtzeitig wieder einbremst.
+
+Das ist **kein Lernen**: nichts wird gespeichert, nichts ueber Takte
+hinaus gemittelt, keine Kennlinie gebildet. Zwei Messwerte aus zwei Takten.
+
+Abgesichert an drei Stellen:
+
+| | |
+|---|---|
+| `MAX_PREDICT_RPM` (300) | soweit darf die Vorhersage die Lage hoechstens verschieben |
+| `MAX_RATE_AGE_MS` (3 s) | aelter, und die Rate gilt als unbekannt (auch bei Uhrsprung) |
+| `SETTLE_RATE_RPM_PER_S` (12) | die Ruhezone verlangt kleine Abweichung **und** kleine Rate |
+
+Ohne Rate faellt alles auf das alte Verhalten zurueck, **einschliesslich**
+des vorsichtigen `TRIM_STEP` nach oben: der grosse Schritt ist nur
+vertretbar, weil die Vorhersage einbremst — faellt sie weg, faellt er weg.
+
+`LOOKAHEAD_S` ist gemessen, nicht geraten. Anfahrt aus dem Stand auf 900
+gegen drei Rotortraegheiten:
+
+| Vorhalt | Spitze (1,4 s / 5 s / 12,5 s) | im Band nach |
+|---|---|---|
+| aus | 1049 / 999 / 969 | 10,0 / 27,0 / 58,5 s |
+| **1,0 s** | **899 / 962 / 954** | **7,0 / 14,5 / 37,0 s** |
+| 2,0 s | 898 / 918 / 938 | 12,0 / 13,0 / 28,0 s |
+
+2 s ist bei traegen Rotoren besser, beim schnellen wieder schlechter — das
+Aufschwingen, wenn der Vorhalt die Zeitkonstante der Strecke ueberholt.
+
+### Feinzone — nah am Ziel feiner stellen
+
+Innerhalb von `FINE_BAND_RPM` (15 RPM, dasselbe Zielband wie beim
+Einlernen) wird der Vorhalt auf `FINE_LOOKAHEAD_S` (0,25 s) verkuerzt und
+der Schritt auf `FINE_TRIM_STEP` (20) gedeckelt.
+
+Grund: was nah am Ziel grob macht, ist nicht die Verstaerkung — der Schritt
+ist dort ohnehin klein. Es ist der Vorhalt. Die Rate entsteht aus zwei
+Messwerten, und die Drehzahlmessung rauscht; aus ±6 U/min Rauschen je
+halbem Takt werden 24 U/min/s Scheinrate, bei 1 s Vorhalt also 24 U/min
+Scheinabweichung. Weit weg geht das im echten Fehler unter — nah am Ziel
+**ist** es der ganze Fehler, und der Regler stellt Rauschen nach.
+
+Gemessen (Rotor lag=0,04, Rauschen ±6 U/min, Spanne des Durchflusses in
+der Ruhelage ueber 100 Takte):
+
+| | Spanne | im Band nach |
+|---|---|---|
+| ohne Feinzone | 77 | 36,5 s |
+| nur Schrittdeckel 6 | 45 | 47,0 s |
+| **nur kurzer Vorhalt** | **42** | **38,0 s** |
+| beides | 41 | 45,5 s |
+
+Der kurze Vorhalt bringt fast die ganze Ruhe und kostet anderthalb
+Sekunden; der Schrittdeckel kostet zehn und bringt kaum mehr. Der Deckel
+bleibt trotzdem als Grenze stehen — er greift im Normalfall nicht und
+faengt nur einen Rauschausreisser ab.
+
+Die Feinzone haengt am **gemessenen** Abstand, nicht am vorhergesagten:
+„nah am Zielbereich" ist eine Aussage darueber, wo die Turbine steht. Eine,
+die noch 200 entfernt ist und schnell darauf zulaeuft, gehoert nicht
+hinein — die soll weiter kraeftig zurueckgenommen werden duerfen.
 
 **Verstaerkung**: genau am Rand des Zielbands kommt ein voller
 `TRIM_STEP` heraus, naeher am Ziel entsprechend weniger. Damit gibt es
@@ -412,7 +509,7 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
 | `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt den wirklichen Zustand |
 | `rt_boot_smoke_test.lua` | Kaltstart der ganzen Rolle auf einer simulierten Anlage |
-| `rt2_learning_test.lua` | Einlernen: 80 %, Zielband, Hoechstwert, Notbremse, Umbau |
+| `rt2_learning_test.lua` | Einlernen: 80 %, Zielband, Hoechstwert, Warten statt Abbruch, Umbau |
 | `rt2_clock_backwards_no_regulator_lock_test.lua` | eine zurueckspringende Uhr sperrt weder Durchfluss- noch Stabregelung aus |
 | `rt2_turbine_flow_decoupled_from_tank_test.lua` | der Dampftank regelt den Reaktor, nicht die Turbinen |
 | `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |

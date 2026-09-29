@@ -62,7 +62,7 @@ do
 
   local fleet = {
     turbine('SLOW',      100, 500,  false, 0,   true),   -- weit unter Ziel  -> TRIM_UP
-    turbine('OVER',      905, 1200, true,  100, true),   -- knapp drueber    -> TRIM_DOWN
+    turbine('OVER',      905, 1200, true,  100, true),   -- knapp drueber    -> FINE_DOWN
     turbine('ONTARGET',  900, 1000, true,  100, true),   -- angekommen       -> SETTLED
     turbine('RUNAWAY',   2400, 1800, true, 100, true),   -- echter Ausreisser-> OVERSPEED
     turbine('BLIND',     nil, 1500, true,  100, true),   -- Drehzahl unlesbar-> NO_RPM_READING
@@ -76,7 +76,8 @@ do
   assert_eq(t.SLOW.flow_decision.flow, 500 + rt2_turbine.TRIM_STEP,
     'SLOW steps up from its OWN flow, not the fleet average, and by at most one full step')
 
-  assert_eq(t.OVER.flow_decision.reason, 'TRIM_DOWN')
+  -- 5 RPM drueber liegt in der Feinzone (FINE_BAND_RPM) -- daher FINE_DOWN.
+  assert_eq(t.OVER.flow_decision.reason, 'FINE_DOWN')
   -- nur 5 RPM drueber -> entsprechend kleiner Schritt (35 * 5/40 ~ 4).
   assert_eq(t.OVER.flow_decision.flow, 1196, 'OVER steps down proportionally from its OWN 1200')
 

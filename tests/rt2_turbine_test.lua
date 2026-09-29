@@ -123,16 +123,24 @@ do
   assert_true(reached.TRIM_DOWN, 'TRIM_DOWN must be reachable')
   assert_true(reached.SETTLED, 'SETTLED must be reachable')
   assert_true(reached.OVERSPEED, 'OVERSPEED must be reachable')
+  -- Feinzone nah am Ziel (FINE_BAND_RPM): dieselbe Entscheidung, nur mit
+  -- verkuerztem Vorhalt und gedeckeltem Schritt -- deshalb ein eigener
+  -- Grund, damit von aussen sichtbar ist, welcher Zweig gerade stellt.
+  assert_true(reached.FINE_UP, 'FINE_UP must be reachable')
+  assert_true(reached.FINE_DOWN, 'FINE_DOWN must be reachable')
   local count = 0
   for _ in pairs(reached) do count = count + 1 end
-  assert_eq(count, 4, 'and nothing else -- one control law, four outcomes')
+  assert_eq(count, 6, 'and nothing else -- one control law, six outcomes')
 end
 
 -- Der Schritt ist PROPORTIONAL zur Abweichung: winzig nah am Ziel, ein
 -- voller TRIM_STEP am Rand des Zielbands. Kein Sprung dazwischen.
 do
+  -- 894 liegt innerhalb der Feinzone, deshalb FINE_UP -- der Schritt ist
+  -- dort zusaetzlich gedeckelt, die Aussage "nah am Ziel bleibt er klein"
+  -- gilt unveraendert.
   local near = rt2_turbine.compute_flow_decision({ rpm = 894, target_rpm = 900, current_flow = 1200, band = 40 })
-  assert_eq(near.reason, 'TRIM_UP')
+  assert_eq(near.reason, 'FINE_UP')
   assert_true(near.flow - 1200 <= 6, 'close to the target the step stays small, got ' .. tostring(near.flow - 1200))
 
   local far = rt2_turbine.compute_flow_decision({ rpm = 860, target_rpm = 900, current_flow = 1200, band = 40 })

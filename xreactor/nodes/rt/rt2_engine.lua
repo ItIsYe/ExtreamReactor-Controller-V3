@@ -209,17 +209,10 @@ function M.tick(ctx)
         msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig im Zielband",
           (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
       end
-    else
-      -- Notbremse gezogen: das Einlernen hat den Messpunkt nie erreicht.
-      -- Das gehoert gesagt, sonst haelt man die Zahl fuer eine Messung.
-      msg = string.format(
-        "v2 EINLERNEN ABGEBROCHEN nach %.0fs: es kamen nie %d von %d Turbinen"
-          .. " gleichzeitig ins Zielband. Es gilt der hoechste geflossene Ausstoss"
-          .. " %.0f RF/t -- das ist zu wenig, MASTER teilt gegen eine zu kleine"
-          .. " Zahl auf. Die normale Regelung laeuft wieder.",
-        orchestrator.LEARN_TIMEOUT_MS / 1000, cap.required_at_target or 0,
-        cap.total_turbines or 0, cap.max_output or 0)
     end
+    -- Einen Abbruch auf Zeit gibt es nicht mehr (siehe rt2_orchestrator.lua):
+    -- das Einlernen wartet, bis die geforderten Turbinen da sind, und sagt
+    -- in jedem Takt, wie viele noch fehlen.
     ctx.log("INFO", msg)
     pcall(print, "[RT] " .. msg)
   end

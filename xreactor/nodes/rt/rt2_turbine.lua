@@ -47,6 +47,47 @@ M.MIN_FLOW = 0
 M.MAX_FLOW = 2000
 M.TRIM_STEP = 35
 
+-- ── Feinzone ─────────────────────────────────────────────────────────────
+--
+-- Betreibervorgabe (2026-09-29): "wenn die Turbine nah dem Zielbereich ist,
+-- dass der feiner regelt."
+--
+-- Innerhalb von FINE_BAND_RPM um das Ziel wird der Schritt zusaetzlich auf
+-- FINE_TRIM_STEP gedeckelt. Weiter draussen bleibt alles wie gehabt --
+-- dort SOLL entschieden gestellt werden.
+--
+-- Was nah am Ziel grob macht, ist nicht die Verstaerkung -- der Schritt
+-- waechst ohnehin mit der Abweichung und ist dort schon klein. Es ist der
+-- VORHALT: er rechnet die Aenderungsrate hoch, und die Rate wird aus zwei
+-- Messwerten gebildet. Die Drehzahlmessung rauscht um ein paar
+-- Umdrehungen, und aus +/-6 U/min Rauschen je halbem Takt werden 24 U/min/s
+-- Scheinrate -- bei einer Sekunde Vorhalt also 24 U/min Scheinabweichung.
+-- Weit weg geht das im echten Fehler unter; nah am Ziel IST es der ganze
+-- Fehler, und der Regler stellt Rauschen nach.
+--
+-- Nachgemessen am 2026-09-29 (Rotor lag=0.04, Messrauschen +/-6 U/min,
+-- Spanne des Durchflusses in der Ruhelage ueber 100 Takte):
+--
+--   ohne Feinzone                 Spanne 77, im Band nach 36,5 s
+--   nur Schrittdeckel 6           Spanne 45, im Band nach 47,0 s
+--   nur kurzer Vorhalt 0,25 s     Spanne 42, im Band nach 38,0 s
+--   beides                        Spanne 41, im Band nach 45,5 s
+--
+-- Der kurze Vorhalt bringt fast die ganze Ruhe und kostet anderthalb
+-- Sekunden; der Schrittdeckel kostet zehn und bringt kaum mehr. Also nur
+-- der Vorhalt wird verkuerzt. Der Deckel bleibt als Grenze bestehen, greift
+-- aber im Normalfall nicht -- er faengt nur einen Rauschausreisser ab,
+-- damit im Zielbereich nie ein grosser Schritt entsteht.
+--
+-- Die Feinzone wird am GEMESSENEN Abstand festgemacht, nicht am
+-- vorhergesagten: "nah am Zielbereich" ist eine Aussage darueber, wo die
+-- Turbine steht. Eine, die noch 200 entfernt ist und schnell darauf
+-- zulaeuft, gehoert nicht hinein -- die soll weiter kraeftig
+-- zurueckgenommen werden duerfen.
+M.FINE_BAND_RPM = 15
+M.FINE_LOOKAHEAD_S = 0.25
+M.FINE_TRIM_STEP = 20
+
 -- Groesster Bremsschritt. Beschleunigen und Bremsen sind NICHT symmetrisch:
 --
 -- Der Schritt wird als TRIM_STEP * Abweichung / RPM_BAND gerechnet und war
@@ -306,7 +347,14 @@ function M.compute_flow_decision(input)
   -- Der Vorhalt: geregelt wird auf die Drehzahl, die in LOOKAHEAD_S
   -- Sekunden anliegt, wenn es so weitergeht. Ohne Rate bleibt es beim
   -- Istwert.
-  local lookahead_s = tonumber(input.lookahead_s) or M.LOOKAHEAD_S
+  -- Nah am Ziel wird der Vorhalt verkuerzt (siehe FINE_BAND_RPM): dort ist
+  -- die hochgerechnete Rate ueberwiegend Messrauschen, und der Regler
+  -- wuerde dieses Rauschen nachstellen.
+  local fine_band = tonumber(input.fine_band_rpm) or M.FINE_BAND_RPM
+  local in_fine_zone = math.abs(error_rpm) <= fine_band
+  local lookahead_s = tonumber(input.lookahead_s)
+    or (in_fine_zone and (tonumber(input.fine_lookahead_s) or M.FINE_LOOKAHEAD_S))
+    or M.LOOKAHEAD_S
   local control_error = error_rpm
   if rate_rpm_per_s then
     -- Die Vorhersage wird begrenzt. Eine aus zwei dicht aufeinander
@@ -394,10 +442,24 @@ function M.compute_flow_decision(input)
   local step = M.TRIM_STEP * math.abs(control_error) / band
 
   -- Die Vorhersage sagt "kommt hin": nichts tun. Das ist der Kern des
-  -- Vorhalts -- die Turbine ist noch weit weg, aber sie ist auf dem Weg,
-  -- und jede weitere Verstellung jetzt waere genau das Ueberschwingen.
+  -- Vorhalts -- die Turbine ist vielleicht noch weit weg, aber sie ist auf
+  -- dem Weg, und jede weitere Verstellung jetzt waere genau das
+  -- Ueberschwingen. Diese Pruefung steht VOR der Feinzone: auch dort gilt,
+  -- dass ein Treffer nicht nachkorrigiert wird.
   if math.abs(control_error) < 1 then
     return hold("ON_PREDICTED_TARGET")
+  end
+
+  -- Nah am Ziel wird fein gestellt (siehe FINE_BAND_RPM). Der Deckel gilt
+  -- in BEIDE Richtungen -- feiner heisst feiner, nicht "vorsichtig nach
+  -- oben und weiterhin grob nach unten".
+  local fine_step = tonumber(input.fine_trim_step) or M.FINE_TRIM_STEP
+  if in_fine_zone then
+    local fine = math.max(1, math.min(fine_step, math.floor(step + 0.5)))
+    if control_error > 0 then
+      return { flow = clamp(current_flow + fine, min_flow, max_flow), reason = "FINE_UP" }
+    end
+    return { flow = clamp(current_flow - fine, min_flow, max_flow), reason = "FINE_DOWN" }
   end
 
   if control_error > 0 then
