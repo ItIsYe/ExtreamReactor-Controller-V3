@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 782,
-  manifest_id = "manifest-v782",
+  manifest_version = 784,
+  manifest_id = "manifest-v784",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "80cfe105", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "c303aa3b", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 3137, hash = "7fe91602", always = true },
@@ -34,6 +34,7 @@ return {
   { path = "core/non_rt_payload.lua", size_bytes = 2520, hash = "9e14bcba", required_for={"VALVE","WATER","FUEL","REPROCESSING"} },
   { path = "core/protocol.lua", size_bytes = 7397, hash = "8b591bc4" },
   { path = "core/reactor_identity.lua", size_bytes = 1610, hash = "059a6785", required_for={"MASTER","RT","FUEL"} },
+  { path = "core/refresh_gate.lua", size_bytes = 1986, hash = "5f378fdc", required_for={"FUEL"} },
   { path = "core/registry.lua", size_bytes = 14975, hash = "ec074562", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/safety.lua", size_bytes = 7851, hash = "3d0160cc", required_for={"MASTER","RT","FUEL"} },
   { path = "core/startup_report.lua", size_bytes = 4228, hash = "f3adc4b4", always = true },
@@ -177,7 +178,7 @@ return {
     fuel = {
     { path = "nodes/fuel/config.lua", size_bytes = 8822, hash = "47c6de02", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 9443, hash = "11f7e8b4", required_for={"FUEL"} },
-    { path = "nodes/fuel/main.lua", size_bytes = 27285, hash = "d7ddbd97", required_for={"FUEL"} },
+    { path = "nodes/fuel/main.lua", size_bytes = 31280, hash = "9a1605f9", required_for={"FUEL"} },
     { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5091, hash = "ce18d9f2", required_for={"FUEL"} },
     { path = "nodes/fuel/operational_summary.lua", size_bytes = 9314, hash = "0a18ba54", required_for={"FUEL"} },
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2032, hash = "dac721b1", required_for={"FUEL"} },

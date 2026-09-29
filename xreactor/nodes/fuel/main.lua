@@ -29,6 +29,7 @@ local discovery_stability = require("core.discovery_stability")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
+local refresh_gate = require("core.refresh_gate")
 local support_discovery = require("nodes.support.discovery")
 local me_bridge_compat = require("core.me_bridge_compat")
 local support_runtime = require("nodes.support.runtime")
@@ -84,6 +85,33 @@ local DEFAULT_CONFIG = {
   heartbeat_interval = 2,
   discovery_interval = 15,
   status_interval = 5,
+  -- Wie alt der Reserve-Wert aus der ME Bridge hoechstens sein darf, bevor
+  -- er neu gelesen wird. read_fuel() macht pro Aufruf bis zu vier
+  -- synchrone getItem()-Calls; der Wert selbst bewegt sich langsam. Vorher
+  -- gab es diese Drossel nicht, und der Statuspayload (und damit read_fuel)
+  -- wurde von der slow-Coroutine zweimal pro Sekunde neu gebaut -- acht
+  -- ME-Calls je Sekunde fuer eine Zahl, die alle fuenf Sekunden verschickt
+  -- wird. CC:Tweaked hat nur einen Strang: was die ME Bridge an Zeit
+  -- verbraucht, fehlt der Ventil-Logik und der Bedienung.
+  reserve_read_interval = 5,
+  -- Mindestabstand zwischen zwei Statuspayload-Aufbauten. Schnellster
+  -- Verbraucher ist die eigene Oberflaeche mit 1 s; telemetry_service
+  -- verschickt alle status_interval Sekunden. Zweimal pro Sekunde neu zu
+  -- bauen (Ventil-Peer-Scan, Router-Zusammenfassung, ME-Lesung) war
+  -- Arbeit fuer niemanden.
+  status_payload_min_interval_ms = 1000,
+  -- Ohne diesen Block war defaults.logistics in config_normalizer.lua nil,
+  -- und jeder dortige Rueckfall griff auf ein hartcodiertes Literal
+  -- zurueck, das von nodes/fuel/config.lua's DEFAULT_LOGISTICS abweicht --
+  -- unter anderem ein Versorgungs-Check alle 10 s statt der dort
+  -- dokumentierten 5 s.
+  logistics = {
+    enabled = false,
+    interval = 5,
+    discovery_interval = 60,
+    max_per_cycle = 64,
+    valve_open_ms = 2000
+  },
   -- FUEL Advanced Monitor: fixed to TextScale 1.0 / 82x40. 0.5 is still
   -- accepted for backwards compatibility with old configs, but monitor_scada
   -- now forces 1.0 regardless of this value.
@@ -333,23 +361,60 @@ local master_peer_state
 -- erste Anzeige nicht auf einen leeren Payload trifft.
 local payload_cache = nil
 
-local function refresh_status_payload()
-  payload_cache = status_snapshot_lib.build_status_payload({
+-- Die Reserve kommt aus bis zu vier synchronen ME-Bridge-getItem()-Calls
+-- (storage.lua's read_items()). Sie aendert sich in der Groessenordnung von
+-- Minuten, verschickt wird sie alle status_interval Sekunden -- deshalb hier
+-- eine eigene Haltefrist statt bei jedem Payload-Aufbau neu zu lesen. Die
+-- Frist wird nicht abgewartet, wenn sich die Bindung geaendert hat (frisch
+-- gefundene oder verlorene ME Bridge) oder noch nie gelesen wurde.
+local reserve_gate = refresh_gate.new()
+local reserve_value = nil
+
+local function read_fuel_cached()
+  local now = os.epoch("utc")
+  local ttl_ms = math.max(1000, math.floor(
+    (tonumber(config.reserve_read_interval) or config.status_interval or 5) * 1000))
+  if reserve_value ~= nil and not reserve_gate:due(now, ttl_ms, devices.storage_name) then
+    return reserve_value
+  end
+  reserve_value = fuel_storage.read_fuel(config, warn_once, support_runtime)
+  reserve_gate:mark(now, devices.storage_name)
+  return reserve_value
+end
+
+local function build_status_payload_uncached()
+  return status_snapshot_lib.build_status_payload({
     config = config, devices = devices, fuel_health = fuel_health,
     comms = comms, registry = registry, health = health,
     non_rt_payload = non_rt_payload, master_alerts = master_alerts,
     master_seen_ts = master_seen_ts, reserve = reserve, storage = fuel_storage.get(),
-    read_fuel = function() return fuel_storage.read_fuel(config, warn_once, support_runtime) end,
+    read_fuel = read_fuel_cached,
     enforce_reserve = function(current) return fuel_storage.enforce_reserve(current, reserve, safety, utils) end,
     is_master_connected = is_master_connected, get_router = get_router,
     routing_load_status = routing_load_status, get_rs_router = get_rs_router,
   })
+end
+
+-- force = true baut in jedem Fall neu (einmalig in init(), damit die erste
+-- Anzeige und die erste Statusmeldung nicht auf einen leeren Payload
+-- treffen).
+local payload_gate = refresh_gate.new()
+
+local function refresh_status_payload(force)
+  local now = os.epoch("utc")
+  local min_ms = math.max(0, math.floor(
+    tonumber(config.status_payload_min_interval_ms) or 1000))
+  if not force and payload_cache and not payload_gate:due(now, min_ms) then
+    return payload_cache
+  end
+  payload_gate:mark(now)
+  payload_cache = build_status_payload_uncached()
   return payload_cache
 end
 
 local function build_status_payload()
   if payload_cache then return payload_cache end
-  return refresh_status_payload()
+  return refresh_status_payload(true)
 end
 
 -- Zentraler ctx-Aufbau fuer sowohl Model-Bau als auch Zeichnung --
@@ -416,16 +481,26 @@ is_master_connected = function()
 end
 
 local function init()
-  -- Sofortige, direkte Monitor-Ersterkennung (synchron, vor dem Event-Loop)
-  -- -- discover() aktualisiert/bestaetigt das danach weiter periodisch.
-  local mon_entry = monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)
-  devices.monitor = mon_entry and mon_entry.mon or nil
-  devices.monitor_name = mon_entry and mon_entry.name or nil
-  if not devices.monitor and term and type(term.current) == "function" then
-    devices.monitor = term.current(); devices.monitor_name = devices.monitor_name or "term"; devices.monitor_is_term = true
+  -- Vollstaendige Ersterkennung synchron, vor dem Event-Loop -- nicht nur
+  -- der Monitor. Vorher lief hier nur monitor_adapter.find(), und die
+  -- Peripherie (vor allem die ME Bridge als storage_bus) wurde erst vom
+  -- discovery_service gefunden: der hat vier Sekunden Startverzoegerung
+  -- (services/discovery_service.lua, start_delay) und laeuft in der
+  -- slow-Coroutine. Bis dahin meldete FUEL NO_STORAGE, Reserve 0 und eine
+  -- leere Geraeteliste -- genau die "erst mal lange keine Daten"-Phase nach
+  -- dem Start. nodes/rt/main.lua macht das seit jeher so (dortiges init()
+  -- ruft discover() direkt), FUEL nicht. discovery_service bestaetigt und
+  -- aktualisiert danach weiter periodisch.
+  local ok_discover, discover_err = pcall(discover)
+  if not ok_discover then
+    utils.log(CONFIG.LOG_PREFIX, "Erst-Discovery fehlgeschlagen: "
+      .. tostring(discover_err), "WARN")
   end
   utils.log(CONFIG.LOG_PREFIX, "Monitor-Erstinit: " .. tostring(devices.monitor_name)
     .. (devices.monitor and "" or " (KEIN Monitor gefunden!)"), devices.monitor and "INFO" or "WARN")
+  utils.log(CONFIG.LOG_PREFIX, "Storage-Erstinit: " .. tostring(devices.storage_name)
+    .. (devices.storage_name and "" or " (KEIN Storage-Bus gefunden!)"),
+    devices.storage_name and "INFO" or "WARN")
 
   services = service_manager.new({ log_prefix = "FUEL" })
   slow_services = service_manager.new({ log_prefix = "FUEL-BG" })
@@ -515,6 +590,15 @@ local function init()
   services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
   services:init()
   slow_services:init()
+  -- Einmalig und synchron, noch vor den Coroutinen: danach hat die erste
+  -- Oberflaechen-Zeichnung und die erste Statusmeldung echte Werte statt
+  -- eines leeren Payloads -- und der teure Aufbau passiert garantiert nicht
+  -- in der fast-Coroutine (siehe Kommentar bei refresh_status_payload()).
+  local ok_payload, payload_err = pcall(refresh_status_payload, true)
+  if not ok_payload then
+    utils.log(CONFIG.LOG_PREFIX, "Erster Statuspayload fehlgeschlagen: "
+      .. tostring(payload_err), "WARN")
+  end
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")
   if ok_report_mod then
