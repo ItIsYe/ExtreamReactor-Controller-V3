@@ -10,7 +10,10 @@ assert 'M.SUPPORTED_SCALES = { 1.0 }' in m and 'M.FOOTER_Y = 38' in m
 assert 'NICHT KONFIGURIERT' in l and 'local REACTORS_PER_PAGE = 12' in l
 assert 'local button_w = 6' in r and '"EDIT", "LIMITED", 1' in r
 assert 'DISABLED_FIXED_SCALE_1' in h
-assert v.count('apply_valve(true, true)') == 1 and 'apply_valve(false' not in v
+# Die lokale VALVE-Oberflaeche schaltet den Aktor ueberhaupt nicht mehr:
+# der Sperrknopf ist raus (Betreiberwunsch 2026-09-29), Stellen laeuft
+# ausschliesslich ueber den Ventilkanal.
+assert 'apply_valve' not in v
 for text in (l,r,m):
   for bad in ('set_logistics_enabled(','begin_transaction(','record_export(','require("nodes.fuel.logistics_router")','require("nodes.fuel.redstone_router")'):
     assert bad not in text,bad

@@ -19,20 +19,18 @@ main_lua = (ROOT / 'xreactor/nodes/valve/main.lua').read_text(encoding='utf-8')
 for needle in (
     'local EXPECTED_W = 51',
     'local EXPECTED_H = 19',
-    'local ACTION_X = 2',
-    'local ACTION_Y = 14',
-    'local ACTION_W = 48',
-    'local ACTION_H = 3',
 ):
     assert needle in ui, needle
 
-# Visible rectangle and hit-test must share mux.button() geometry including y2.
-assert 'self.safe_button = mux.button' in ui
-assert 'y <= (rect.y2 or rect.y)' in ui
-
-# Safety invariant: local UI can ONLY force BLOCKED, never OPEN.
-assert ui.count('apply_valve(true, true)') == 1
-assert 'apply_valve(false' not in ui
+# Seit 2026-09-29 hat diese Oberflaeche ueberhaupt keine Bedienung mehr
+# (Betreiberwunsch: der lokale Sperrknopf soll raus). Das ist strenger als
+# die frueher hier gepruefte Einbahn-Regel "darf nur BLOCKIEREN": geprueft
+# wird jetzt, dass gar kein Weg zum Aktor mehr existiert -- weder ein
+# gezeichneter Knopf, noch eine stehengebliebene Trefferflaeche, noch ein
+# direkter Aufruf. Verhalten dazu: tests/valve_local_ui_touch_test.lua.
+assert 'mux.button' not in ui
+assert 'safe_button' not in ui
+assert 'apply_valve' not in ui
 assert 'current_high = false' not in ui
 assert 'SET_VALVE' not in ui
 
@@ -46,14 +44,19 @@ assert 'hop_reporter:scan' not in ui
 assert 'HOP_SCAN' in ui  # text only; no transmit/control path
 assert '.transmit' not in ui
 
-# Wrong terminal size must disable stale local controls.
-assert 'self.safe_button = nil' in ui
-assert 'LOKALE AKTIONEN' in ui and 'DEAKTIVIERT' in ui
+# Bei falscher Terminalgroesse sagt die Oberflaeche das auch.
+assert 'ANZEIGE' in ui and 'NICHT MOEGLICH' in ui
 
-# main.lua wiring: local UI input stays in the fast group, rendering in the
-# slow group (see nodes/valve/main.lua's own comment on that split), and the
-# passive hop_reporter remains main.lua's own -- the UI only ever gets a
-# read-only snapshot via get_hop_status(), never the reporter itself.
+# Der Ventilzustand muss sichtbar bleiben -- die Aussage steckte vorher in
+# der Farbe des Knopfs und darf mit ihm nicht verschwunden sein.
+for needle in ('valve_state_text', 'valve_state_key', '"BLOCKIERT"', '"OFFEN"'):
+    assert needle in ui, needle
+
+# main.lua wiring: der Event-Pfad der lokalen UI bleibt in der fast-Gruppe
+# (er traegt nur noch term_resize), das Zeichnen in der slow-Gruppe (siehe
+# nodes/valve/main.lua), und der passive hop_reporter bleibt main.lua's
+# eigener -- die UI bekommt nur einen lesenden Schnappschuss ueber
+# get_hop_status(), nie den Reporter selbst.
 for needle in (
     'local valve_local_ui = require("nodes.valve.local_ui")',
     'name = "valve_local_ui_input"',

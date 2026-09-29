@@ -219,10 +219,10 @@ local function check_teach_input()
 end
 
 local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label })
--- Lokale 51x19-Terminal-UI am Ventil-Computer selbst -- rein lesend plus
--- EINE Sicherheitsaktion (SAFE BLOCKIEREN, siehe local_ui.lua-Kopfkommentar).
--- Alle Closures liefern nur bereits vorhandenen Zustand, kein neuer Zugriff
--- auf Peripherie/Netzwerk.
+-- Lokale 51x19-Terminal-UI am Ventil-Computer selbst -- rein lesend. Seit
+-- 2026-09-29 gibt es dort keine Bedienung mehr (der Sperrknopf ist raus,
+-- siehe local_ui.lua-Kopfkommentar). Alle Closures liefern nur bereits
+-- vorhandenen Zustand, kein neuer Zugriff auf Peripherie/Netzwerk.
 local valve_ui = valve_local_ui.new({
   controller = controller,
   node_id = node_id,
@@ -249,10 +249,10 @@ local services = service_manager.new()
 -- "services" (der "fast"-Gruppe), damit ein Telemetry-Tick sie nie verzoegert.
 local slow_services = service_manager.new()
 services:add(comms)
--- Touch-Input der lokalen UI ist leichtgewichtig (nur eine Zustandsabfrage +
--- ggf. EIN apply_valve(true,true)-Schreibvorgang, derselbe Aktorpfad wie
--- valve_failsafe) -- bleibt deshalb in der "fast"-Gruppe. Das Rendering
--- selbst (teurer) liegt in slow_services, siehe dortiger Eintrag unten.
+-- Nur noch die Groessenaenderung des Terminals (term_resize) -- die lokale
+-- UI wertet keine Klicks mehr aus, es gibt dort nichts mehr zu bedienen.
+-- Kostet praktisch nichts und bleibt deshalb in der "fast"-Gruppe; das
+-- Rendering selbst (teurer) liegt in slow_services, siehe unten.
 services:add({ name = "valve_local_ui_input", wants_events = true, tick = function(_self, _dt, event)
   if event then valve_ui:handle_event(event) end
 end })

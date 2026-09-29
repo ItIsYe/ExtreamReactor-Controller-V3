@@ -5,10 +5,14 @@
 -- low-density layout with deliberate blank rows and side margins. The built-in
 -- computer terminal has no setTextScale API, so 0.5 changes layout density,
 -- not the physical font size.
--- Presentation plus ONE deliberately one-way local safety action only:
--- BLOCKED + forced physical write/readback. There is intentionally NO local
--- OPEN action. Normal opening remains owned by the trusted FUEL/VALVE network
--- command path in controller.lua.
+-- Reine Anzeige. Es gibt hier KEINE Bedienung mehr -- weder oeffnen noch
+-- sperren. Der lokale Sperrknopf ("SAFE BLOCKIEREN + READBACK PRUEFEN") ist
+-- auf Betreiberwunsch entfallen (2026-09-29): das Ventil wird ausschliesslich
+-- ueber den Ventilkanal von FUEL gestellt (controller.lua), und ein von Hand
+-- gesetzter Riegel hat sich im Betrieb nur gegen die Lieferlogik gestellt,
+-- ohne dass FUEL davon wusste. Der Fail-Safe (tick_failsafe) und der
+-- Update-Quiesce-Pfad bleiben davon unberuehrt -- die blockieren weiterhin
+-- selbsttaetig, nur eben nicht mehr auf Knopfdruck.
 --
 -- beta-v631 addition: passive HOP sensor status. The UI only reads reporter
 -- state/timing supplied by main.lua. It never scans inventories itself and
@@ -22,14 +26,6 @@ local colorset = require("shared.colors")
 
 local EXPECTED_W = 51
 local EXPECTED_H = 19
-local ACTION_X = 2
-local ACTION_Y = 14
-local ACTION_W = 48
-local ACTION_H = 3
-local COMPACT_ACTION_X = 8
-local COMPACT_ACTION_Y = 11
-local COMPACT_ACTION_W = 36
-local COMPACT_ACTION_H = 3
 local NORMAL_SCALE = 1.0
 local COMPACT_SCALE = 0.5
 local AGE_BUCKET_S = 2
@@ -52,10 +48,19 @@ local function fit(value, width)
   return mux.fit(tostring(value == nil and "-" or value), math.max(1, width))
 end
 
-local function hit(rect, x, y)
-  return rect ~= nil
-    and y >= rect.y and y <= (rect.y2 or rect.y)
-    and x >= rect.x1 and x <= rect.x2
+-- Der Ventilzustand als Text/Farbe. Frueher steckte beides in der Optik des
+-- Sperrknopfs; der ist raus, die Aussage bleibt.
+local function valve_state_text(state)
+  if state.last_write_error then return "SCHREIBFEHLER" end
+  if state.current_high == true then return "BLOCKIERT" end
+  if state.current_high == false then return "OFFEN" end
+  return "UNBEKANNT"
+end
+
+local function valve_state_key(state)
+  if state.last_write_error then return "WARNING" end
+  if state.current_high == true and state.initialized then return "OK" end
+  return "LIMITED"
 end
 
 local function bool_text(value, yes, no)
@@ -159,12 +164,8 @@ function M.new(opts)
     os = opts.os_api or os,
     ui_scale = normalize_ui_scale(opts.ui_scale),
     target = opts.target,
-    safe_button = nil,
     last_snapshot = nil,
     force_redraw = true,
-    action_message = nil,
-    action_status = nil,
-    action_ts = nil,
   }, M)
   if not self.target then self.target = terminal_from(self.term_api) end
   return self
@@ -214,12 +215,10 @@ function M:_snapshot(state, master_ok, diag, hop)
     tostring(hop.configured), tostring(hop.enabled), tostring(hop.chest),
     tostring(hop.interval_s), tostring(hop.last_scan_ms), tostring(hop.modem_ready),
     tostring(age_bucket(hop.last_scan_ms, self.os)),
-    tostring(self.action_message), tostring(self.action_status),
   }, "\31")
 end
 
 function M:_draw_size_error(target, w, h)
-  self.safe_button = nil
   if target and type(target.setBackgroundColor) == "function" then
     pcall(target.setBackgroundColor, colorset.get("background"))
   end
@@ -248,7 +247,7 @@ function M:_draw_size_error(target, w, h)
   end
   if h and h >= 11 then
     mux.data_row(target, 2, 10, math.max(1, safe_w - 3), {
-      label = "LOKALE AKTIONEN", value = "DEAKTIVIERT",
+      label = "ANZEIGE", value = "NICHT MOEGLICH",
       status = "WARNING", icon = "warning"
     })
   end
@@ -336,15 +335,18 @@ function M:_render_normal_frame(target, state, master_ok, diag, hop)
     label = fit(hop_line, 48), value = "", status = hop_key, icon = "storage"
   })
 
-  local button_status =
-    state.current_high == true and state.initialized and not state.last_write_error
-      and "OK" or "LIMITED"
-  self.safe_button = mux.button(target, ACTION_X, ACTION_Y, ACTION_W,
-    "SAFE BLOCKIEREN + READBACK PRUEFEN", button_status, ACTION_H)
+  -- Hier stand der lokale Sperrknopf. Der Platz zeigt jetzt den
+  -- tatsaechlichen Ventilzustand -- die Farbe trug der Knopf vorher
+  -- nebenbei mit, sie darf mit ihm nicht verschwinden.
+  mux.data_row(target, 2, 15, 48, {
+    label = "VENTIL",
+    value = valve_state_text(state),
+    status = valve_state_key(state),
+    icon = "config"
+  })
 
-  local msg = self.action_message
-  local msg_status = self.action_status or "text"
-  if not msg or msg == "" then
+  local msg, msg_status
+  do
     if state.last_write_error then
       msg = "AKTOR-FEHLER: " .. tostring(state.last_write_error)
       msg_status = "WARNING"
@@ -367,8 +369,8 @@ function M:_render_normal_frame(target, state, master_ok, diag, hop)
     label = fit(msg, 48), value = "", status = msg_status, icon = "warning"
   })
   mux.data_row(target, 2, 18, 48, {
-    label = "LOKALER SAFE-MODUS",
-    value = "OEFFNEN NUR VIA FUEL",
+    label = "STEUERUNG",
+    value = "NUR VIA FUEL",
     status = "LIMITED",
     icon = "config"
   })
@@ -422,17 +424,14 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
   mux.text(target, 29, 9, fit(readback, 18), colorset.get(actuator_key), bg)
 
   -- Row 10 blank before the only local action.
-  local button_status =
-    state.current_high == true and state.initialized and not state.last_write_error
-      and "OK" or "LIMITED"
-  self.safe_button = mux.button(target,
-    COMPACT_ACTION_X, COMPACT_ACTION_Y, COMPACT_ACTION_W,
-    "SAFE BLOCKIEREN + READBACK PRUEFEN", button_status, COMPACT_ACTION_H)
+  -- Hier stand der lokale Sperrknopf, siehe Kopfkommentar. Statt seiner
+  -- der tatsaechliche Ventilzustand, mittig wie der Rest dieser Ansicht.
+  local valve_line = "VENTIL " .. valve_state_text(state)
+  mux.text(target, math.floor((EXPECTED_W - #valve_line) / 2) + 1, 12,
+    valve_line, colorset.get(valve_state_key(state)), bg)
 
-  -- Row 14 blank after the SAFE action.
-  local msg = self.action_message
-  local msg_status = self.action_status or "muted"
-  if not msg or msg == "" then
+  local msg, msg_status
+  do
     if state.last_write_error then
       msg = "AKTOR-FEHLER: " .. tostring(state.last_write_error)
       msg_status = "WARNING"
@@ -456,7 +455,7 @@ function M:_render_compact_frame(target, state, master_ok, diag, hop)
   local msg_x = math.max(3, math.floor((EXPECTED_W - math.min(#tostring(msg), 45)) / 2) + 1)
   mux.text(target, msg_x, 15, fit(msg, 45), colorset.get(msg_status), bg)
 
-  local warning = "OEFFNEN NUR VIA FUEL"
+  local warning = "STEUERUNG NUR VIA FUEL"
   mux.text(target, math.floor((EXPECTED_W - #warning) / 2) + 1, 17,
     warning, colorset.get("LIMITED"), bg)
 
@@ -490,38 +489,15 @@ end
 
 function M:handle_event(event)
   if type(event) ~= "table" then return false end
-  local kind = event[1]
 
-  if kind == "term_resize" then
-    self.safe_button = nil
+  -- Nur noch die Groessenaenderung. Maus-/Touch-Eingaben werden hier
+  -- bewusst nicht mehr ausgewertet: diese Anzeige hat keine Bedienung mehr
+  -- (siehe Kopfkommentar). Der Rueckgabewert false heisst wie bisher
+  -- "nicht behandelt".
+  if event[1] == "term_resize" then
     self.force_redraw = true
-    return false
   end
-
-  if kind ~= "mouse_click" then return false end
-  local button, x, y = tonumber(event[2]), tonumber(event[3]), tonumber(event[4])
-  if button ~= 1 or not x or not y then return false end
-
-  local size_ok = self:_size_ok()
-  if not size_ok then return false end
-  if not hit(self.safe_button, x, y) then return false end
-
-  -- Deliberately one-way: this UI may ONLY command BLOCKED (high=true).
-  -- Opening remains exclusively under the trusted network command path.
-  local ok = self.controller:apply_valve(true, true) == true
-  local state = self.controller:get_state()
-  if ok and state.initialized == true and state.current_high == true
-      and state.last_write_error == nil then
-    self.action_message = "SAFE BLOCKIERT + PHYSISCH BESTAETIGT"
-    self.action_status = "OK"
-  else
-    self.action_message = "SAFE-BLOCK FEHLER: "
-      .. tostring(state.last_write_error or "unbestaetigt")
-    self.action_status = "WARNING"
-  end
-  self.action_ts = now_ms(self.os)
-  self.force_redraw = true
-  return true
+  return false
 end
 
 function M:get_touch_geometry()
@@ -529,7 +505,6 @@ function M:get_touch_geometry()
     expected_width = EXPECTED_W,
     expected_height = EXPECTED_H,
     ui_scale = self.ui_scale,
-    safe_button = self.safe_button,
   }
 end
 
