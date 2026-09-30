@@ -104,6 +104,59 @@ local function copy_state(t)
   return out
 end
 
+-- ── Bezugspunkt der Aenderungsrate ───────────────────────────────────────
+--
+-- Je Turbine eine kurze Reihe von Messpunkten. Gebraucht wird daraus immer
+-- genau einer: der JUENGSTE, der mindestens rt2_turbine.MIN_RATE_WINDOW_MS
+-- alt ist. Warum nicht einfach der vorige Takt, steht bei der Konstante --
+-- kurz: bei 100 ms Takt ist die Differenz zweier Messungen fast nur
+-- Rauschen.
+--
+-- Die Reihe bleibt kurz, weil alles VOR dem gefundenen Bezugspunkt sofort
+-- verworfen wird: bei 100 ms Takt und 500 ms Fenster sind das sechs
+-- Eintraege je Turbine.
+local function push_rpm_sample(self, name, rpm, now_ms)
+  now_ms = tonumber(now_ms) or 0
+  local samples = self.turbine_rpm_samples[name]
+  if not samples then
+    samples = {}
+    self.turbine_rpm_samples[name] = samples
+  end
+  -- Uhr zurueckgesprungen: die gemerkten Punkte liegen in der Zukunft und
+  -- sind wertlos. Verwerfen statt sie aussitzen -- dieselbe Regel wie beim
+  -- Stellintervall (siehe rt2_turbine.lua).
+  local newest = samples[#samples]
+  if newest and now_ms < newest[1] then
+    for index = #samples, 1, -1 do samples[index] = nil end
+  end
+  samples[#samples + 1] = { now_ms, rpm }
+end
+
+-- Rueckgabe: rpm, ms des Bezugspunkts -- oder nil, solange die Reihe noch
+-- keinen ausreichend alten Punkt enthaelt (dann regelt rt2_turbine rein auf
+-- den Istwert, also wie vor dem Vorhalt).
+local function rate_reference(self, name, now_ms)
+  if not name then return nil, nil end
+  local samples = self.turbine_rpm_samples[name]
+  if not samples or #samples == 0 then return nil, nil end
+  now_ms = tonumber(now_ms) or 0
+  local window = rt2_turbine.MIN_RATE_WINDOW_MS
+  local found_index = nil
+  for index = #samples, 1, -1 do
+    if now_ms - samples[index][1] >= window then found_index = index; break end
+  end
+  if not found_index then return nil, nil end
+  -- Alles Aeltere wird nicht mehr gebraucht.
+  if found_index > 1 then
+    local kept = {}
+    for index = found_index, #samples do kept[#kept + 1] = samples[index] end
+    self.turbine_rpm_samples[name] = kept
+    found_index = 1
+    samples = kept
+  end
+  return samples[found_index][2], samples[found_index][1]
+end
+
 -- Summiert den Ausstoss aller Turbinen, die GERADE im Zielband und
 -- gekuppelt sind, und zaehlt nebenbei, wieviele bei voller Foerderung
 -- trotzdem zu langsam sind (Saettigung -- reine Diagnose).
@@ -275,8 +328,17 @@ function M.new(opts)
     -- rechnet rt2_turbine.compute_flow_decision() die Aenderungsrate und
     -- damit seinen Vorhalt (siehe dort). Zwei Zahlen je Turbine, ueber
     -- genau einen Takt -- kein Speicher, keine Kennlinie, kein Lernen.
-    turbine_last_rpm = {},
-    turbine_last_rpm_ms = {},
+    -- Je Turbine eine kurze Messreihe; gebraucht wird daraus immer nur der
+    -- Bezugspunkt (siehe rate_reference() oben). Bei 100 ms Takt und
+    -- 500 ms Fenster sind das sechs Eintraege je Turbine -- kein Speicher
+    -- im Sinne von Lernen, sondern ein gleitendes Fenster von einer halben
+    -- Sekunde.
+    turbine_rpm_samples = {},
+    -- Wann der vorige Regeltakt lief. Daraus die tatsaechlich verstrichene
+    -- Zeit, mit der rt2_turbine seine Schrittweite skaliert (siehe dort).
+    -- EINE Zahl fuer die ganze Flotte -- alle Turbinen werden im selben
+    -- Takt entschieden.
+    last_tick_ms = nil,
     -- Einheiten nach Name, damit ein Reaktor bei einer geaenderten
     -- Reihenfolge seinen Messzustand behaelt.
     reactors_by_name = {},
@@ -462,6 +524,15 @@ function M.new(opts)
     local percent = input.master_percent or self.master_percent
     if self.capacity.learning then percent = 100 end
 
+    -- Verstrichene Zeit seit dem vorigen Takt. Beim ersten Takt und nach
+    -- einem Uhr-Ruecksprung gibt es keine brauchbare Angabe -- dann bleibt
+    -- sie nil, und rt2_turbine rechnet ohne Skalierung weiter.
+    local tick_dt_ms = nil
+    if now_ms and self.last_tick_ms and now_ms > self.last_tick_ms then
+      tick_dt_ms = now_ms - self.last_tick_ms
+    end
+    if now_ms then self.last_tick_ms = now_ms end
+
     local turbine_results = {}
     for index, t in ipairs(input.turbines or {}) do
       local target_rpm = rt2_turbine.compute_target_rpm(state, {
@@ -470,6 +541,10 @@ function M.new(opts)
         power_percent = percent,
       })
       local name = t.name
+      -- Bezugspunkt der Aenderungsrate: der juengste Messwert, der
+      -- mindestens MIN_RATE_WINDOW_MS alt ist (siehe dort). Einmal holen,
+      -- nicht zweimal.
+      local ref_rpm, ref_ms = rate_reference(self, name, now_ms)
       local flow_decision = rt2_turbine.compute_flow_decision({
         rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
         coil_engaged = t.coil_engaged == true,
@@ -478,18 +553,23 @@ function M.new(opts)
         now_ms = now_ms,
         last_change_ms = name and self.turbine_last_change_ms[name] or nil,
         last_commanded_flow = name and self.turbine_last_flow[name] or nil,
-        last_rpm = name and self.turbine_last_rpm[name] or nil,
-        last_rpm_ms = name and self.turbine_last_rpm_ms[name] or nil,
+        last_rpm = ref_rpm,
+        last_rpm_ms = ref_ms,
+        dt_ms = tick_dt_ms,
       })
 
-      -- Den Messpunkt fuer den naechsten Takt merken, BEVOR die Entscheidung
-      -- weiterverarbeitet wird -- und nur, wenn wirklich gemessen wurde.
-      -- Eine ausgefallene Messung darf den letzten gueltigen Punkt nicht
-      -- ueberschreiben, sonst waere die Rate danach aus einer Luecke
+      -- Den Bezugspunkt der Rate pflegen -- und nur, wenn wirklich gemessen
+      -- wurde. Eine ausgefallene Messung darf den letzten gueltigen Punkt
+      -- nicht ueberschreiben, sonst waere die Rate danach aus einer Luecke
       -- gerechnet.
+      --
+      -- Ersetzt wird er erst, wenn er MIN_RATE_WINDOW_MS alt ist. Bei einem
+      -- Regeltakt von 100 ms waere die Differenz zweier aufeinanderfolgender
+      -- Messungen sonst fast nur Messrauschen (siehe die Messreihe bei
+      -- rt2_turbine.MIN_RATE_WINDOW_MS). Der Bezugspunkt ist damit immer
+      -- zwischen einem Fenster und einem Fenster plus einem Takt alt.
       if name and tonumber(t.rpm) ~= nil then
-        self.turbine_last_rpm[name] = tonumber(t.rpm)
-        self.turbine_last_rpm_ms[name] = now_ms
+        push_rpm_sample(self, name, tonumber(t.rpm), now_ms)
       end
       -- Steht die Vorgabe schon so an, muss sie nicht erneut geschrieben
       -- werden. Das ist der Normalfall -- eine eingeschwungene Turbine

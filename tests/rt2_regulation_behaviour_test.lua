@@ -67,7 +67,12 @@ do
     turbine('RUNAWAY',   2400, 1800, true, 100, true),   -- echter Ausreisser-> OVERSPEED
     turbine('BLIND',     nil, 1500, true,  100, true),   -- Drehzahl unlesbar-> NO_RPM_READING
   }
-  local r = o.tick({ now_ms = ms + 1000, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
+  -- Im echten Regeltakt weiter (100 ms, siehe nodes/rt/main.lua's
+  -- RECEIVE_TIMEOUT). Mit einem Sprung von 1000 ms skaliert rt2_turbine
+  -- seine Schrittweite auf die verstrichene Zeit hoch -- richtig, aber hier
+  -- nicht das Thema: geprueft wird, dass jede Turbine ihre EIGENE
+  -- Entscheidung bekommt, nicht wie gross der Schritt dabei ausfaellt.
+  local r = o.tick({ now_ms = ms + 100, hardware_ready = true, reactor = { fill_ratio = 0.5 }, turbines = fleet })
   local t = by_name(r)
 
   assert_eq(#r.turbines, 5, 'every discovered turbine must get its own decision entry')

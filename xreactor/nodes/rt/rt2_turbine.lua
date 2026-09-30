@@ -201,6 +201,73 @@ M.SETTLE_RATE_RPM_PER_S = 12
 -- gerechnete Rate nichts wert (verpasste Takte, Neustart, Uhrsprung).
 M.MAX_RATE_AGE_MS = 3000
 
+-- Und JUENGER als das darf er auch nicht sein.
+--
+-- Der Regeltakt liegt bei 100 ms (nodes/rt/main.lua's RECEIVE_TIMEOUT). In
+-- dieser Zeit bewegt sich der Rotor kaum -- die Differenz zweier
+-- aufeinanderfolgender Messungen ist zu einem grossen Teil Messrauschen,
+-- und mit einer Sekunde Vorhalt hochgerechnet stellt der Regler dieses
+-- Rauschen nach. Der Bezugspunkt ist deshalb der juengste Messwert, der
+-- mindestens so alt ist (gehalten von rt2_orchestrator.lua's
+-- rate_reference(); diese Funktion bleibt rein).
+--
+-- Nachgemessen am 2026-09-30 am echten Takt, Anfahrt auf 900, Rauschen
+-- +/-4 U/min, Spanne des Durchflusses in der Ruhelage:
+--
+--   Rotor tau      2 s        5 s        12 s
+--   je Takt        38         63         80
+--   >= 150 ms      20         27         58
+--
+-- Das Zappeln geht also um 30-55 % zurueck. Die Spitze bleibt praktisch
+-- gleich (909/922/927 gegen 912/925/928), das Einschwingen wird bei traegen
+-- Rotoren etwas langsamer (9,7 -> 12,1 s bei tau=5 s). Es geht hier NICHT
+-- um Ueberschwingen oder Geschwindigkeit, sondern allein um die Ruhe der
+-- Stellgroesse.
+--
+-- WARUM NICHT LAENGER -- das ist der teuer bezahlte Teil:
+--
+-- 500 ms waren der erste Ansatz, und fuer eine EINZELNE Turbine ist das
+-- ueber tau = 0,3 bis 12 s stabil. Im gekoppelten Betrieb aber nicht: in
+-- tests/rt2_engine_integration_test.lua (25 Turbinen an EINEM Reaktor,
+-- gemeinsames Dampfbudget) faengt die Flotte damit an zu schwingen -- die
+-- Spule klappt im Sekundentakt ein und aus, die Drehzahl bricht zeitweise
+-- bis auf 27 U/min ein, waehrend der Durchfluss auf Anschlag steht. Ein
+-- isoliertes Streckenmodell zeigt das nicht, weil dort der gemeinsame
+-- Dampf fehlt.
+--
+-- Ausgemessen liegt die Kippgrenze zwischen 200 ms (stabil) und 300 ms
+-- (schwingt). 150 ms verhaelt sich beim 100-ms-Takt identisch zu 200 ms --
+-- der gefundene Punkt ist so oder so 200 ms alt -- laesst aber Reserve,
+-- wenn die Schleife schneller oder langsamer laeuft.
+M.MIN_RATE_WINDOW_MS = 150
+
+-- ── Schrittweite und Taktzeit ────────────────────────────────────────────
+--
+-- Der Schritt war bisher ein fester Betrag JE TAKT. Damit haengt die
+-- wirksame Verstaerkung davon ab, wie oft die Schleife zufaellig laeuft:
+-- bei 100 ms sind es zehn Verstellungen je Sekunde, bei 500 ms nur zwei --
+-- derselbe Regler, fuenffach unterschiedliche Wirkung.
+--
+-- Und die Taktzeit ist nicht fest. Sie ergibt sich daraus, wie lange ein
+-- Durchgang ueber ALLE Turbinen braucht (nodes/rt/main.lua's control_tick
+-- liest je Turbine Drehzahl, Durchfluss, Spule, Aktivzustand und
+-- Ausstoss). Mit 50 Turbinen dauert das laenger als mit 25 -- der Regler
+-- wurde also ausgerechnet in der groesseren Anlage schwaecher.
+--
+-- Der Schritt wird deshalb auf die tatsaechlich verstrichene Zeit bezogen.
+-- Bezugsgroesse ist der HEUTIGE Takt (100 ms), damit sich am eingefahrenen
+-- Verhalten nichts aendert: bei 100 ms ist der Faktor genau 1. Laeuft die
+-- Schleife langsamer, waechst der Schritt entsprechend, und die Bewegung
+-- je Sekunde bleibt dieselbe.
+M.NOMINAL_STEP_INTERVAL_MS = 100
+
+-- Grenzen des Faktors. Ein Wert weit ausserhalb heisst nicht "sehr traege
+-- Schleife", sondern "die Zeitangabe stimmt nicht" (Uhrsprung, erster Takt
+-- nach dem Start, haengengebliebener Peripherie-Aufruf). Dann wird
+-- lieber nicht verstaerkt.
+M.MIN_STEP_SCALE = 0.25
+M.MAX_STEP_SCALE = 4.0
+
 -- Soweit darf die Vorhersage die Lage hoechstens verschieben. Sie bleibt
 -- eine Schaetzung aus zwei Messpunkten; liegen die dicht beieinander,
 -- wird aus einem kleinen Messsprung eine grosse Rate. Der Deckel nimmt
@@ -477,6 +544,17 @@ function M.compute_flow_decision(input)
   -- Abweichung ewig stehen. Weiter weg waechst er mit der Abweichung; nur
   -- die Deckelung unterscheidet die Richtungen (siehe MAX_TRIM_STEP_DOWN).
   local step = M.TRIM_STEP * math.abs(control_error) / band
+
+  -- Auf die tatsaechlich verstrichene Zeit beziehen (siehe
+  -- NOMINAL_STEP_INTERVAL_MS). Ohne Zeitangabe bleibt alles wie zuvor --
+  -- Modultests und Altaufrufer merken davon nichts.
+  local dt_ms = tonumber(input.dt_ms)
+  if dt_ms and dt_ms > 0 then
+    local scale = dt_ms / M.NOMINAL_STEP_INTERVAL_MS
+    if scale < M.MIN_STEP_SCALE then scale = M.MIN_STEP_SCALE end
+    if scale > M.MAX_STEP_SCALE then scale = M.MAX_STEP_SCALE end
+    step = step * scale
+  end
 
   -- Die Vorhersage sagt "kommt hin": nichts tun. Das ist der Kern des
   -- Vorhalts -- die Turbine ist vielleicht noch weit weg, aber sie ist auf

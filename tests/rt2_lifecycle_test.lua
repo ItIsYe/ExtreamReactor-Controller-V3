@@ -195,19 +195,15 @@ local function phase(name) phase_log[#phase_log + 1] = name end
 
 -- Einen Takt fahren, wie main.lua's control_tick() es tut.
 --
--- 500 ms je Takt, nicht 100. Die Uhr und die Physik dieser Pruefstrecke
--- waren nicht zueinander passend: step_physics() holt je Takt 35 % der
--- Luecke auf, was bei 100 ms einen Rotor mit 0,29 s Zeitkonstante ergibt --
--- eine Turbine, die in unter einer Sekunde auf Drehzahl ist. Der ganze
--- Regler ist auf das Gegenteil gebaut ("der Rotor haengt der Vorgabe um
--- Sekunden hinterher"), und main.lua's control_tick() laeuft im Takt der
--- fast-Coroutine, also rund alle 0,5 s.
+-- 100 ms je Takt -- das ist der echte Regeltakt: nodes/rt/main.lua setzt
+-- RECEIVE_TIMEOUT = 0.1, und control_tick() haengt am after_cycle der
+-- fast-Coroutine.
 --
--- Aufgefallen ist es erst, als der Regler einen Vorhalt bekam (siehe
--- rt2_turbine.lua): vorher hat er die verstrichene Zeit nie benutzt, also
--- blieb die Unstimmigkeit folgenlos. Jetzt rechnet er aus ihr die
--- Aenderungsrate, und eine zu kurze Taktzeit macht daraus eine
--- Scheinbeschleunigung.
+-- Hier stand zwischenzeitlich 500 ms, mit der Begruendung, das sei der
+-- echte Takt. Das war falsch (2026-09-30 am Code nachgesehen) und ist
+-- zurueckgenommen. Die Taktzeit ist nicht mehr folgenlos, seit der Regler
+-- aus ihr die Aenderungsrate und seine Schrittweite ableitet -- sie muss
+-- deshalb stimmen.
 local last
 local function tick(steps, ms)
   for _ = 1, (steps or 1) do
@@ -215,7 +211,7 @@ local function tick(steps, ms)
     if not ok then error('Takt hat geworfen: ' .. tostring(result), 0) end
     last = result
     step_physics()
-    clock_ms = clock_ms + (ms or 500)
+    clock_ms = clock_ms + (ms or 100)
   end
   return last
 end

@@ -223,7 +223,7 @@ local function tick(steps)
     -- Physik (35 % der Luecke je Takt) passten nicht zueinander, und seit
     -- der Regler aus der verstrichenen Zeit eine Aenderungsrate rechnet,
     -- wirkt eine zu kurze Taktzeit wie eine Scheinbeschleunigung.
-    clock_ms = clock_ms + 500
+    clock_ms = clock_ms + 100
   end
   return last
 end

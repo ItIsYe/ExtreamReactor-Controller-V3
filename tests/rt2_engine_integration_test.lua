@@ -213,7 +213,7 @@ for tick = 1, 3000 do
   -- der Traegheit ergibt, auf die der Regler gebaut ist. Seit er aus der
   -- verstrichenen Zeit eine Aenderungsrate rechnet, wirkt eine zu kurze
   -- Taktzeit wie eine Scheinbeschleunigung.
-  clock_ms = clock_ms + 500
+  clock_ms = clock_ms + 100
   if os.getenv('TRACE') and tick % 100 == 0 then
     local t1 = last.turbines[1]
     local p1 = plant.turbines[turbine_names[1]]
@@ -323,7 +323,7 @@ do
   for _ = 1, 400 do
     r = rt2_engine.tick(ctx)
     step_physics()
-    clock_ms = clock_ms + 500
+    clock_ms = clock_ms + 100
     if r.capacity.at_target == TURBINE_COUNT then break end
   end
   assert_eq(r.capacity.at_target, TURBINE_COUNT,
