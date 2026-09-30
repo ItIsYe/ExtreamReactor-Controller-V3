@@ -30,6 +30,11 @@ M.RPM_BAND = 40          -- +/- RPM around target considered "on target"
 M.OVERSPEED_RPM = 1300
 M.COIL_ENGAGE_RPM = 900
 M.COIL_DISENGAGE_RPM = 850
+-- Nur noch die Notbremse gegen einen Hochlauf, den die Spule selbst
+-- verhindert (siehe compute_coil_decision): Rotor unter diesem Anteil der
+-- Zieldrehzahl UND Dampf schon am Anschlag. Bewusst weit weg von der
+-- Regelgegend, damit daraus kein zweites Flattern werden kann.
+M.COIL_STALL_RPM_FRACTION = 0.5
 -- A parked turbine keeps braking through its coil until it has practically
 -- stopped; below this it releases, because there is nothing left to harvest
 -- and an engaged coil on a standing rotor serves no purpose.
@@ -645,7 +650,6 @@ function M.compute_coil_decision(input)
 
   local scale = target_rpm / M.FULL_TARGET_RPM
   local engage_rpm = M.COIL_ENGAGE_RPM * scale
-  local disengage_rpm = M.COIL_DISENGAGE_RPM * scale
 
   -- Angekommen heisst gekuppelt -- auch wenn die Schwelle oben noch ein
   -- paar Drehzahlen weiter liegt.
@@ -664,8 +668,45 @@ function M.compute_coil_decision(input)
   if not currently_engaged and (rpm >= engage_rpm or rpm >= target_rpm - settle_band) then
     return { engaged = true, reason = "ENGAGE_THRESHOLD" }
   end
-  if currently_engaged and rpm <= disengage_rpm then
-    return { engaged = false, reason = "DISENGAGE_THRESHOLD" }
+  -- Eine einmal gekuppelte Turbine bleibt bei positivem Ziel gekuppelt.
+  --
+  -- Vorher loeste sie unterhalb von COIL_DISENGAGE_RPM wieder. Das sieht
+  -- nach gewoehnlicher Hysterese aus, ist hier aber etwas anderes: die
+  -- Spule ist kein kleiner Beitrag zur Last, sie IST die Last. Ein- und
+  -- Aushaengen aendert die Streckenverstaerkung sprunghaft um ein
+  -- Mehrfaches. Der Durchflussregler regelt dann gegen eine Strecke, die
+  -- ihre Verstaerkung im Takt wechselt, und beides zusammen schaukelt sich
+  -- auf: Spule bremst unter 850 -> loest -> Rotor schiesst hoch -> Spule
+  -- greift -> bremst unter 850 -> ... In der Simulation (Rotormodell MIT
+  -- Spulenlast, Kupplungslast 2x Grundreibung) ergab das ueber 90 s
+  -- rund 875 Umschaltungen, eine mittlere Abweichung von 90 statt 1.8 RPM
+  -- und Drehzahlspitzen, die mit sinkender Rotortraegheit monoton wachsen
+  -- und ab Traegheit 0.25 die Ueberdrehzahlschwelle reissen -- genau der
+  -- gemeldete Fall "einzelne Turbine geht nach einiger Zeit in
+  -- Ueberdrehzahl". Mit dieser Regel: EINE Umschaltung, Spitze unter 1100
+  -- ueber denselben Traegheitsbereich.
+  --
+  -- Die Loeseschwelle war fuer den HOCHLAUF gedacht -- und der ist der
+  -- Zweig oben (not currently_engaged): eine noch nie gekuppelte Turbine
+  -- beschleunigt weiterhin unbelastet. Ist sie einmal am Ziel gewesen, ist
+  -- Halten mit Last der richtige Betriebszustand; nur dort liefert sie
+  -- ueberhaupt Energie (siehe rt2_orchestrator's measure_capacity, das
+  -- energy > 0 verlangt).
+  --
+  -- Eine Ausnahme bleibt, sonst koennte ein Rotor dauerhaft haengen: wenn
+  -- die Spule den Hochlauf nachweislich VERHINDERT -- Drehzahl weit unter
+  -- Ziel und Dampf bereits am Anschlag -- wird sie freigegeben. Diese
+  -- Schwelle liegt weit unter der Regelgegend, sie kann also nicht wieder
+  -- zum Flattern fuehren.
+  if currently_engaged then
+    local flow = tonumber(input.current_flow)
+    local max_flow = tonumber(input.max_flow) or M.MAX_FLOW
+    local stall_rpm = target_rpm * (tonumber(input.coil_stall_rpm_fraction)
+      or M.COIL_STALL_RPM_FRACTION)
+    if rpm <= stall_rpm and flow ~= nil and flow >= max_flow then
+      return { engaged = false, reason = "RELEASE_STALLED" }
+    end
+    return { engaged = true, reason = "HOLD_ENGAGED" }
   end
   return { engaged = currently_engaged, reason = "HOLD" }
 end

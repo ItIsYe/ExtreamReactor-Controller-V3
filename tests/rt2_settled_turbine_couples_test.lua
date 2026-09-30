@@ -43,8 +43,11 @@ for rpm = rt2_turbine.FULL_TARGET_RPM - rt2_turbine.SETTLE_BAND_RPM,
       .. ' sonst liefert die Turbine fuer immer nichts')
 end
 
--- Die Hysterese bleibt: eine gekuppelte Turbine loest erst deutlich
--- darunter wieder, sonst flatterte sie um die Schwelle.
+-- Eine einmal gekuppelte Turbine bleibt bei positivem Ziel gekuppelt.
+-- Frueher loeste sie unterhalb von COIL_DISENGAGE_RPM wieder -- das war
+-- keine harmlose Hysterese, sondern ein sprunghafter Wechsel der
+-- Streckenverstaerkung, gegen den der Durchflussregler aufschaukelte
+-- (siehe tests/rt2_coil_hold_limit_cycle_test.lua).
 do
   local hold = rt2_turbine.compute_coil_decision({
     rpm = rt2_turbine.FULL_TARGET_RPM - rt2_turbine.SETTLE_BAND_RPM,
@@ -52,11 +55,43 @@ do
   })
   assert_eq(hold.engaged, true, 'und bleibt dort gekuppelt')
 
-  local released = rt2_turbine.compute_coil_decision({
+  local below = rt2_turbine.compute_coil_decision({
     rpm = rt2_turbine.COIL_DISENGAGE_RPM - 1,
     target_rpm = rt2_turbine.FULL_TARGET_RPM, currently_engaged = true,
+    current_flow = 1200,
   })
-  assert_eq(released.engaged, false, 'erst unter der Loeseschwelle gibt sie den Rotor frei')
+  assert_eq(below.engaged, true,
+    'auch deutlich unter der alten Loeseschwelle bleibt sie gekuppelt --'
+      .. ' dort wird geregelt, nicht ausgekuppelt')
+end
+
+-- Die einzige verbliebene Freigabe: die Spule verhindert den Hochlauf
+-- nachweislich -- Drehzahl weit unter Ziel UND Dampf schon am Anschlag.
+-- Ohne sie koennte ein Rotor dauerhaft haengen.
+do
+  local stalled = rt2_turbine.compute_coil_decision({
+    rpm = rt2_turbine.FULL_TARGET_RPM * rt2_turbine.COIL_STALL_RPM_FRACTION - 1,
+    target_rpm = rt2_turbine.FULL_TARGET_RPM, currently_engaged = true,
+    current_flow = rt2_turbine.MAX_FLOW,
+  })
+  assert_eq(stalled.engaged, false, 'bei Dampf am Anschlag und weit unter Ziel gibt sie frei')
+  assert_eq(stalled.reason, 'RELEASE_STALLED')
+
+  -- Derselbe Drehzahlwert, aber der Regler hat noch Dampf uebrig: dann ist
+  -- nicht die Spule das Hindernis, und es wird weiter geregelt.
+  local has_headroom = rt2_turbine.compute_coil_decision({
+    rpm = rt2_turbine.FULL_TARGET_RPM * rt2_turbine.COIL_STALL_RPM_FRACTION - 1,
+    target_rpm = rt2_turbine.FULL_TARGET_RPM, currently_engaged = true,
+    current_flow = rt2_turbine.MAX_FLOW - 1,
+  })
+  assert_eq(has_headroom.engaged, true, 'solange noch Dampf uebrig ist, bleibt sie gekuppelt')
+
+  -- Und ohne bekannten Durchfluss wird NICHT freigegeben: unbekannt ist
+  -- kein Nachweis, dass die Spule das Hindernis ist.
+  local unknown_flow = rt2_turbine.compute_coil_decision({
+    rpm = 10, target_rpm = rt2_turbine.FULL_TARGET_RPM, currently_engaged = true,
+  })
+  assert_eq(unknown_flow.engaged, true, 'ohne Durchflussangabe bleibt sie gekuppelt')
 end
 
 -- Und der Hochlauf bleibt unbelastet: weit unter dem Ziel darf die Spule

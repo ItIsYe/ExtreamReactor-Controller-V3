@@ -436,6 +436,48 @@ Die Spule kuppelt jetzt auch dann, wenn der Regler die Turbine als
 angekommen ansieht. Festgehalten in
 `rt2_settled_turbine_couples_test.lua`.
 
+### Einmal gekuppelt bleibt gekuppelt
+
+Dieselbe Stelle, die andere Richtung — und der Grund fuer "eine einzelne
+Turbine geht nach einiger Zeit in Ueberdrehzahl":
+
+Unterhalb von `COIL_DISENGAGE_RPM` (850) loeste die Spule wieder. Das
+sieht nach gewoehnlicher Hysterese aus, ist hier aber etwas anderes. Die
+Spule ist kein kleiner Beitrag zur Last, **sie ist die Last**: Ein- und
+Aushaengen aendert die Streckenverstaerkung sprunghaft um ein Mehrfaches.
+Der Durchflussregler regelt dann gegen eine Strecke, die ihre
+Verstaerkung im Takt wechselt, und beides schaukelt sich gegenseitig auf:
+
+```
+Spule bremst unter 850 -> loest -> Rotor schiesst hoch -> Spule greift
+-> bremst unter 850 -> ...
+```
+
+Der bestehende Zwillings-Integrationstest konnte das nicht sehen: sein
+Rotormodell kennt die Spule nicht, dort haengt die Drehzahl allein am
+Durchfluss. Mit einem Modell **mit** Spulenlast (Kupplungslast 2x
+Grundreibung, Durchfluss 1500 haelt 900 RPM) zeigt der geschlossene
+Regelkreis ueber 90 s:
+
+| | Umschaltungen | mittlere Abweichung | Drehzahlspitze |
+|---|---|---|---|
+| mit Loeseschwelle | ~875 | 90 RPM | waechst mit sinkender Rotortraegheit, ab 0.25 ueber 1300 |
+| einmal gekuppelt = gekuppelt | 1 | 1.8 RPM | unter 1100 ueber den ganzen Traegheitsbereich |
+
+Die Loeseschwelle war fuer den **Hochlauf** gedacht, und der ist ein
+anderer Zweig: eine noch nie gekuppelte Turbine beschleunigt weiterhin
+unbelastet. Ist sie einmal am Ziel gewesen, ist Halten mit Last der
+richtige Betriebszustand — nur dort liefert sie ueberhaupt Energie, und
+genau das verlangt `measure_capacity` (`energy > 0`).
+
+Eine Ausnahme bleibt, sonst koennte ein Rotor dauerhaft haengen: wenn die
+Spule den Hochlauf nachweislich **verhindert** — Drehzahl unter
+`COIL_STALL_RPM_FRACTION` (0.5) der Zieldrehzahl **und** Dampf bereits am
+Anschlag — wird sie freigegeben (`RELEASE_STALLED`). Diese Schwelle liegt
+weit unter der Regelgegend und kann deshalb nicht wieder zum Flattern
+fuehren. Ohne bekannten Durchfluss wird nicht freigegeben: unbekannt ist
+kein Nachweis. Festgehalten in `rt2_coil_hold_limit_cycle_test.lua`.
+
 Ein Nebeneffekt: eine eingeschwungene Turbine wird gar nicht mehr
 beschrieben (`flow_decision.unchanged`), was je Takt einen
 Peripherieaufruf pro Turbine spart.
@@ -573,6 +615,7 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_two_reactor_test.lua` | Unabhaengigkeit der Reaktoren |
 | `rt2_regulation_behaviour_test.lua` | Einzelregelung je Turbine |
 | `rt2_settled_turbine_couples_test.lua` | Ruhezone und Kupplungsschwelle ueberlappen sich |
+| `rt2_coil_hold_limit_cycle_test.lua` | geschlossener Regelkreis MIT Spulenlast: kein Grenzzyklus, keine Ueberdrehzahl |
 | `rt2_unreadable_flow_commands_zero_test.lua` | unbekannter Durchfluss wird nie als 0 geschrieben |
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
 | `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt den wirklichen Zustand |

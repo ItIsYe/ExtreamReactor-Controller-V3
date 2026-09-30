@@ -628,6 +628,12 @@ function M.new(opts)
         flow_decision = flow_decision,
         coil_decision = rt2_turbine.compute_coil_decision({
           rpm = t.rpm, target_rpm = target_rpm, currently_engaged = t.coil_engaged,
+          -- Der in DIESEM Takt gestellte Durchfluss, nicht der
+          -- Rueckmesswert: compute_coil_decision braucht ihn nur fuer die
+          -- Notfreigabe "Spule verhindert den Hochlauf" (Dampf am
+          -- Anschlag), und dafuer ist die eigene Stellgroesse die
+          -- verlaessliche Angabe -- der Rueckmesswert kann fehlen.
+          current_flow = flow_decision.flow,
         }),
         activate = rt2_turbine.compute_active_decision(t.active),
         rpm = t.rpm,
