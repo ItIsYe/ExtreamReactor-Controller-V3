@@ -25,6 +25,10 @@ local M = {}
 local engine
 local last_result
 local last_logged_capacity_diag
+-- Der zuletzt gemeldete Leistungswert. Nur dazu da, eine Erhoehung nach
+-- dem Einlernen von der Erstmessung zu unterscheiden -- sonst stuende bei
+-- jeder Nachfuehrung wieder "EINLERNEN FERTIG" auf dem Schirm.
+local last_logged_max_output
 local last_projection
 -- Je Reaktor (Schluessel: Name): Sicherheitszustand und letzte gemeldete
 -- Sicherheitslage.
@@ -52,6 +56,7 @@ function M.init(opts)
   end
 
   last_logged_capacity_diag = nil
+  last_logged_max_output = nil
   last_projection = nil
   engine = orchestrator.new({
     initial_state = opts.initial_state,
@@ -200,16 +205,28 @@ function M.tick(ctx)
           orchestrator.LEARN_TOLERANCE_RPM, cap.required_at_target or 0)
       end
     elseif cap.reason == orchestrator.MEASURED then
-      msg = string.format(
-        "v2 EINLERNEN FERTIG: %.0f RF/t aus %d Turbinen gemessen (roh %.0f, abzueglich"
-          .. " %.0f %% Reserve). Normale Regelung nach MASTER-Vorgabe.",
-        cap.max_output or 0, cap.sustainable_turbines or 0, cap.best_output or 0,
-        orchestrator.LEARN_SAFETY_MARGIN * 100)
-      if (cap.sustainable_turbines or 0) < (cap.total_turbines or 0) then
-        msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig im Zielband",
-          (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
+      if last_logged_max_output and (cap.max_output or 0) > last_logged_max_output then
+        -- Nachgefuehrt: die Flotte hat mehr geliefert als beim Einlernen.
+        -- Nur nach oben, siehe rt2_orchestrator.lua.
+        msg = string.format(
+          "v2 Leistung nach oben korrigiert: %.0f -> %.0f RF/t aus %d Turbinen"
+            .. " (roh %.0f, abzueglich %.0f %% Reserve)",
+          last_logged_max_output, cap.max_output or 0,
+          cap.sustainable_turbines or 0, cap.best_output or 0,
+          orchestrator.LEARN_SAFETY_MARGIN * 100)
+      else
+        msg = string.format(
+          "v2 EINLERNEN FERTIG: %.0f RF/t aus %d Turbinen gemessen (roh %.0f, abzueglich"
+            .. " %.0f %% Reserve). Normale Regelung nach MASTER-Vorgabe.",
+          cap.max_output or 0, cap.sustainable_turbines or 0, cap.best_output or 0,
+          orchestrator.LEARN_SAFETY_MARGIN * 100)
+        if (cap.sustainable_turbines or 0) < (cap.total_turbines or 0) then
+          msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig im Zielband",
+            (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
+        end
       end
     end
+    last_logged_max_output = cap.max_output or 0
     -- Einen Abbruch auf Zeit gibt es nicht mehr (siehe rt2_orchestrator.lua):
     -- das Einlernen wartet, bis die geforderten Turbinen da sind, und sagt
     -- in jedem Takt, wie viele noch fehlen.

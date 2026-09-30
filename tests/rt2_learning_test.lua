@@ -265,6 +265,65 @@ do
   assert_eq(r.capacity.required_at_target, 40, '80 % von 50 Turbinen sind 40')
 end
 
+-- ══ 6d. Nach dem Einlernen wird NUR NACH OBEN nachgefuehrt ═════════════
+--
+-- Betreiberfrage 2026-09-30: "wenn die Kapazitaet sich erhoeht, weil alle
+-- Turbinen im Zielbereich sind -- wird die Kapazitaet angepasst?"
+--
+-- Vorher nicht: mit dem Ende des Einlernens war der Wert endgueltig
+-- eingefroren. Das war einseitig. Wurde beim Einlernen nur knapp die
+-- 80-%-Schwelle erreicht, merkte sich MASTER dauerhaft eine zu kleine Zahl
+-- und teilte die Anlage zu klein auf, auch wenn spaeter die ganze Flotte
+-- lieferte.
+do
+  local o = orchestrator.new()
+  o.note_master_seen(0)
+  local now = 1000
+
+  -- Einlernen mit 8 von 10 im Band (genau die Schwelle), 50 je Turbine.
+  local weak = fleet(10, 8, 50)
+  -- Erster Takt: die Turbinenzahl wird uebernommen (TOPOLOGY_CHANGED).
+  o.tick({ now_ms = now, hardware_ready = true, turbines = weak, reactor = {} })
+  -- Zweiter Takt: der Messpunkt.
+  now = now + 100
+  o.tick({ now_ms = now, hardware_ready = true, turbines = weak, reactor = {} })
+  -- Dritter Takt nach der Ruhefrist ohne Verbesserung: fertig.
+  now = now + orchestrator.LEARN_STABLE_MS + 1
+  local r = o.tick({ now_ms = now, hardware_ready = true, turbines = weak, reactor = {} })
+  assert_true(not r.capacity.learning, 'das Einlernen ist fertig')
+  assert_eq(r.capacity.reason, 'MEASURED', 'und die Zahl ist gemessen')
+  local learned = r.capacity.max_output
+  assert_eq(r.capacity.sustainable_turbines, 8, 'acht Turbinen trugen den Wert')
+  assert_true(learned > 0, 'es gibt einen Wert')
+
+  -- Jetzt liefert die ganze Flotte mehr. Der Wert MUSS steigen.
+  now = now + 1000
+  local strong = fleet(10, 10, 80)
+  r = o.tick({ now_ms = now, hardware_ready = true, turbines = strong, reactor = {} })
+  assert_true(not r.capacity.learning, 'ohne dass neu eingelernt wird')
+  assert_true(r.capacity.max_output > learned,
+    'die Kapazitaet muss nach oben nachgefuehrt werden: '
+      .. tostring(r.capacity.max_output) .. ' vs ' .. tostring(learned))
+  assert_eq(r.capacity.sustainable_turbines, 10, 'jetzt tragen zehn den Wert')
+  assert_eq(r.capacity.max_output, math.floor(800 * (1 - orchestrator.LEARN_SAFETY_MARGIN)),
+    'und die Reserve wird weiterhin abgezogen')
+  assert_true(r.capacity.ready, 'MASTER bekommt die Zahl weiterhin')
+  local raised = r.capacity.max_output
+
+  -- Ein schwacher Takt darf sie NICHT wieder senken -- das war der Grund,
+  -- aus dem ueberhaupt eingefroren wurde.
+  now = now + 1000
+  r = o.tick({ now_ms = now, hardware_ready = true, turbines = fleet(10, 10, 20), reactor = {} })
+  assert_eq(r.capacity.max_output, raised, 'abwaerts geht es nie')
+
+  -- Und ein guter Takt mit zu WENIGEN Turbinen im Band zaehlt nicht --
+  -- dieselbe Bedingung wie beim Einlernen.
+  now = now + 1000
+  r = o.tick({ now_ms = now, hardware_ready = true, turbines = fleet(10, 3, 500), reactor = {} })
+  assert_eq(r.capacity.max_output, raised,
+    'ein Takt unter der Schwelle darf den Wert nicht anheben, auch wenn er hoch ist')
+end
+
 -- ══ 7. Saettigung ist eine Diagnose, keine Regelgroesse ════════════════
 --
 -- Eine Turbine, die vollen Durchfluss faehrt und TROTZDEM zu langsam ist,

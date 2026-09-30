@@ -1,6 +1,6 @@
 # RT-Regel-Engine v2
 
-**Stand: 2026-09-29 | manifest-v792 | Zweig `beta`**
+**Stand: 2026-09-30 | manifest-v793 | Zweig `beta`**
 
 Der RT-Knoten hat **genau eine** Regel-Engine (`rt2_*.lua`). Der
 Vorgaenger v1 (`reactor_control.lua`, `turbine_control.lua`,
@@ -161,6 +161,7 @@ nachweislich GLEICHZEITIG geliefert hat**:
 | Abschluss | Hoechstwert steigt 6 s nicht mehr (`LEARN_STABLE_MS`) |
 | Reserve | gemeldet werden 95 % davon (`LEARN_SAFETY_MARGIN`) |
 | Abbruch auf Zeit | **gibt es nicht** — es wird gewartet, bis die geforderten Turbinen da sind |
+| Danach | wird **nur nach oben** nachgefuehrt (siehe unten) |
 
 Eine Turbine zaehlt in einem Takt nur, wenn **alle vier** Bedingungen
 gleichzeitig gelten (`measure()`):
@@ -205,6 +206,29 @@ Durchfluss faehrt und trotzdem zu langsam ist, hat keine Reglerreserve
 mehr — entweder fehlt Dampf, oder die Spulenlast ist zu hoch. Das ist
 reine Diagnose, aber es macht ein unsichtbares Haengen zu einem lesbaren
 Befund im Log.
+
+### Nachfuehrung nach dem Einlernen
+
+Ist die Anlage ausgemessen, bleibt der Wert stehen — **ausser die Flotte
+liefert mehr**. Dann wird er angehoben, nie gesenkt.
+
+Es gelten dieselben Bedingungen wie beim Einlernen: der Takt zaehlt nur bei
+mindestens 80 % der Turbinen gleichzeitig im Band, gekuppelt und liefernd.
+Ein einzelner guenstiger Augenblick kann den Wert also genauso wenig
+verfaelschen wie waehrend des Einlernens, und ein schwacher Takt kann ihn
+nicht kaputtmachen.
+
+Vorher war der Wert mit dem Ende des Einlernens endgueltig eingefroren.
+Das war einseitig gedacht: der Schutz galt nur gegen ein Absinken. Wurde
+beim Einlernen knapp die 80-%-Schwelle erreicht, merkte sich MASTER
+dauerhaft eine zu kleine Zahl und teilte die Anlage zu klein auf — auch
+wenn spaeter die ganze Flotte im Zielband stand.
+
+Eine Anhebung steht im Log als `v2 Leistung nach oben korrigiert: alt ->
+neu RF/t`, damit sie nicht mit der Erstmessung verwechselt wird.
+
+Neu **gemessen** (also von vorn) wird weiterhin nur bei einer Aenderung der
+Turbinen-Anzahl.
 
 ### Was NICHT zurueckgekommen ist
 

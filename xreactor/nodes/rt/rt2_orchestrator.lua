@@ -254,10 +254,29 @@ local function measure_capacity(previous, turbines, now_ms)
   state.required_at_target = math.max(1, math.ceil(total * M.LEARN_MIN_FRACTION))
   if sum_all > (state.observed or 0) then state.observed = sum_all end
 
-  -- Ist die Anlage ausgemessen, wird nichts mehr veraendert. Der gelernte
-  -- Wert beschreibt, was sie geliefert HAT -- ein schwacher Takt spaeter
-  -- widerlegt das nicht.
+  -- Ist die Anlage ausgemessen, wird der Wert nur noch NACH OBEN
+  -- nachgefuehrt.
+  --
+  -- Der gelernte Wert beschreibt, was die Anlage geliefert HAT -- ein
+  -- schwacher Takt spaeter widerlegt das nicht, deshalb geht es nie
+  -- abwaerts. Frueher stand hier aber gar keine Nachfuehrung: die Messung
+  -- war mit dem Ende des Einlernens endgueltig eingefroren, und das war
+  -- einseitig. Wurde beim Einlernen nur knapp die 80-%-Schwelle erreicht,
+  -- merkte sich MASTER dauerhaft eine zu kleine Zahl und teilte die Anlage
+  -- zu klein auf -- auch wenn spaeter die ganze Flotte im Zielband stand
+  -- und mehr lieferte (Betreiberfrage 2026-09-30).
+  --
+  -- Es gelten dieselben Bedingungen wie beim Einlernen: der Takt zaehlt nur
+  -- bei mindestens required_at_target Turbinen gleichzeitig im Band,
+  -- gekuppelt und liefernd (siehe measure()). Damit kann ein einzelner
+  -- guenstiger Augenblick den Wert genauso wenig verfaelschen wie vorher.
   if not state.learning then
+    if at_target >= (state.required_at_target or math.huge)
+        and output > (state.best_output or 0) then
+      state.best_output = output
+      state.max_output = math.floor(output * (1 - M.LEARN_SAFETY_MARGIN))
+      state.sustainable_turbines = at_target
+    end
     state.reason = state.reason == M.OBSERVED and M.OBSERVED or M.MEASURED
     return state
   end
