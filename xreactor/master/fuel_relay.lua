@@ -4,7 +4,16 @@ local reactor_identity = require("core.reactor_identity")
 
 local M = {}
 
-local RELAY_INTERVAL_MS = 10000
+-- 4s statt 10s. Der Fuellstand selbst aendert sich langsam -- entscheidend
+-- ist, dass dieses Relais fuer eine FUEL-Node, die die RT-Nodes NICHT
+-- direkt mithoeren kann (nodes/fuel/fuel_status_network.lua's
+-- make_overhear_service, braucht Funkreichweite zur RT), der einzige Weg
+-- ist. Dann lag das Budget bei RT-status_interval (5s) + 10s Relais, also
+-- bis zu 15s bis zum ersten Fuellstand. Das Relais ist ein kleines,
+-- quittiertes Kommando an wenige FUEL-Nodes -- es darf haeufiger laufen
+-- als der teure RT-Statusaufbau (der jeden Reaktor und jede Turbine live
+-- abfragt) und ist damit nicht mehr der bestimmende Term.
+local RELAY_INTERVAL_MS = 4000
 local MAX_SAMPLE_AGE_MS = 60000
 local MAX_REACTORS = 256
 
@@ -73,17 +82,33 @@ local function collect_reactor_fuel(runtime)
   return out
 end
 
+-- Stabiler Fingerabdruck der aktuell bekannten FUEL-Nodes. Taucht eine neu
+-- auf (Kaltstart, Reboot), darf sie nicht bis zu RELAY_INTERVAL_MS auf
+-- ihren ersten Fuellstand warten -- sie hat nach dem Boot gar keine Daten,
+-- nicht nur leicht veraltete.
+local function fuel_node_key(ids)
+  table.sort(ids)
+  return table.concat(ids, ",")
+end
+
 function M.tick(runtime)
   local constants = runtime.libs.constants
   local now = os.epoch("utc")
   runtime.state._fuel_relay_last = runtime.state._fuel_relay_last or 0
-  if now - runtime.state._fuel_relay_last < RELAY_INTERVAL_MS then return end
 
   local fuel_nodes = {}
   for id, node in pairs(runtime.state.nodes or {}) do
     if node.role == constants.roles.FUEL_NODE then fuel_nodes[#fuel_nodes + 1] = id end
   end
-  if #fuel_nodes == 0 then return end
+  if #fuel_nodes == 0 then
+    runtime.state._fuel_relay_nodes = nil
+    return
+  end
+
+  local node_key = fuel_node_key(fuel_nodes)
+  local nodes_changed = node_key ~= runtime.state._fuel_relay_nodes
+  if not nodes_changed and now - runtime.state._fuel_relay_last < RELAY_INTERVAL_MS then return end
+  runtime.state._fuel_relay_nodes = node_key
 
   local snapshot = collect_reactor_fuel(runtime)
   runtime.state._fuel_relay_last = now

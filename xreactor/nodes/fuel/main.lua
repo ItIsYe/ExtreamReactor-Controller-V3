@@ -599,7 +599,8 @@ local function init()
   -- Nur EIN zentraler Input-Pfad (ui_service -> fuel_monitor_ui.handle_input)
   -- -- ein zweiter Handler wuerde jeden Touch doppelt verarbeiten (z.B.
   -- Toggle-Buttons: setzt den Zustand, zweiter Aufruf hebt ihn sofort auf).
-  services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
+  services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants,
+    config.channels and config.channels.status or constants.channels.STATUS))
   services:init()
   slow_services:init()
   -- Einmalig und synchron, noch vor den Coroutinen: danach hat die erste

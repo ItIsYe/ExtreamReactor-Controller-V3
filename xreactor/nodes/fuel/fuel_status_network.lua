@@ -178,7 +178,14 @@ local function store_direct(cache, message, reactor, now)
   return true
 end
 
-function M.make_overhear_service(cache, constants)
+-- status_channel: der TATSAECHLICH konfigurierte Status-Kanal dieser Node
+-- (services/comms_service.lua's sanitize_channels setzt ihn aus
+-- config.channels.status, Default constants.channels.STATUS). Vorher stand
+-- hier fest constants.channels.STATUS -- eine Anlage mit abweichend
+-- konfigurierten Kanaelen haette die RT-Broadcasts stillschweigend nie
+-- mitgehoert und ausschliesslich am (langsameren) Master-Relais gehangen.
+function M.make_overhear_service(cache, constants, status_channel)
+  local channel = tonumber(status_channel) or constants.channels.STATUS
   return {
     name = "fuel_status_overhear",
     wants_events = true,
@@ -186,7 +193,7 @@ function M.make_overhear_service(cache, constants)
       local now = os.epoch("utc")
       M.prune(cache, now)
       if not (event and event[1] == "modem_message") then return end
-      if event[3] ~= constants.channels.STATUS then return end
+      if event[3] ~= channel then return end
       local raw = event[5]
       if type(raw) ~= "table" then return end
 
