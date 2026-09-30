@@ -379,6 +379,50 @@ local function find_me_bridge_by_methods()
   return nil
 end
 
+-- Reine Config -> Zustand-Abbildung der Reaktor-Eintraege: keine
+-- Peripherie, kein Redstone, keine Lieferung. Ausgelagert, damit auch ein
+-- Knoten mit abgeschalteter Logistik seine eigene Konfiguration kennt --
+-- get_summary() (und darueber die Oberflaeche) las sonst ein leeres
+-- _state.reactors und meldete "Keine Reaktoren konfiguriert", obwohl
+-- /xreactor_config/fuel_routes.lua vollstaendig geladen war.
+local function build_reactor_entries(cfg)
+  local reactors = {}
+  for i, entry in ipairs((cfg and cfg.reactors) or {}) do
+    -- reactor_id/label are learned from the owning RT node's broadcasts
+    -- (router_ui.lua's teach flow) and never typed by hand; reactor_port is
+    -- accepted as a legacy alias for reactor_id only.
+    local reactor_id = entry.reactor_id or entry.reactor_port
+    local label = entry.label or reactor_id or ("Reactor " .. i)
+
+    local path = {}
+    if type(entry.path) == "table" then
+      for _, step in ipairs(entry.path) do
+        if type(step) == "string" and step ~= "" then path[#path + 1] = step end
+      end
+    end
+
+    reactors[#reactors + 1] = {
+      label        = label,
+      reactor_id   = reactor_id,
+      path         = path,
+      request_below = tonumber(entry.request_below) or 0.25,
+      fill_amount  = tonumber(entry.fill_amount)   or 64,
+      min_in_me    = tonumber(entry.min_in_me)     or 32,
+      -- Mindestwartezeit nach einer Lieferung an diesen Reaktor, bevor
+      -- erneut nachgelegt wird -- siehe record_export()-Kommentar oben.
+      -- Je nach physischer Entfernung des Reaktors vom Transportnetz
+      -- unterschiedlich lang, daher pro Reaktor einstellbar (Router-UI).
+      resupply_cooldown_s = math.max(0, tonumber(entry.resupply_cooldown_s) or 30),
+      -- Vom config_normalizer stillgelegt: dieser Eintrag wird nie
+      -- beliefert, die uebrigen laufen weiter. Muss hier mitgefuehrt
+      -- werden, sonst waere die Stilllegung ab _state.reactors vergessen.
+      disabled_reason = entry.disabled_reason,
+      cfg          = entry,
+    }
+  end
+  return reactors
+end
+
 function M:refresh_peripherals()
   local cfg = self.config.logistics or self.config or {}
 
@@ -429,40 +473,7 @@ function M:refresh_peripherals()
   end
 
   -- Per-reactor entries
-  local reactors = {}
-  for i, entry in ipairs(cfg.reactors or {}) do
-    -- reactor_id/label are learned from the owning RT node's broadcasts
-    -- (router_ui.lua's teach flow) and never typed by hand; reactor_port is
-    -- accepted as a legacy alias for reactor_id only.
-    local reactor_id = entry.reactor_id or entry.reactor_port
-    local label = entry.label or reactor_id or ("Reactor " .. i)
-
-    local path = {}
-    if type(entry.path) == "table" then
-      for _, step in ipairs(entry.path) do
-        if type(step) == "string" and step ~= "" then path[#path + 1] = step end
-      end
-    end
-
-    reactors[#reactors + 1] = {
-      label        = label,
-      reactor_id   = reactor_id,
-      path         = path,
-      request_below = tonumber(entry.request_below) or 0.25,
-      fill_amount  = tonumber(entry.fill_amount)   or 64,
-      min_in_me    = tonumber(entry.min_in_me)     or 32,
-      -- Mindestwartezeit nach einer Lieferung an diesen Reaktor, bevor
-      -- erneut nachgelegt wird -- siehe record_export()-Kommentar oben.
-      -- Je nach physischer Entfernung des Reaktors vom Transportnetz
-      -- unterschiedlich lang, daher pro Reaktor einstellbar (Router-UI).
-      resupply_cooldown_s = math.max(0, tonumber(entry.resupply_cooldown_s) or 30),
-      -- Vom config_normalizer stillgelegt: dieser Eintrag wird nie
-      -- beliefert, die uebrigen laufen weiter. Muss hier mitgefuehrt
-      -- werden, sonst waere die Stilllegung ab _state.reactors vergessen.
-      disabled_reason = entry.disabled_reason,
-      cfg          = entry,
-    }
-  end
+  local reactors = build_reactor_entries(cfg)
   self._state.reactors = reactors
   -- Stillgelegte Eintraege gehoeren auch nicht in den Ventilbaum -- ein
   -- Weg, der nie benutzt wird, waere dort nur ein Stolperstein.
@@ -1171,7 +1182,18 @@ end
 
 function M:tick()
   local cfg = self.config.logistics or self.config or {}
-  if cfg.enabled ~= true then return end
+  if cfg.enabled ~= true then
+    -- Abgeschaltete Logistik heisst "liefert nichts", nicht "kennt seine
+    -- Konfiguration nicht". _state.reactors wurde frueher ausschliesslich
+    -- von refresh_peripherals() gefuellt, und das ist nur hinter diesem
+    -- Schalter erreichbar -- die Oberflaeche meldete deshalb dauerhaft
+    -- "Keine Reaktoren konfiguriert" (ui_completion.lua's CONFIG_REQUIRED
+    -- prueft #payload.logistics.reactors), obwohl fuel_routes.lua geladen
+    -- war. Nur die reine Abbildung nachziehen: keine Peripherie, kein
+    -- rs_router:refresh() (das block_all() ausloest), kein Lieferzyklus.
+    self._state.reactors = build_reactor_entries(cfg)
+    return
+  end
 
   local now = os.epoch("utc")
   local refresh_ms = (tonumber(cfg.discovery_interval) or 60) * 1000
