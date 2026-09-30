@@ -4,7 +4,14 @@ local CONFIG = {
   DEFAULT_MONITORS = { "back" },
   DEFAULT_MASTER_MIN_MONITOR_WIDTH = 48,
   DEFAULT_MASTER_MIN_MONITOR_HEIGHT = 27,
-  DEFAULT_HEARTBEAT_INTERVAL = 5,
+  -- 2s wie jede andere Rolle (nodes/*/config.lua). Der MASTER war die
+  -- einzige Rolle mit 5s und damit der Peer, den eine Node am schnellsten
+  -- als DOWN meldete, obwohl er lief. Der Status-Takt bleibt bewusst bei
+  -- 5s: die Master-Status-Payload ist gross, nur der (winzige) Heartbeat
+  -- wird haeufiger. ACHTUNG: greift nur bei einer NEUEN Installation --
+  -- eine bestehende /xreactor_config/master.lua behaelt ihren Wert
+  -- (merge_defaults fuellt nur fehlende Schluessel).
+  DEFAULT_HEARTBEAT_INTERVAL = 2,
   DEFAULT_STATUS_INTERVAL = 5,
   DEFAULT_STARTUP_RAMP = "NORMAL",
   DEFAULT_STARTUP_STAGE_TIMEOUT = 60,

@@ -39,6 +39,15 @@ local RT_CONFIG_VERSION_INTERVAL_MIGRATION = 5
 local LEGACY_REACTOR_ADJUST_INTERVAL = 5.0
 local LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL = 1.0
 
+-- Dieselbe Mechanik fuer comms.peer_timeout_s: 12.0 war der Default, bei
+-- dem der MASTER (Heartbeat alle 5s, alle anderen Rollen 2s) nur ~2
+-- Heartbeats verlieren durfte und dadurch als DOWN gemeldet wurde,
+-- obwohl er lief. Ohne diese Migration behielte jede bereits
+-- installierte /xreactor_config/rt.lua den alten Wert dauerhaft --
+-- validate_config() fasst eine valide Zahl nicht an.
+local RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION = 6
+local LEGACY_PEER_TIMEOUT_S = 12.0
+
 function M.migrate_schema_version(config_values, defaults, add_warning)
   if type(config_values) ~= "table" then
     return false
@@ -62,6 +71,17 @@ function M.migrate_schema_version(config_values, defaults, add_warning)
           tostring(LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL), tostring(defaults.autonom.reactor_adjust_interval_individual), RT_CONFIG_VERSION_INTERVAL_MIGRATION))
         changed = true
       end
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION then
+    local comms_cfg = type(config_values.comms) == "table" and config_values.comms or nil
+    local default_comms = type(defaults.comms) == "table" and defaults.comms or nil
+    if comms_cfg and default_comms and comms_cfg.peer_timeout_s == LEGACY_PEER_TIMEOUT_S then
+      comms_cfg.peer_timeout_s = default_comms.peer_timeout_s
+      add_warning(string.format(
+        "comms.peer_timeout_s migrated from historical default %s -> %s (config schema v%d)",
+        tostring(LEGACY_PEER_TIMEOUT_S), tostring(default_comms.peer_timeout_s), RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION))
+      changed = true
     end
   end
   if config_values.version ~= defaults.version then

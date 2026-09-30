@@ -58,9 +58,24 @@ function M.init(opts)
   last_logged_capacity_diag = nil
   last_logged_max_output = nil
   last_projection = nil
+  -- Die MASTER-Liveness-Schwelle der Zustandsmaschine folgt
+  -- config.comms.peer_timeout_s, weil Health-Check und Monitor-Anzeige
+  -- (nodes/rt/health_payload.lua, nodes/rt/monitor_ui.lua) ihren
+  -- MASTER-Zustand aus der Peer-Tabelle von core/comms.lua lesen, die
+  -- genau mit diesem Wert arbeitet. Zwei unterschiedliche Schwellen
+  -- hiessen: "MASTER DOWN" auf dem Monitor, waehrend der Regler noch im
+  -- Zustand MASTER laeuft.
+  local master_timeout_ms = opts.master_timeout_ms
+  if master_timeout_ms == nil then
+    local comms_cfg = opts.config and opts.config.comms
+    local peer_timeout_s = comms_cfg and tonumber(comms_cfg.peer_timeout_s) or nil
+    if peer_timeout_s and peer_timeout_s > 0 then
+      master_timeout_ms = peer_timeout_s * 1000
+    end
+  end
   engine = orchestrator.new({
     initial_state = opts.initial_state,
-    master_timeout_ms = opts.master_timeout_ms,
+    master_timeout_ms = master_timeout_ms,
     reactors = specs,
   })
   last_result = nil

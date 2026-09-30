@@ -14,7 +14,15 @@
 
 local M = {}
 
-M.TIMEOUT_MS = 12000  -- no message from MASTER within this window -> considered down
+-- 20s, bewusst identisch zum Default von comms.peer_timeout_s in
+-- nodes/rt/config.lua: der Health-Check (nodes/rt/health_payload.lua) und
+-- die Monitor-Anzeige lesen die Peer-Tabelle, diese Zustandsmaschine
+-- liest dieses Modul. Laufen die beiden Schwellen auseinander, meldet die
+-- Node "MASTER DOWN", waehrend sie selbst noch im Zustand MASTER regelt
+-- (oder umgekehrt). rt2_engine.init() leitet den Wert zusaetzlich direkt
+-- aus config.comms.peer_timeout_s ab, damit eine abweichend
+-- konfigurierte Node ebenfalls konsistent bleibt.
+M.TIMEOUT_MS = 20000  -- no message from MASTER within this window -> considered down
 
 function M.new(opts)
   opts = opts or {}

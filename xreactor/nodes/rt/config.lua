@@ -1,10 +1,11 @@
 -- CURRENT_VERSION gibt config_normalizer.lua's migrate_schema_version()
--- einen Ansatzpunkt: eine persistierte config/rt.lua mit dem historischen
--- reactor_adjust_interval-Default wird beim naechsten Boot gezielt auf
--- den neuen Default migriert (nicht blind ueberschrieben, falls der
--- Nutzer bewusst einen anderen Wert gesetzt hat), und die Migration wird
--- als abgeschlossen persistiert, damit sie nur einmal laeuft.
-local CURRENT_VERSION = 5
+-- einen Ansatzpunkt: eine persistierte config/rt.lua mit einem historischen
+-- Default (reactor_adjust_interval, comms.peer_timeout_s) wird beim
+-- naechsten Boot gezielt auf den neuen Default migriert (nicht blind
+-- ueberschrieben, falls der Nutzer bewusst einen anderen Wert gesetzt
+-- hat), und die Migration wird als abgeschlossen persistiert, damit sie
+-- nur einmal laeuft.
+local CURRENT_VERSION = 6
 
 -- Auto-generated per computer via os.getComputerID(), same pattern as
 -- installer/valve_naming.lua's "VALVE-<id>" and utils.normalize_node_id()'s
@@ -62,7 +63,18 @@ return {
     backoff_cap_s = 6.0,
     dedupe_ttl_s = 30,
     dedupe_limit = 200,
-    peer_timeout_s = 12.0,
+    -- 20s statt der frueheren 12s: der MASTER ist die einzige Rolle, die
+    -- ihren Heartbeat nur alle 5s sendet (alle Nodes: 2s). Bei 12s durfte
+    -- der MASTER also nur ~2 Heartbeats verlieren, eine Node dagegen 6 --
+    -- er war damit der mit Abstand kippanfaelligste Peer, obwohl er lief.
+    -- Ein einziger blockierender Discovery-Scan im Slow-Loop (alle 10s,
+    -- synchrone Peripherie-Calls ueber alle Turbinen, haelt die ganze
+    -- Lua-VM an) reichte, um ihn auf DOWN zu setzen. 20s geben ihm
+    -- dieselbe Toleranz von ~4 verpassten Heartbeats.
+    -- rt2_master_link.TIMEOUT_MS wird bewusst mitgezogen, damit
+    -- Zustandsmaschine (MASTER/AUTONOM) und Health-Check/Anzeige
+    -- weiterhin dieselbe Schwelle benutzen.
+    peer_timeout_s = 20.0,
     queue_limit = 200,
     drop_simulation = 0
   },

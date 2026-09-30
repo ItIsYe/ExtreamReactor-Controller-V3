@@ -12,7 +12,8 @@ local function clamp(v, fb, mn, mx)
 end
 
 function M.normalize_config(config)
-  config.heartbeat_interval = clamp(config.heartbeat_interval, 5, 1, 60)
+  -- Fallback identisch zu master/config.lua's DEFAULT_HEARTBEAT_INTERVAL.
+  config.heartbeat_interval = clamp(config.heartbeat_interval, 2, 1, 60)
   config.status_interval = clamp(config.status_interval or config.heartbeat_interval, config.heartbeat_interval, 1, 60)
   config.rt_default_mode = config.rt_default_mode or "MASTER"
   config.rt_setpoints = config.rt_setpoints or {}
