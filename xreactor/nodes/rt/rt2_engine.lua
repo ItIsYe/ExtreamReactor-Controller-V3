@@ -29,6 +29,19 @@ local last_logged_capacity_diag
 -- dem Einlernen von der Erstmessung zu unterscheiden -- sonst stuende bei
 -- jeder Nachfuehrung wieder "EINLERNEN FERTIG" auf dem Schirm.
 local last_logged_max_output
+-- Der zuletzt GEMELDETE Grund. Ohne ihn liess sich "das Einlernen ist
+-- gerade fertig geworden" nicht von "es ist laengst fertig" unterscheiden:
+-- der Vergleichsschluessel unten enthaelt auch at_target/saturated, und
+-- die schwanken im Normalbetrieb staendig (eine Turbine faellt kurz aus
+-- dem Zielband, eine andere kommt hinein). Jede dieser Schwankungen liess
+-- erneut "EINLERNEN FERTIG" mit derselben Zahl auflaufen -- im
+-- Dauerbetrieb mit knappem Dampf dutzendfach.
+local last_logged_reason
+-- Wie stark die gemessene Leistung steigen muss, damit die Nachfuehrung
+-- ueberhaupt gemeldet wird. Ohne Schwelle stand im Protokoll
+-- "Leistung nach oben korrigiert: 18040 -> 18041 RF/t" -- eine Zeile, die
+-- nichts aussagt und nur die echten Meldungen verdraengt.
+local MIN_REPORTED_OUTPUT_RISE = 0.01
 local last_projection
 -- Je Reaktor (Schluessel: Name): Sicherheitszustand und letzte gemeldete
 -- Sicherheitslage.
@@ -57,6 +70,7 @@ function M.init(opts)
 
   last_logged_capacity_diag = nil
   last_logged_max_output = nil
+  last_logged_reason = nil
   last_projection = nil
   -- Die MASTER-Liveness-Schwelle der Zustandsmaschine folgt
   -- config.comms.peer_timeout_s, weil Health-Check und Monitor-Anzeige
@@ -193,6 +207,7 @@ function M.tick(ctx)
     cap.at_target or 0, cap.saturated or 0)
   if diag ~= last_logged_capacity_diag then
     last_logged_capacity_diag = diag
+    local previous_reason = last_logged_reason
     local msg
     if cap.reason == "NO_TURBINES" then
       msg = "v2 noch keine Turbine gefunden -- warte auf Discovery"
@@ -220,16 +235,25 @@ function M.tick(ctx)
           orchestrator.LEARN_TOLERANCE_RPM, cap.required_at_target or 0)
       end
     elseif cap.reason == orchestrator.MEASURED then
-      if last_logged_max_output and (cap.max_output or 0) > last_logged_max_output then
-        -- Nachgefuehrt: die Flotte hat mehr geliefert als beim Einlernen.
-        -- Nur nach oben, siehe rt2_orchestrator.lua.
-        msg = string.format(
-          "v2 Leistung nach oben korrigiert: %.0f -> %.0f RF/t aus %d Turbinen"
-            .. " (roh %.0f, abzueglich %.0f %% Reserve)",
-          last_logged_max_output, cap.max_output or 0,
-          cap.sustainable_turbines or 0, cap.best_output or 0,
-          orchestrator.LEARN_SAFETY_MARGIN * 100)
-      else
+      -- Drei verschiedene Lagen, die frueher durcheinandergingen:
+      --
+      --   1. Das Einlernen ist GERADE fertig geworden (der vorige
+      --      gemeldete Grund war noch LEARNING) -> die Fertigmeldung,
+      --      genau einmal. Sie darf nicht davon abhaengen, ob der
+      --      Messwert in diesem Takt zufaellig noch ein Stueck gestiegen
+      --      ist -- sonst stand beim ersten Einlernen statt "FERTIG" eine
+      --      "nach oben korrigiert"-Meldung mit einem Ausgangswert, den
+      --      nie jemand gesehen hat.
+      --   2. Es war laengst fertig und die Leistung ist gestiegen -> die
+      --      Nachfuehrmeldung.
+      --   3. Es war laengst fertig und nichts ist gestiegen -> nichts.
+      --      Der Vergleichsschluessel oben enthaelt auch at_target und
+      --      saturated, und die schwanken im Normalbetrieb staendig.
+      --      Ohne diesen Zweig lief bei knappem Dampf dutzendfach
+      --      "EINLERNEN FERTIG" mit derselben Zahl auf.
+      local already_measured = previous_reason == orchestrator.MEASURED
+        or previous_reason == orchestrator.OBSERVED
+      if not already_measured then
         msg = string.format(
           "v2 EINLERNEN FERTIG: %.0f RF/t aus %d Turbinen gemessen (roh %.0f, abzueglich"
             .. " %.0f %% Reserve). Normale Regelung nach MASTER-Vorgabe.",
@@ -239,14 +263,33 @@ function M.tick(ctx)
           msg = msg .. string.format(" -- %d der %d Turbinen waren dabei nie gleichzeitig im Zielband",
             (cap.total_turbines or 0) - (cap.sustainable_turbines or 0), cap.total_turbines or 0)
         end
+      elseif last_logged_max_output
+          and (cap.max_output or 0) >= last_logged_max_output * (1 + MIN_REPORTED_OUTPUT_RISE) then
+        -- Nachgefuehrt: die Flotte hat mehr geliefert als beim Einlernen.
+        -- Nur nach oben, siehe rt2_orchestrator.lua.
+        msg = string.format(
+          "v2 Leistung nach oben korrigiert: %.0f -> %.0f RF/t aus %d Turbinen"
+            .. " (roh %.0f, abzueglich %.0f %% Reserve)",
+          last_logged_max_output, cap.max_output or 0,
+          cap.sustainable_turbines or 0, cap.best_output or 0,
+          orchestrator.LEARN_SAFETY_MARGIN * 100)
       end
     end
-    last_logged_max_output = cap.max_output or 0
+    -- Der Bezugswert wandert nur mit, wenn auch wirklich gemeldet wurde.
+    -- Sonst waere jede unterdrueckte Kleinigkeit trotzdem verbraucht: ein
+    -- langsames Ansteigen in vielen winzigen Schritten wuerde den
+    -- Schwellwert nie erreichen und damit nie gemeldet.
+    if cap.reason ~= orchestrator.MEASURED or msg ~= nil then
+      last_logged_max_output = cap.max_output or 0
+    end
+    last_logged_reason = cap.reason
     -- Einen Abbruch auf Zeit gibt es nicht mehr (siehe rt2_orchestrator.lua):
     -- das Einlernen wartet, bis die geforderten Turbinen da sind, und sagt
     -- in jedem Takt, wie viele noch fehlen.
-    ctx.log("INFO", msg)
-    pcall(print, "[RT] " .. msg)
+    if msg then
+      ctx.log("INFO", msg)
+      pcall(print, "[RT] " .. msg)
+    end
   end
 
   -- Jeder Reaktor wird nach seinem eigenen Messwert und seiner eigenen

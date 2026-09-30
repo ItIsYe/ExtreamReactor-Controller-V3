@@ -436,6 +436,55 @@ Die Spule kuppelt jetzt auch dann, wenn der Regler die Turbine als
 angekommen ansieht. Festgehalten in
 `rt2_settled_turbine_couples_test.lua`.
 
+### Das Anlagenmodell aus dem Mod-Quelltext
+
+`tests/support/er_plant_model.lua` bildet die Turbine 1:1 nach dem
+Quelltext von **Extreme Reactors 2.4.27 (MC 1.21.1, die Version in
+ATM10 8.1)** nach -- jede Zeile hat ihre Entsprechung in
+`TurbineLogic.update()`, die Kennzahlen stehen in `TurbineVariant.java`,
+`TurbineData.java` und `TurbineGameData.java`. `er_rt_harness.lua` haengt
+den echten RT-Stapel ueber die echten Adapter daran.
+
+Die Kalibrierung stimmt unabhaengig nach: 80 Blaetter auf 20
+Wellenbloecken mit 74 Enderium-Spulenbloecken ergeben bei 2000 mB/t
+**899.6 RPM und 24.1 kFE/t** -- genau der Auslegungspunkt, auf den der
+Regler zielt. Derselbe Aufbau mit Ludicrite ergibt 47 kFE/t gegen die vom
+Mod-Autor genannten "rund 45K FE/t aus einer vollen Spule in einer
+Reinforced-Turbine".
+
+Vier Eigenschaften, die den frueheren Testmodellen fehlten:
+
+1. **Die Drehzahl ist ein Integrator, keine Funktion des Durchflusses.**
+   `rotorEnergy += Auftrieb - Spule - Luftwiderstand - Reibung`, und
+   `rpm = rotorEnergy / (Blaetter * Rotormasse)`. Eine Stellgroesse wirkt
+   also auf die ABLEITUNG der Drehzahl. Ein reiner P-Regler ueberschwingt
+   hier zwangslaeufig -- deshalb der Vorhalt.
+2. **Die Zeitkonstante waechst mit der Turbine.** Ein Rotor mit 80
+   Blaettern auf 20 Wellenbloecken beschleunigt bei vollem Dampf und
+   ausgehaengter Spule mit rund **5 RPM/s** -- von null auf 900 dauert
+   drei Minuten. Kleinere Rotoren sind entsprechend schneller.
+3. **Die Spule ist der groesste Term der Bilanz.** Bei 900 RPM und 74
+   Enderium-Bloecken betraegt ihr Gegenmoment rund 19 980 gegen einen
+   Auftrieb von 20 000. Ein- und Aushaengen dreht das Vorzeichen der
+   Beschleunigung um -- siehe den naechsten Abschnitt.
+4. **Der Mod begrenzt die Drehzahl NICHT.** `getMaxRotorSpeed()` taucht
+   nur in der Oberflaeche und im Redstone-Port auf; in der Simulation
+   steht keine Grenze. Unsere Ueberdrehzahl-Abschaltung ist die einzige.
+
+Der Reaktor ist im Modell bewusst eine Naeherung (seine echte Kette aus
+Bestrahlung, Brennstoff- und Reaktorwaerme und Verdampfung ist um ein
+Vielfaches groesser als die Turbine). Modelliert ist, was der Regler von
+ihm sieht: Dampfmenge, Produktion als Funktion der Stabstellung, Verbrauch
+durch die Flotte, Brennstoff und Temperatur.
+
+**Auslegungshinweis, der dabei herauskam:** `rt2_reactor.ROD_MIN = 70`
+ist eine bewusste Leistungsgrenze. Extreme Reactors senkt die Strahlung
+proportional zum Stabeinschub, also sind rund 30 % des Nennwerts nutzbar.
+Ein Reaktor, dessen 30 % den Dampfbedarf der Flotte nicht decken, haengt
+dauerhaft bei Staeben 70 mit leerem Tank -- das ist eine Auslegungsfrage,
+kein Reglerfehler, und der Knoten sagt es auch so ("fahren VOLLEN
+Durchfluss und erreichen trotzdem keine 900 RPM -- Fehlt Dampf?").
+
 ### Einmal gekuppelt bleibt gekuppelt
 
 Dieselbe Stelle, die andere Richtung — und der Grund fuer "eine einzelne
@@ -616,6 +665,8 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_regulation_behaviour_test.lua` | Einzelregelung je Turbine |
 | `rt2_settled_turbine_couples_test.lua` | Ruhezone und Kupplungsschwelle ueberlappen sich |
 | `rt2_coil_hold_limit_cycle_test.lua` | geschlossener Regelkreis MIT Spulenlast: kein Grenzzyklus, keine Ueberdrehzahl |
+| `rt2_er_physics_integration_test.lua` | ganzer Stapel gegen die Turbinenphysik aus dem Mod-Quelltext |
+| `rt2_er_physics_scenarios_test.lua` | Basic-Turbinen am Anschlag, knapper Dampf, MASTER-Vorgabe mit Slot-Rotation |
 | `rt2_unreadable_flow_commands_zero_test.lua` | unbekannter Durchfluss wird nie als 0 geschrieben |
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
 | `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt den wirklichen Zustand |
