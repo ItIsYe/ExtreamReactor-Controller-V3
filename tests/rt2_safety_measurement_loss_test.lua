@@ -37,6 +37,13 @@ local LIMITS = {
 }
 local GRACE = rt2_safety.DEFAULT_MEASUREMENT_GRACE_SAMPLES
 
+-- Betreibervorgabe: 30 Minuten bei 10 Hz Regeltakt. Hier festgehalten,
+-- damit eine Aenderung dieser Zahl eine bewusste Entscheidung bleibt und
+-- nicht nebenbei passiert -- sie bestimmt, wie lange ein echter
+-- Sensorausfall unentdeckt bleibt.
+assert_eq(GRACE, 18000, 'die Schonfrist ist auf 30 Minuten bei 10 Hz festgelegt')
+assert_eq(GRACE / 10 / 60, 30, 'das sind 30 Minuten')
+
 local HEALTHY = { temperature = 800, coolant_ratio = 0.8,
                   coolant_amount = 8000, coolant_amount_max = 10000 }
 
@@ -101,9 +108,10 @@ end
 -- 5. Passiv gekuehlter Reaktor: Kuehlmittel war NIE lesbar -> nie Ausloesung.
 do
   local state = rt2_safety.new_state()
-  local trip, last = feed(state, { temperature = 800 }, 5000)
+  local trip, last = feed(state, { temperature = 800 }, GRACE + 100)
   assert_true(trip == nil,
-    'ein Reaktor ohne Kuehlkreis darf nicht wegen fehlendem Kuehlmittel abschalten')
+    'ein Reaktor ohne Kuehlkreis darf nicht wegen fehlendem Kuehlmittel abschalten --'
+      .. ' auch nicht weit jenseits der Schonfrist')
   assert_eq(last.coolant_available, false, 'sichtbar bleibt es trotzdem')
   assert_eq(last.coolant_missing_ticks, 0, 'ein nie vorhandener Kanal zaehlt nicht')
 end
@@ -111,7 +119,7 @@ end
 -- 6. Start ohne gebundene Peripherie: gar nichts lesbar -> nie Ausloesung.
 do
   local state = rt2_safety.new_state()
-  local trip = feed(state, {}, 5000)
+  local trip = feed(state, {}, GRACE + 100)
   assert_true(trip == nil, 'eine noch nicht gebundene Peripherie darf nicht abschalten')
 end
 
@@ -162,11 +170,17 @@ end
 --     Entscheidungsfunktion geprueft ist, sondern der Weg bis zur Hardware.
 do
   local harness = require('support.er_rt_harness')
+  -- Hier ausdruecklich mit einer KURZEN Schonfrist, damit der Durchstich in
+  -- Sekunden laeuft statt in simulierten 30 Minuten. Geprueft wird der Weg
+  -- bis zur Hardware und zurueck, nicht die Groesse der Zahl -- die haengt
+  -- oben an DEFAULT_MEASUREMENT_GRACE_SAMPLES.
+  local E2E_GRACE = 200
   local h = harness.new({ turbine_count = 4, reactor_headroom = 4.0, steam_capacity = 20000 })
   h.ctx.config.safety = {
     max_temperature = 2000, temperature_hysteresis = 50, temperature_trip_samples = 3,
     min_water = 0.10, coolant_hysteresis = 0.05, coolant_trip_samples = 3,
     coolant_invalid_grace_samples = 3,
+    measurement_grace_samples = E2E_GRACE,
   }
 
   local blind = false
@@ -197,8 +211,9 @@ do
   blind = true
   local trip_at, flow = run(40)
   assert_true(trip_at ~= nil, 'ein Ausfall der Temperaturmessung MUSS in den sicheren Zustand fuehren')
-  assert_true(math.abs(trip_at - (GRACE + 1)) <= 2, string.format(
-    'die Ausloesung muss an der Schonfrist haengen (erwartet ~%d Takte, war %d)', GRACE + 1, trip_at))
+  assert_true(math.abs(trip_at - (E2E_GRACE + 1)) <= 2, string.format(
+    'die Ausloesung muss an der konfigurierten Schonfrist haengen (erwartet ~%d Takte, war %d)',
+    E2E_GRACE + 1, trip_at))
   assert_eq(h.last.state, 'SAFE')
   assert_eq(flow, 0, 'im sicheren Zustand darf kein Dampf mehr fliessen')
   assert_eq(h.plant.reactor.rods, 100, 'und die Staebe muessen voll eingefahren sein')

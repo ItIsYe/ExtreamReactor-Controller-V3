@@ -27,12 +27,27 @@ local M = {}
 
 -- Wie viele Takte eine Sicherheitsmessung ausfallen darf, bevor der
 -- Messausfall selbst als Sicherheitslage gilt. Bei 10 Hz Regeltakt
--- (nodes/rt/main.lua's RECEIVE_TIMEOUT) sind 200 Takte 20 Sekunden --
--- lang genug fuer einen nachladenden Chunk, ein kurz zerlegtes Multiblock
--- oder einen geworfenen Peripherieaufruf (alles in
--- tests/rt2_er_physics_scenarios_test.lua nachgestellt), und kurz genug,
--- dass ein echter Sensorausfall nicht unbegrenzt als "sicher" durchgeht.
-M.DEFAULT_MEASUREMENT_GRACE_SAMPLES = 200
+-- (nodes/rt/main.lua's RECEIVE_TIMEOUT) sind 18000 Takte 30 MINUTEN.
+--
+-- Betreibervorgabe. Die Abwaegung dahinter, ausdruecklich festgehalten:
+--
+--   Zu KURZ heisst Fehlabschaltung. Ein nachladender Chunk, ein kurz
+--   zerlegtes Multiblock, ein geworfener Peripherieaufruf, ein
+--   Peripheral-Rebind, niedrige TPS -- all das kann die Messung minutenlang
+--   verdecken, ohne dass der Anlage etwas fehlt. Eine Abschaltung kostet
+--   dann Produktion und Vertrauen, und der naechste Reflex ist, die
+--   Pruefung ganz auszubauen.
+--
+--   Zu LANG heisst: ein echter Sensorausfall bleibt entsprechend lange
+--   unentdeckt, und solange regelt der Knoten ohne Temperatur- und
+--   Kuehlmittelueberwachung weiter. 30 Minuten sind eine bewusst grosse
+--   Toleranz -- der Zweck dieser Pruefung ist, dass der Zustand nicht
+--   UNBEGRENZT als "sicher" durchgeht, nicht dass er schnell auffaellt.
+--
+-- Sichtbar ist der Ausfall ab dem ERSTEN Takt: evaluate() liefert immer
+-- temperature_available/coolant_available samt Ausfallzaehler. Wer frueher
+-- reagieren will, liest die Felder, statt die Schonfrist zu verkuerzen.
+M.DEFAULT_MEASUREMENT_GRACE_SAMPLES = 18000
 
 function M.new_state()
   return {

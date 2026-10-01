@@ -48,6 +48,15 @@ local LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL = 1.0
 local RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION = 6
 local LEGACY_PEER_TIMEOUT_S = 12.0
 
+-- Und dieselbe Mechanik noch einmal fuer safety.measurement_grace_samples.
+-- Der Schluessel kam mit Schema v6 neu dazu, und core/utils.lua's
+-- migrate_config() fuellt fehlende Defaults nicht nur ein, es PERSISTIERT
+-- sie auch. Eine Installation, die v6 schon gesehen hat, traegt also die
+-- damaligen 200 Takte (20 s) auf Platte -- ein geaenderter Default waere
+-- dort nie angekommen. Mit v7 gilt die Betreibervorgabe von 30 Minuten.
+local RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION = 7
+local LEGACY_MEASUREMENT_GRACE_SAMPLES = 200
+
 function M.migrate_schema_version(config_values, defaults, add_warning)
   if type(config_values) ~= "table" then
     return false
@@ -81,6 +90,20 @@ function M.migrate_schema_version(config_values, defaults, add_warning)
       add_warning(string.format(
         "comms.peer_timeout_s migrated from historical default %s -> %s (config schema v%d)",
         tostring(LEGACY_PEER_TIMEOUT_S), tostring(default_comms.peer_timeout_s), RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION))
+      changed = true
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION then
+    local safety_cfg = type(config_values.safety) == "table" and config_values.safety or nil
+    local default_safety = type(defaults.safety) == "table" and defaults.safety or nil
+    if safety_cfg and default_safety
+        and safety_cfg.measurement_grace_samples == LEGACY_MEASUREMENT_GRACE_SAMPLES then
+      safety_cfg.measurement_grace_samples = default_safety.measurement_grace_samples
+      add_warning(string.format(
+        "safety.measurement_grace_samples migrated from historical default %s -> %s (config schema v%d)",
+        tostring(LEGACY_MEASUREMENT_GRACE_SAMPLES),
+        tostring(default_safety.measurement_grace_samples),
+        RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION))
       changed = true
     end
   end

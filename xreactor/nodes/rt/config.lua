@@ -5,7 +5,7 @@
 -- ueberschrieben, falls der Nutzer bewusst einen anderen Wert gesetzt
 -- hat), und die Migration wird als abgeschlossen persistiert, damit sie
 -- nur einmal laeuft.
-local CURRENT_VERSION = 6
+local CURRENT_VERSION = 7
 
 -- Auto-generated per computer via os.getComputerID(), same pattern as
 -- installer/valve_naming.lua's "VALVE-<id>" and utils.normalize_node_id()'s
@@ -90,14 +90,18 @@ return {
     coolant_invalid_grace_samples = 3,
     -- Wie viele Regeltakte eine Sicherheitsmessung (Temperatur oder
     -- Kuehlmittel) ausfallen darf, bevor der Messausfall SELBST eine
-    -- Sicherheitslage ist. 200 Takte sind bei 10 Hz 20 Sekunden -- lang
-    -- genug fuer einen nachladenden Chunk oder ein kurz zerlegtes
-    -- Multiblock, kurz genug, dass ein echter Sensorausfall nicht
-    -- unbegrenzt als "sicher" durchgeht. Gezaehlt wird nur ein Kanal, der
-    -- auf diesem Reaktor schon einmal gelesen wurde: ein passiv
-    -- gekuehlter Reaktor und eine noch nicht gebundene Peripherie loesen
-    -- damit nie aus (siehe nodes/rt/rt2_safety.lua).
-    measurement_grace_samples = 200,
+    -- Sicherheitslage ist. 18000 Takte sind bei 10 Hz 30 MINUTEN
+    -- (Betreibervorgabe -- die Abwaegung steht in
+    -- nodes/rt/rt2_safety.lua).
+    --
+    -- Der Ausfall ist ab dem ERSTEN Takt sichtbar (temperature_available/
+    -- coolant_available im Sicherheitsergebnis). Die Schonfrist bestimmt
+    -- nur, ab wann daraus eine Abschaltung wird.
+    --
+    -- Gezaehlt wird nur ein Kanal, der auf diesem Reaktor schon einmal
+    -- gelesen wurde: ein passiv gekuehlter Reaktor und eine noch nicht
+    -- gebundene Peripherie loesen damit nie aus.
+    measurement_grace_samples = 18000,
     -- Eskalation: wenn ein Reaktor innerhalb von coolant_trip_escalation_window_s
     -- coolant_trip_escalation_count mal in SAFE getrippt ist (wiederholtes
     -- Auslösen statt einem einzelnen Ereignis), wird der automatische

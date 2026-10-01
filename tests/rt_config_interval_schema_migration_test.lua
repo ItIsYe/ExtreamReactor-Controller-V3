@@ -90,4 +90,42 @@ do
   assert_eq(cfg.version, defaults.version)
 end
 
+-- 6. safety.measurement_grace_samples: derselbe Fall wie oben, nur eine
+--    Schemastufe spaeter. Der Schluessel kam mit v6 neu dazu, und
+--    core/utils.lua's migrate_config() fuellt fehlende Defaults nicht nur
+--    ein, es PERSISTIERT sie auch -- eine Installation, die v6 schon
+--    gesehen hat, traegt die damaligen 200 Takte (20 s) auf Platte, und
+--    ein geaenderter Default waere dort nie angekommen. Mit v7 gilt die
+--    Betreibervorgabe von 30 Minuten (18000 Takte).
+do
+  assert_eq(defaults.safety.measurement_grace_samples, 18000,
+    'sanity: der aktuelle Default sind 30 Minuten bei 10 Hz')
+
+  local warnings = {}
+  local cfg = { version = 6, safety = { measurement_grace_samples = 200 } }
+  local changed = config_normalizer.migrate_schema_version(cfg, defaults,
+    function(w) table.insert(warnings, w) end)
+  assert_true(changed, 'die Migration muss eine Aenderung melden')
+  assert_eq(cfg.safety.measurement_grace_samples, 18000,
+    'der historische Default 200 muss auf den neuen Wert migriert werden')
+  assert_eq(cfg.version, defaults.version)
+  assert_true(#warnings >= 1, 'und protokolliert werden')
+end
+
+do
+  local cfg = { version = 6, safety = { measurement_grace_samples = 600 } }
+  config_normalizer.migrate_schema_version(cfg, defaults, function() end)
+  assert_eq(cfg.safety.measurement_grace_samples, 600,
+    'ein bewusst gesetzter eigener Wert darf nicht ueberschrieben werden')
+end
+
+do
+  local cfg = deep_copy(defaults)
+  cfg.safety.measurement_grace_samples = 200
+  local changed = config_normalizer.migrate_schema_version(cfg, defaults, function() end)
+  assert_true(not changed, 'auf dem aktuellen Schemastand wird nicht erneut migriert')
+  assert_eq(cfg.safety.measurement_grace_samples, 200,
+    'ein danach vom Nutzer gesetztes 200 bleibt stehen')
+end
+
 print('rt_config_interval_schema_migration_test.lua: ok')

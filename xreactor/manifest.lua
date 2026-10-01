@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 804,
-  manifest_id = "manifest-v804",
+  manifest_version = 805,
+  manifest_id = "manifest-v805",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "54185459", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "b53d0bde", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 3137, hash = "7fe91602", always = true },
@@ -126,8 +126,8 @@ return {
     { path = "nodes/rt/binding.lua", size_bytes = 3507, hash = "0fbf17ee", required_for={"RT"} },
     { path = "nodes/rt/reactor_control.lua", size_bytes = 10118, hash = "1155d18e", required_for={"RT"} },
     { path = "nodes/rt/turbine_control.lua", size_bytes = 11100, hash = "0489d2eb", required_for={"RT"} },
-    { path = "nodes/rt/config.lua", size_bytes = 8387, hash = "ab71d962", required_for={"RT"} },
-    { path = "nodes/rt/config_normalizer.lua", size_bytes = 29205, hash = "2feacb73", required_for={"RT"} },
+    { path = "nodes/rt/config.lua", size_bytes = 8471, hash = "369992e1", required_for={"RT"} },
+    { path = "nodes/rt/config_normalizer.lua", size_bytes = 30552, hash = "4ec85897", required_for={"RT"} },
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"} },
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 12388, hash = "019f696f", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
@@ -141,7 +141,7 @@ return {
     { path = "nodes/rt/rt2_orchestrator.lua", size_bytes = 30261, hash = "2e097e2d", required_for={"RT"} },
     { path = "nodes/rt/rt2_projection.lua", size_bytes = 6948, hash = "09f20d45", required_for={"RT"} },
     { path = "nodes/rt/rt2_reactor.lua", size_bytes = 9181, hash = "067f95e4", required_for={"RT"} },
-    { path = "nodes/rt/rt2_safety.lua", size_bytes = 7638, hash = "df33b10a", required_for={"RT"} },
+    { path = "nodes/rt/rt2_safety.lua", size_bytes = 8413, hash = "e214c95b", required_for={"RT"} },
     { path = "nodes/rt/rt2_state.lua", size_bytes = 4004, hash = "2237542f", required_for={"RT"} },
     { path = "nodes/rt/rt2_unit.lua", size_bytes = 5085, hash = "3dbca1c0", required_for={"RT"} },
     { path = "nodes/rt/rt2_turbine.lua", size_bytes = 38144, hash = "2b23e3dc", required_for={"RT"} },

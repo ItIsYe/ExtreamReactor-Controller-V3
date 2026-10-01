@@ -528,6 +528,31 @@ unter dem Zielband. Das ist eine Auslegungsfrage, kein Reglerfehler, und
 der Knoten sagt es auch so ("fahren VOLLEN Durchfluss und erreichen
 trotzdem keine 900 RPM -- Fehlt Dampf?").
 
+### Ein Messausfall ist eine Sicherheitslage -- nach 30 Minuten
+
+Faellt die Temperatur- oder Kuehlmittelmessung aus, gilt das nach
+`safety.measurement_grace_samples` Takten selbst als Ausloesung. Der
+Default sind **18000 Takte = 30 Minuten** bei 10 Hz (Betreibervorgabe).
+
+Die Abwaegung dahinter gehoert dazu, weil beide Richtungen etwas kosten:
+
+| | |
+|---|---|
+| zu kurz | Fehlabschaltung. Ein nachladender Chunk, ein kurz zerlegtes Multiblock, ein Peripheral-Rebind, niedrige TPS -- all das kann die Messung minutenlang verdecken, ohne dass der Anlage etwas fehlt. |
+| zu lang | ein echter Sensorausfall bleibt entsprechend lange unentdeckt, und solange regelt der Knoten ohne Ueberwachung weiter. |
+
+30 Minuten sind bewusst gross gewaehlt: der Zweck dieser Pruefung ist, dass
+der Zustand nicht **unbegrenzt** als "sicher" durchgeht -- nicht, dass er
+schnell auffaellt. **Sichtbar ist der Ausfall ab dem ERSTEN Takt**
+(`temperature_available` / `coolant_available` samt Ausfallzaehler im
+Sicherheitsergebnis). Wer frueher reagieren will, liest diese Felder,
+statt die Schonfrist zu verkuerzen.
+
+Gezaehlt wird nur ein Kanal, der auf diesem Reaktor schon einmal gelesen
+wurde -- ein passiv gekuehlter Reaktor (kein Kuehlkreis, `resolve_ratio`
+liefert dauerhaft nil) und eine noch nicht gebundene Peripherie loesen
+damit nie aus.
+
 **Der unbelastete Rotor ist der gefaehrlichste Zustand.** Aus denselben
 Formeln: ohne eingehaengte Spule haelt ein Rotor mit 80 Blaettern die
 Zieldrehzahl schon bei rund **3 mB/t**, und bei 10 mB/t -- einem einzigen
