@@ -596,13 +596,48 @@ unbelastet. Ist sie einmal am Ziel gewesen, ist Halten mit Last der
 richtige Betriebszustand — nur dort liefert sie ueberhaupt Energie, und
 genau das verlangt `measure_capacity` (`energy > 0`).
 
-Eine Ausnahme bleibt, sonst koennte ein Rotor dauerhaft haengen: wenn die
-Spule den Hochlauf nachweislich **verhindert** — Drehzahl unter
-`COIL_STALL_RPM_FRACTION` (0.5) der Zieldrehzahl **und** Dampf bereits am
-Anschlag — wird sie freigegeben (`RELEASE_STALLED`). Diese Schwelle liegt
-weit unter der Regelgegend und kann deshalb nicht wieder zum Flattern
-fuehren. Ohne bekannten Durchfluss wird nicht freigegeben: unbekannt ist
-kein Nachweis. Festgehalten in `rt2_coil_hold_limit_cycle_test.lua`.
+Eine Ausnahme bleibt, sonst haengt ein Rotor dauerhaft: wenn die Spule den
+Hochlauf nachweislich **verhindert**, wird sie freigegeben
+(`RELEASE_STALLED`). Drei Bedingungen muessen dafuer alle gelten:
+
+1. Drehzahl unter `COIL_STALL_RPM_FRACTION` (**0.95**) der Zieldrehzahl,
+2. Durchfluss am **Anschlag** — der Regler hat keine Stellgroesse mehr,
+3. Drehzahl **steigt nicht mehr** (Rate <= `SETTLE_RATE_RPM_PER_S`).
+
+**Die Schwelle lag zuerst bei 0.5, und das war ein Fehler.** Eine Turbine,
+deren Spule staerker bremst als der Dampf schieben kann, landet nicht
+unter der halben Zieldrehzahl, sondern bei 750–800 RPM — also genau
+zwischen Freigabeschwelle und Zielband. Sie blieb damit dauerhaft haengen.
+Gemessen am Anlagenmodell (90 Enderium-Spulenbloecke auf 80 Blaettern,
+Dampf im Ueberfluss, 600 s):
+
+| Regel | rpm | Flow | Spule | im Zielband |
+|---|---|---|---|---|
+| Freigabe unter 0.5 | 749 | 2000 | drin | 2,2 % |
+| Loeseschwelle vor v798 | 853 | 2000 | raus | 15,6 % |
+| Freigabe unter 0.95 | 875 | 2000 | drin | **20,9 %** |
+
+Im Betrieb sah das aus wie drei verschiedene Fehler: "Spule auch unter 900
+aktiv", "Flow dauerhaft 2000 obwohl RPM darueber" (auf dem Weg nach unten)
+und "das Einlernen findet keine Turbinen im Zielbereich" — das verlangt
+`|rpm-900| <= LEARN_TOLERANCE_RPM`, und die Turbine kam dort nie hin.
+
+**Dass 0.95 trotz der Naehe zum Zielband nicht flattert**, liegt an den
+Bedingungen 2 und 3. Im ausgelegten Betrieb steht der Durchfluss nicht am
+Anschlag, oder die Drehzahl liegt im Band — die Freigabe kann dort gar
+nicht greifen (nachgemessen: identische Drehzahl, identischer Durchfluss,
+EINE Kupplung, identischer Ausstoss). Und eine noch steigende Drehzahl
+heisst, dass die Spule den Hochlauf gerade nicht verhindert; unmittelbar
+nach einer Freigabe steigt sie, die Freigabe kann also nicht im Takt
+wiederkehren. Die Spitzendrehzahl blieb in jedem geprueften Fall unter 900.
+
+Die Rate kommt fuer Durchfluss- und Spulenentscheidung aus **einer**
+Quelle (`rt2_turbine.compute_rate`), damit sie nicht auseinanderdriften.
+
+Ohne bekannten Durchfluss wird nicht freigegeben: unbekannt ist kein
+Nachweis. Festgehalten in `rt2_coil_hold_limit_cycle_test.lua` und
+`rt2_coil_stall_release_test.lua`; den Verhaltensnachweis am echten
+Adapterstapel fuehrt `rt2_er_physics_scenarios_test.lua`.
 
 Ein Nebeneffekt: eine eingeschwungene Turbine wird gar nicht mehr
 beschrieben (`flow_decision.unchanged`), was je Takt einen
@@ -742,6 +777,7 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_regulation_behaviour_test.lua` | Einzelregelung je Turbine |
 | `rt2_settled_turbine_couples_test.lua` | Ruhezone und Kupplungsschwelle ueberlappen sich |
 | `rt2_coil_hold_limit_cycle_test.lua` | geschlossener Regelkreis MIT Spulenlast: kein Grenzzyklus, keine Ueberdrehzahl |
+| `rt2_coil_stall_release_test.lua` | Notfreigabe der Spule: haengt keine Turbine unter dem Zielband fest |
 | `rt2_er_physics_integration_test.lua` | ganzer Stapel gegen die Turbinenphysik aus dem Mod-Quelltext |
 | `rt2_er_physics_scenarios_test.lua` | Basic-Turbinen am Anschlag, knapper Dampf, MASTER-Vorgabe mit Slot-Rotation |
 | `rt2_calibration_precedence_test.lua` | Einlernen ueberstimmt die MASTER-Vorgabe -- gewollt, sichtbar, und SCRAM wirkt trotzdem |

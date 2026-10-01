@@ -30,11 +30,24 @@ M.RPM_BAND = 40          -- +/- RPM around target considered "on target"
 M.OVERSPEED_RPM = 1300
 M.COIL_ENGAGE_RPM = 900
 M.COIL_DISENGAGE_RPM = 850
--- Nur noch die Notbremse gegen einen Hochlauf, den die Spule selbst
--- verhindert (siehe compute_coil_decision): Rotor unter diesem Anteil der
--- Zieldrehzahl UND Dampf schon am Anschlag. Bewusst weit weg von der
--- Regelgegend, damit daraus kein zweites Flattern werden kann.
-M.COIL_STALL_RPM_FRACTION = 0.5
+-- Notfreigabe der Spule, wenn sie das Ziel NACHWEISLICH verhindert (siehe
+-- compute_coil_decision). Anteil der Zieldrehzahl, unter dem die Freigabe
+-- ueberhaupt in Frage kommt.
+--
+-- 0.5 war zu tief. Gemessen am quelltextnahen Anlagenmodell blieb eine
+-- Turbine, deren Spule staerker bremst als der Dampf schieben kann,
+-- dauerhaft bei 749 bzw. 790 RPM haengen -- Durchfluss am Anschlag, Spule
+-- drin, und damit NIE im Zielband. Das Einlernen kann sie dann nicht
+-- zaehlen (es verlangt |rpm-900| <= 15), und auf dem Schirm steht
+-- "Spule aktiv unter 900, Flow dauerhaft 2000".
+--
+-- Dass 0.95 trotz der Naehe zum Zielband nicht flattert, liegt an den
+-- beiden ANDEREN Bedingungen: der Durchfluss muss am Anschlag stehen (der
+-- Regler hat also keine Stellgroesse mehr -- im ausgelegten Betrieb ist er
+-- das nicht), und die Drehzahl darf nicht mehr steigen. Letzteres ist die
+-- Entprellung: unmittelbar nach einer Freigabe steigt sie, also kann die
+-- Freigabe nicht im Takt wiederkehren.
+M.COIL_STALL_RPM_FRACTION = 0.95
 -- A parked turbine keeps braking through its coil until it has practically
 -- stopped; below this it releases, because there is nothing left to harvest
 -- and an engaged coil on a standing rotor serves no purpose.
@@ -378,6 +391,31 @@ end
 -- voller TRIM_STEP herauskommt und der Schritt mit der Abweichung gegen
 -- null geht. Damit gibt es keine Kante zwischen "weit weg" und "fast da" --
 -- und genau diese Kante war das alte Sprungverhalten.
+-- Aenderungsrate der Drehzahl aus zwei Messpunkten, in RPM/s.
+--
+-- Bewusst EINE Stelle: Durchfluss- und Spulenentscheidung muessen aus
+-- derselben Rate rechnen, sonst driften sie auseinander, sobald eine der
+-- beiden ihre Herleitung aendert.
+--
+-- Fehlt der vorige Punkt, ist er zu alt oder liegt er in der Zukunft
+-- (Uhrsprung), gilt die Rate als unbekannt -- NIE als 0: "keine Rate" und
+-- "dreht konstant" sind verschiedene Aussagen.
+function M.compute_rate(input)
+  input = type(input) == "table" and input or {}
+  local rpm = tonumber(input.rpm)
+  local prev_rpm = tonumber(input.last_rpm)
+  local prev_rpm_ms = tonumber(input.last_rpm_ms)
+  local now_ms = tonumber(input.now_ms)
+  if rpm == nil or prev_rpm == nil or prev_rpm_ms == nil or now_ms == nil then
+    return nil
+  end
+  local dt_ms = now_ms - prev_rpm_ms
+  if dt_ms <= 0 or dt_ms > M.MAX_RATE_AGE_MS then
+    return nil
+  end
+  return (rpm - prev_rpm) * 1000 / dt_ms
+end
+
 function M.compute_flow_decision(input)
   -- Keine Drehzahlmessung -> kein Dampf. Ein fehlender Wert wie "0 RPM" zu
   -- behandeln ist die falsche Richtung: der Regler haelt die Turbine dann
@@ -432,16 +470,7 @@ function M.compute_flow_decision(input)
   -- Istwert. Unbekannt wird NIE als 0 behandelt: "keine Rate" und "dreht
   -- konstant" sind verschiedene Aussagen, und die zweite wuerde hier eine
   -- Vorhersage begruenden, fuer die es keine Grundlage gibt.
-  local rate_rpm_per_s = nil
-  local prev_rpm = tonumber(input.last_rpm)
-  local prev_rpm_ms = tonumber(input.last_rpm_ms)
-  local now_for_rate = tonumber(input.now_ms)
-  if prev_rpm and prev_rpm_ms and now_for_rate then
-    local dt_ms = now_for_rate - prev_rpm_ms
-    if dt_ms > 0 and dt_ms <= M.MAX_RATE_AGE_MS then
-      rate_rpm_per_s = (rpm - prev_rpm) * 1000 / dt_ms
-    end
-  end
+  local rate_rpm_per_s = M.compute_rate(input)
 
   local error_rpm = target_rpm - rpm
 
@@ -703,7 +732,14 @@ function M.compute_coil_decision(input)
     local max_flow = tonumber(input.max_flow) or M.MAX_FLOW
     local stall_rpm = target_rpm * (tonumber(input.coil_stall_rpm_fraction)
       or M.COIL_STALL_RPM_FRACTION)
-    if rpm <= stall_rpm and flow ~= nil and flow >= max_flow then
+    -- Steigt die Drehzahl noch, verhindert die Spule den Hochlauf gerade
+    -- NICHT -- dann gibt es nichts freizugeben. Das ist gleichzeitig die
+    -- Entprellung: unmittelbar nach einer Freigabe steigt sie, also kann
+    -- die Freigabe nicht im Takt wiederkehren.
+    local settle_rate = tonumber(input.settle_rate_rpm_per_s) or M.SETTLE_RATE_RPM_PER_S
+    local rate = tonumber(input.rate_rpm_per_s)
+    local rising = rate ~= nil and rate > settle_rate
+    if rpm <= stall_rpm and flow ~= nil and flow >= max_flow and not rising then
       return { engaged = false, reason = "RELEASE_STALLED" }
     end
     return { engaged = true, reason = "HOLD_ENGAGED" }

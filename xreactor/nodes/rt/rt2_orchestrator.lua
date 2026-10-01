@@ -634,6 +634,13 @@ function M.new(opts)
           -- Anschlag), und dafuer ist die eigene Stellgroesse die
           -- verlaessliche Angabe -- der Rueckmesswert kann fehlen.
           current_flow = flow_decision.flow,
+          -- Dieselbe Rate, aus der auch die Durchflussentscheidung
+          -- rechnet (rt2_turbine.compute_rate ist die einzige Quelle):
+          -- eine noch STEIGENDE Drehzahl heisst, dass die Spule den
+          -- Hochlauf gerade nicht verhindert.
+          rate_rpm_per_s = rt2_turbine.compute_rate({
+            rpm = t.rpm, last_rpm = ref_rpm, last_rpm_ms = ref_ms, now_ms = now_ms,
+          }),
         }),
         activate = rt2_turbine.compute_active_decision(t.active),
         rpm = t.rpm,

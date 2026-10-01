@@ -8,6 +8,7 @@ package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?
 local harness = require('support.er_rt_harness')
 local rt2_turbine = require('nodes.rt.rt2_turbine')
 local rt2_state = require('nodes.rt.rt2_state')
+local rt2_orchestrator = require('nodes.rt.rt2_orchestrator')
 
 local function assert_true(v, m) if not v then error(m or 'assert_true failed', 2) end end
 
@@ -73,7 +74,6 @@ end
 -- Rotationen hinweg.
 do
   local h = harness.new({ turbine_count = 6 })
-  local rt2_orchestrator = require('nodes.rt.rt2_orchestrator')
 
   local peak, overspeed_ticks, parked_seen = 0, 0, false
   local rotations = 3
@@ -196,12 +196,30 @@ do
   end
 
   local peak, overspeed = 0, 0
-  for _ = 1, 12000 do
+  local in_band_ticks, coil_toggles, energy_ticks = {}, {}, {}
+  local coil_last = {}
+  local energy_sum = {}
+  for i = 1, #builds do
+    in_band_ticks[i] = 0; coil_toggles[i] = 0; energy_ticks[i] = 0
+    energy_sum[i] = 0; coil_last[i] = false
+  end
+  local TICKS = 12000
+  for _ = 1, TICKS do
     h:step()
-    for _, n in ipairs(h.turbine_names) do
-      local rpm = h.plant.turbines[n]:rotor_speed()
+    for i, n in ipairs(h.turbine_names) do
+      local t = h.plant.turbines[n]
+      local rpm = t:rotor_speed()
       if rpm > peak then peak = rpm end
       if rpm > rt2_turbine.OVERSPEED_RPM then overspeed = overspeed + 1 end
+      if math.abs(rpm - rt2_turbine.FULL_TARGET_RPM) <= rt2_orchestrator.LEARN_TOLERANCE_RPM then
+        in_band_ticks[i] = in_band_ticks[i] + 1
+      end
+      if t.energy_generated_last_tick > 0 then energy_ticks[i] = energy_ticks[i] + 1 end
+      energy_sum[i] = energy_sum[i] + t.energy_generated_last_tick
+      if t.inductor_engaged ~= coil_last[i] then
+        coil_toggles[i] = coil_toggles[i] + 1
+        coil_last[i] = t.inductor_engaged
+      end
     end
   end
 
@@ -209,12 +227,48 @@ do
     'ungleiche Flotte: Ueberdrehzahl in %d Takten, Spitze %.0f RPM -- %s',
     overspeed, peak, h:describe()))
 
-  -- Die zu stark bebremste Turbine: Durchfluss am Anschlag, Spule drin.
+  -- Die zu stark bebremste Turbine (Ludicrite auf derselben Blattzahl):
+  -- ihre Spule bremst staerker, als der Dampf schieben kann. Sie fuehrt den
+  -- Durchfluss also am Anschlag -- und muss das Zielband trotzdem ERREICHEN,
+  -- sonst kann das Einlernen sie nie zaehlen (es verlangt
+  -- |rpm-900| <= LEARN_TOLERANCE_RPM).
+  --
+  -- Genau das war kaputt: mit der Spulenverriegelung aus v798 und einer
+  -- Notfreigabe erst unter 50 % der Zieldrehzahl blieb sie dauerhaft bei
+  -- rund 790 RPM haengen -- Spule drin, Flow 2000, nie im Band. Auf dem
+  -- Schirm sah das aus wie "Spule aktiv unter 900, Flow dauerhaft am
+  -- Anschlag, Einlernen findet keine Turbinen im Zielbereich".
   local strong_coil = h.plant.turbines[h.turbine_names[5]]
   assert_true(strong_coil.max_intake_rate == strong_coil.variant.max_permitted_flow, string.format(
     'eine Turbine unter dem Zielband muss den Durchfluss am Anschlag fahren, hat aber %d',
     strong_coil.max_intake_rate))
-  assert_true(strong_coil.inductor_engaged, 'und die Spule nicht abwerfen')
+  assert_true(in_band_ticks[5] > TICKS * 0.05, string.format(
+    'die zu stark bebremste Turbine muss das Zielband erreichen, war aber nur in %.1f %% der Takte darin'
+      .. ' -- sonst zaehlt das Einlernen sie nie', in_band_ticks[5] / TICKS * 100))
+  -- Sie liefert dabei weiter Energie. Nicht in JEDEM Takt -- waehrend einer
+  -- Freigabe ist die Spule draussen und der Ausstoss null. Bezahlt wird das
+  -- durch mehr Zeit nahe dem Wirkungsgradmaximum bei 900 RPM: im
+  -- Einzelturbinen-Vergleich stieg der Mittelwert dadurch von 39882 auf
+  -- 40847 FE/t, obwohl weniger Takte ueberhaupt liefern.
+  assert_true(energy_ticks[5] > TICKS * 0.7, string.format(
+    'die zu stark bebremste Turbine muss weiter Energie liefern (nur %.1f %% der Takte)',
+    energy_ticks[5] / TICKS * 100))
+  assert_true(energy_sum[5] / TICKS > 20000, string.format(
+    'und im Mittel nennenswert viel: %.0f FE/t', energy_sum[5] / TICKS))
+  -- Kein Flattern im Takt: die Notfreigabe darf ein langsames Pendeln
+  -- ergeben, nicht den Grenzzyklus, gegen den v798 gebaut wurde.
+  assert_true(coil_toggles[5] < TICKS / 100, string.format(
+    'die Spule darf nicht im Takt flattern (%d Umschaltungen in %d Takten)',
+    coil_toggles[5], TICKS))
+
+  -- Die ausgelegten Turbinen bleiben davon unberuehrt: dort steht der
+  -- Durchfluss nicht am Anschlag bzw. die Drehzahl nicht unter der
+  -- Freigabeschwelle, also kann die Notfreigabe gar nicht greifen.
+  for _, i in ipairs({ 1, 2, 3, 4 }) do
+    assert_true(coil_toggles[i] <= 3, string.format(
+      'Turbine %d: %d Spulen-Umschaltungen -- eine ausgelegte Turbine kuppelt einmal und bleibt',
+      i, coil_toggles[i]))
+  end
 
   -- Die Turbine ohne Spule bekommt keinen Dampf -- sie ist nicht bremsbar.
   local no_coil = h.plant.turbines[h.turbine_names[6]]
