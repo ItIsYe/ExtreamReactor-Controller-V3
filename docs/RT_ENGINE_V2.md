@@ -1064,7 +1064,19 @@ Was damit abgesichert ist:
   RT liest den Reaktor → MASTER relais ihn als `FUEL_STATUS` → FUEL kennt
   den Fuellstand.
 
-Beide Tests laufen in unter einer halben Sekunde.
+Dazu `plant_scenarios_test.lua` — die Betriebsfaelle, die von der Verbindung
+ZWISCHEN den Rollen abhaengen und die darum kein Modultest sehen kann. Alle
+drei verhalten sich heute richtig; der Test ist das Gelaender dafuer:
+
+| Lage | Erwartung |
+|---|---|
+| MASTER verschwindet (30 s, `peer_timeout_s` 20 s) | Node faellt nach AUTONOM und **laeuft weiter** |
+| MASTER kommt zurueck | Zustand MASTER, und **kein** Kommando wird abgelehnt |
+| Temperatur ueber Grenze | SAFE / EMERGENCY, Durchfluss 0, Staebe 100 |
+| Temperatur faellt wieder | kommt von selbst zurueck und regelt |
+| Turbine abgebaut | neu vermessen, `capacity_ready` wieder true, 68400 → 45600 |
+
+Alle drei Tests zusammen laufen in unter einer Sekunde.
 
 ### Die Reaktor-Kennung ist der heikle Punkt der Brennstoffkette
 
@@ -1206,6 +1218,7 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `plant_rt_master_chain_test.lua` | RT und MASTER echt gebootet, echtes Funknetz: Einlernen -> Kapazitaet -> Vorgabe -> Quittung |
 | `plant_fuel_chain_test.lua` | drei Rollen: RT liest den Reaktor, MASTER relais ihn, FUEL kennt den Fuellstand -- mit der Kennung aus RTs eigener Meldung |
 | `fuel_stale_reactor_id_test.lua` | eine Route mit unbekannter Kennung wird als solche gemeldet, nicht als Verbindungsproblem |
+| `plant_scenarios_test.lua` | MASTER-Ausfall und Rueckkehr, Sicherheitsausloesung und Erholung, abgebaute Turbine |
 | `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |
 | plus Modultests je `rt2_*`-Datei (`rt2_turbine`, `rt2_reactor`, `rt2_state_machine`, `rt2_orchestrator`, `rt2_engine`, `rt2_adapter`, `rt2_safety`, `rt2_projection`, `rt2_master_link`, `rt2_command_handler`) | |
 
