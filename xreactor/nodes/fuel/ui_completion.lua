@@ -28,7 +28,15 @@ function M.compute_view_state(model, devices, reserve, minimum)
   if payload.protocol_mismatch or (devices and devices.proto_mismatch) then
     return { code = "ERROR", severity = "ERROR", title = "Protokollfehler", detail = "MASTER/FUEL Protokoll passt nicht", action = "Versionen pruefen" }
   end
-  if #reactors == 0 then
+  -- "Keine Reaktoren konfiguriert" darf nur stehen, wenn wirklich keine
+  -- KONFIGURIERT sind. logistics.reactors ist der BETRIEBSzustand und bleibt
+  -- leer, solange die Logistik nicht laeuft -- daraus wurde auf dem Schirm
+  -- dauerhaft "Konfiguration erforderlich", obwohl eine fertige Route in
+  -- fuel_routes.lua stand. Genau das wurde mehrfach als "FUEL laedt die
+  -- eingestellten Ruten nicht" gemeldet.
+  local configured_count = tonumber(logistics.configured_reactor_count)
+  if configured_count == nil then configured_count = #reactors end
+  if configured_count == 0 then
     return { code = "CONFIG_REQUIRED", severity = "WARNING", title = "Konfiguration erforderlich", detail = "Keine Reaktoren konfiguriert", action = "ROUTER > REAKTOR EINLERNEN" }
   end
   if payload.routing_load_status and payload.routing_load_status.ok == false then
@@ -48,7 +56,21 @@ function M.compute_view_state(model, devices, reserve, minimum)
     return { code = "NO_FRESH_RT_DATA", severity = "WARNING", title = "MASTER/RT-Daten fehlen", detail = "MASTER nicht aktuell erreichbar", action = "MASTER- und RT-Verbindung pruefen" }
   end
   if logistics.enabled ~= true then
-    return { code = "LOGISTICS_DISABLED", severity = "LIMITED", title = "Logistik deaktiviert", detail = "logistics.enabled = false", action = "Nur aktivieren, wenn Hardware bereit ist" }
+    -- Zwangsweise abgeschaltet ist etwas anderes als selbst abgeschaltet.
+    -- Wer hier "logistics.enabled = false" liest, schaltet den Schalter ein
+    -- -- und bekommt ihn beim naechsten Boot wieder aus, weil die Ursache
+    -- woanders liegt. Dann sieht es aus, als halte der Schalter nicht.
+    if logistics.disabled_reason == "EXPORT_CHEST_MISSING" then
+      return { code = "NO_EXPORT_CHEST", severity = "WARNING",
+        title = "Uebergabepunkt fehlt",
+        detail = "Die Route ist konfiguriert, aber ohne gemeinsamen Uebergabepunkt"
+          .. " (export_chest) ist keine Lieferung moeglich -- die Logistik bleibt"
+          .. " deshalb aus, auch wenn der Schalter an ist",
+        action = "ROUTER > UEBERGABEPUNKT WAEHLEN" }
+    end
+    return { code = "LOGISTICS_DISABLED", severity = "LIMITED", title = "Logistik deaktiviert",
+      detail = string.format("%d Route(n) konfiguriert, Schalter steht auf AUS", configured_count),
+      action = "ROUTER > LOGISTIK EINSCHALTEN (nur wenn Hardware bereit ist)" }
   end
   if logistics.bridge == nil then
     return { code = "NO_ME_BRIDGE", severity = "WARNING", title = "ME Bridge fehlt", detail = "Keine betriebsbereite ME Bridge erkannt", action = "ME Bridge/Wired Modem pruefen" }

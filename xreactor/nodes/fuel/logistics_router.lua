@@ -1293,6 +1293,17 @@ function M:get_summary()
   end
   return {
     enabled        = cfg.enabled == true,
+    -- Warum die Logistik aus ist, falls NICHT der Betreiber sie
+    -- abgeschaltet hat (config_normalizer setzt es). Ohne dieses Feld
+    -- meldete der Schirm "logistics.enabled = false" auch dann, wenn der
+    -- fehlende Uebergabepunkt sie zwangsweise abgeschaltet hat -- und der
+    -- Betreiber suchte den Fehler beim Schalter.
+    disabled_reason = cfg.disabled_reason,
+    -- Was KONFIGURIERT ist, unabhaengig davon, ob die Logistik laeuft.
+    -- reactors unten ist der BETRIEBSzustand und bleibt leer, solange
+    -- nichts laeuft -- daraus wurde auf dem Schirm "Keine Reaktoren
+    -- konfiguriert", obwohl welche konfiguriert waren.
+    configured_reactor_count = #(cfg.reactors or {}),
     -- Warum in diesem Zyklus nichts geliefert wurde (nil = es lief).
     supply_block   = s.supply_block,
     bridge         = s.bridge and s.bridge.name or nil,

@@ -185,8 +185,20 @@ function M.normalize(config_values, defaults, add_warning, utils)
       disabled_entries, #lg.reactors))
   end
 
+  -- WARUM die Logistik aus ist, nicht nur DASS sie aus ist.
+  --
+  -- Das ist der Unterschied zwischen "der Betreiber hat abgeschaltet" und
+  -- "wir haben ihm abgeschaltet". Auf dem Schirm stand bisher in BEIDEN
+  -- Faellen "Logistik deaktiviert -- logistics.enabled = false". Wer den
+  -- Schalter dann einschaltet, bekommt ihn beim naechsten Boot wieder
+  -- ausgeschaltet (genau hier), und es sieht aus, als haelte der Schalter
+  -- nicht. Das ist eine der Lagen, in denen "FUEL laedt die eingestellten
+  -- Ruten nicht" gemeldet wurde: die Ruten WAREN geladen, sie waren nur
+  -- wirkungslos, und der Grund stand ausschliesslich im Log.
+  lg.disabled_reason = nil
   if global_block and lg.enabled then
     lg.enabled = false
+    lg.disabled_reason = "EXPORT_CHEST_MISSING"
     add_warning("logistics disabled: der gemeinsame Uebergabepunkt (logistics.export_chest)"
       .. " fehlt -- ohne ihn ist ueberhaupt keine Lieferung moeglich")
   elseif lg.enabled == false and #lg.reactors > 0 then

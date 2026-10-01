@@ -959,6 +959,61 @@ beim Start und fuer den Update-Quiesce, nicht fuer die laufende Regelung.
 Wirksam bleiben `safety`, `comms`, `channels`, `heartbeat_interval`,
 `status_interval`, `scan_interval`, `monitor_*` und `reactors`/`turbines`.
 
+### Boot-Tests: die Naht, die kein Modultest sieht
+
+Die Modultests dieses Projekts pruefen Funktionen. Was im Betrieb kaputtgeht,
+sind fast immer die **Naehte** — und die liegen in `main.lua`, einem
+Boot-Skript, das sich nicht `require()`n laesst:
+
+- eine Config-Datei, die beim Booten geladen, danach nie wieder gelesen wird,
+- ein Default, den `migrate_config()` persistiert, sodass ein geaenderter
+  Default nie ankommt,
+- ein Payload-Feld, das die eine Seite umbenennt und die andere noch unter
+  dem alten Namen liest,
+- eine Eigenschaft, die nur als **Nebenwirkung** einer Umsetzung bestand und
+  beim Optimieren mitverschwindet.
+
+`tests/support/cc_node_boot.lua` ist die wiederverwendbare CC:Tweaked-Umgebung
+dafuer: virtuelle Platte (auch fuer `dofile`, weil mehrere Nodes ihre Configs
+so lesen), Peripherie mit abgeleiteter Methodenliste, Modem mit
+mitgeschnittenem Funkverkehr, `textutils`, abgegriffene Services und
+abgegriffenes `utils.log()`. Damit bootet eine echte Rolle im Test.
+
+Grenze, ausdruecklich: in **einem** Lua-Prozess laesst sich nur **eine** Node
+booten — die Rollen teilen `_G.__xreactor_loaded` und modulglobalen Zustand
+(z.B. den Faehigkeits-Cache in `adapters/turbine.lua`).
+
+### FUEL: drei stille Wege, eine fertige Route unwirksam zu machen
+
+Dreimal gemeldet als „FUEL laedt die eingestellten Ruten nicht". Die Routen
+**wurden** jedes Mal geladen. Der Boot-Test
+(`fuel_boot_routes_test.lua`) zeigt vier Lagen, die der Betreiber nicht
+unterscheiden konnte, weil alle dasselbe ergaben — eine Anlage, die nichts tut:
+
+| Lage | Boot-Meldung | Folge |
+|---|---|---|
+| alles gesetzt, Schalter AUS | `no fuel will be exported` | geladen, wirkungslos |
+| alles gesetzt, Schalter AN | — | laeuft |
+| `export_chest` fehlt | `logistics disabled` | Logistik **zwangsweise** aus |
+| `reactor_id` fehlt | `ohne reactor_id ... stillgelegt` | nur dieser Eintrag aus |
+
+Der Grund stand jedes Mal im Log. **Im Log liest ihn niemand.** Auf dem
+Schirm stand dagegen:
+
+- bei einer konfigurierten, nur gerade nicht laufenden Route:
+  **„Keine Reaktoren konfiguriert"** — wortwoertlich das gemeldete Symptom.
+  Ursache: `ui_completion` zaehlte `logistics.reactors`, und das ist der
+  BETRIEBSzustand, der leer bleibt, solange nichts laeuft. Jetzt zaehlt es
+  `configured_reactor_count` aus der Config.
+- bei fehlendem `export_chest`: **„logistics.enabled = false"** — als haette
+  der Betreiber selbst abgeschaltet. Er schaltet den Schalter ein, der
+  naechste Boot schaltet ihn wieder aus (der Normalizer erzwingt es), und es
+  sieht aus, als halte der Schalter nicht. Jetzt sagt der Schirm
+  **„Uebergabepunkt fehlt"** und fuehrt zur richtigen Stelle.
+
+`logistics.enabled` bleibt ein reiner Sicherheitsschalter mit Default `false`
+— das ist Absicht und aendert sich nicht. Sichtbar ist jetzt, was er bewirkt.
+
 ## Dateien unter `/xreactor_config/`
 
 | Datei | Inhalt |
@@ -1051,6 +1106,8 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt_master_health_single_threshold_test.lua` | Health-Check und Zustandsmaschine benutzen EINE Schwelle fuer den MASTER |
 | `rt_clock_rollback_guards_test.lua` | ein Uhr-Ruecksprung friert weder die MASTER-Verbindung noch den Schirm ein |
 | `rt2_setpoints_on_reconnect_test.lua` | die erste Leistungsvorgabe nach einem Reconnect wird angenommen, SAFE bleibt gesperrt |
+| `rt2_uneven_control_rods_test.lua` | ungleich stehende Staebe gleichen sich wieder aus -- die Eigenschaft, die v808 wegoptimiert hatte |
+| `fuel_boot_routes_test.lua` | FUEL bootet mit einer echten Routen-Datei: die vier Lagen, in denen eine fertige Route unwirksam bleibt, und dass der Schirm sie unterscheidet |
 | `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |
 | plus Modultests je `rt2_*`-Datei (`rt2_turbine`, `rt2_reactor`, `rt2_state_machine`, `rt2_orchestrator`, `rt2_engine`, `rt2_adapter`, `rt2_safety`, `rt2_projection`, `rt2_master_link`, `rt2_command_handler`) | |
 
