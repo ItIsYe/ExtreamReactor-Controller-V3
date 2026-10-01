@@ -1092,6 +1092,23 @@ Darum nimmt `plant_fuel_chain_test.lua` die Kennung nicht aus einer
 Konstante, sondern aus dem, was RT wirklich sendet — genau wie das Einlernen
 am Router-Schirm.
 
+Und der Schirm sagt jetzt, welche der zwei Lagen vorliegt. Bisher bekamen
+beide dieselbe Meldung („Reaktordaten fehlen — reactor_id und RT-Status
+pruefen"), obwohl sie **verschiedene Handlungen** brauchen:
+
+| Lage | Schirm | Handlung |
+|---|---|---|
+| Netz meldet Reaktoren, aber nicht den konfigurierten | **Kennung unbekannt** (`REACTOR_ID_UNKNOWN`) | Route neu einlernen |
+| Netz meldet gar keine Reaktoren | **Reaktordaten fehlen** (`DATA_MISSING`) | RT-/MASTER-Verbindung pruefen |
+
+Unterschieden wird an `logistics.network_reactor_count`
+(`fuel_status_network.known_reactor_count`) — wie viele Reaktoren das Netz
+ueberhaupt meldet, unabhaengig von den konfigurierten. Die kurze Kennung, die
+`fuel_relay` als Alias mitliefert, zaehlt dabei nicht doppelt.
+
+Der Unterschied ist praktisch der ganze Punkt: bei einer falschen Kennung ist
+jede Minute an RT und MASTER verlorene Zeit — die liefern ja.
+
 ## Dateien unter `/xreactor_config/`
 
 | Datei | Inhalt |
@@ -1188,6 +1205,7 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `fuel_boot_routes_test.lua` | FUEL bootet mit einer echten Routen-Datei: die vier Lagen, in denen eine fertige Route unwirksam bleibt, und dass der Schirm sie unterscheidet |
 | `plant_rt_master_chain_test.lua` | RT und MASTER echt gebootet, echtes Funknetz: Einlernen -> Kapazitaet -> Vorgabe -> Quittung |
 | `plant_fuel_chain_test.lua` | drei Rollen: RT liest den Reaktor, MASTER relais ihn, FUEL kennt den Fuellstand -- mit der Kennung aus RTs eigener Meldung |
+| `fuel_stale_reactor_id_test.lua` | eine Route mit unbekannter Kennung wird als solche gemeldet, nicht als Verbindungsproblem |
 | `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |
 | plus Modultests je `rt2_*`-Datei (`rt2_turbine`, `rt2_reactor`, `rt2_state_machine`, `rt2_orchestrator`, `rt2_engine`, `rt2_adapter`, `rt2_safety`, `rt2_projection`, `rt2_master_link`, `rt2_command_handler`) | |
 

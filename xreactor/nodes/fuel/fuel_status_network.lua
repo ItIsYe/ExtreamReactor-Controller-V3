@@ -130,6 +130,37 @@ local function remove_direct(cache, global_id)
   end
 end
 
+-- Wie viele Reaktoren das NETZ ueberhaupt kennt -- unabhaengig davon, welche
+-- in fuel_routes.lua stehen.
+--
+-- Das ist der Unterschied zwischen zwei Lagen, die auf dem Schirm bisher
+-- gleich aussahen und VERSCHIEDENE Handlungen brauchen:
+--
+--   Netz kennt Reaktoren, aber nicht den konfigurierten -> die reactor_id in
+--     der Route passt nicht (von Hand getippt, oder gelernt bevor das
+--     Multiblock neu gebaut wurde). Abhilfe: Route neu einlernen.
+--   Netz kennt gar keine -> es kommen keine Daten an. Abhilfe: RT/MASTER
+--     und Funk pruefen.
+--
+-- Gezaehlt werden GLOBALE Kennungen, damit ein Reaktor, der unter seiner
+-- kurzen Kennung zusaetzlich als Alias liegt, nicht doppelt zaehlt.
+function M.known_reactor_count(cache)
+  if type(cache) ~= "table" then return 0 end
+  local seen = {}
+  for _, bucket_name in ipairs({ "master_relay", "direct_heard" }) do
+    local bucket = cache[bucket_name]
+    if type(bucket) == "table" then
+      for key, entry in pairs(bucket) do
+        local id = (type(entry) == "table" and entry.global_reactor_id) or key
+        if id ~= nil then seen[tostring(id)] = true end
+      end
+    end
+  end
+  local count = 0
+  for _ in pairs(seen) do count = count + 1 end
+  return count
+end
+
 function M.prune(cache, now)
   now = tonumber(now) or os.epoch("utc")
   for id, entry in pairs(cache.master_relay or {}) do

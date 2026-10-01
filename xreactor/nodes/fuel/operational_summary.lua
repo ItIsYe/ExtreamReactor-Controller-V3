@@ -132,6 +132,18 @@ function M.enrich(summary, opts)
 
   local now = tonumber(opts.now_ms) or (os.epoch and os.epoch("utc") or 0)
   local route_ctx = route_context(opts.rs_router, opts.valve_status)
+  -- Wie viele Reaktoren das NETZ kennt. Damit laesst sich "die konfigurierte
+  -- Kennung gibt es nicht" von "es kommen gar keine Daten" unterscheiden --
+  -- zwei Lagen, die auf dem Schirm gleich aussahen und verschiedene
+  -- Handlungen brauchen (siehe fuel_status_network.known_reactor_count).
+  local network_reactors = 0
+  if type(opts.fuel_status) == "table" then
+    local ok_count, value = pcall(function()
+      return require("nodes.fuel.fuel_status_network").known_reactor_count(opts.fuel_status)
+    end)
+    if ok_count and type(value) == "number" then network_reactors = value end
+  end
+  summary.network_reactor_count = network_reactors
   local counts = { configured = 0, ready = 0, blocked = 0, stale = 0, missing = 0 }
   local fuel_counts = { fresh = 0, stale = 0, missing = 0 }
 

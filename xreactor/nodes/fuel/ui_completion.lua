@@ -102,7 +102,30 @@ function M.compute_view_state(model, devices, reserve, minimum)
   end
   local missing = affected(reactors, function(r) return r.fuel_data_state == "MISSING" end)
   if #missing > 0 then
-    return { code = "DATA_MISSING", severity = "WARNING", title = "Reaktordaten fehlen", detail = table.concat(missing, ", "), action = "reactor_id und RT-Status pruefen" }
+    -- Zwei verschiedene Lagen, die bisher dieselbe Meldung bekamen -- und
+    -- VERSCHIEDENE Handlungen brauchen.
+    --
+    -- Kennt das Netz ueberhaupt Reaktoren, nur den konfigurierten nicht, dann
+    -- passt die reactor_id in fuel_routes.lua nicht: von Hand getippt, oder
+    -- gelernt bevor das Multiblock neu gebaut wurde (die Kennung haengt an
+    -- der Reaktor-Identitaet, siehe core/reactor_identity.lua). Dann hilft
+    -- nur neu einlernen -- an RT und MASTER zu pruefen ist dort verlorene
+    -- Zeit, denn die liefern ja.
+    --
+    -- Kennt das Netz GAR keine Reaktoren, kommen wirklich keine Daten an, und
+    -- dann ist die Verbindung die richtige Spur.
+    local known = tonumber(logistics.network_reactor_count)
+    if known and known > 0 then
+      return { code = "REACTOR_ID_UNKNOWN", severity = "WARNING",
+        title = "Kennung unbekannt",
+        detail = string.format(
+          "%s -- das Netz meldet %d Reaktor(en), aber keinen mit dieser Kennung",
+          table.concat(missing, ", "), known),
+        action = "ROUTER > REAKTOR NEU EINLERNEN" }
+    end
+    return { code = "DATA_MISSING", severity = "WARNING", title = "Reaktordaten fehlen",
+      detail = table.concat(missing, ", ") .. " -- das Netz meldet gar keine Reaktoren",
+      action = "RT-/MASTER-Verbindung pruefen" }
   end
   local stale = affected(reactors, function(r) return r.fuel_data_state == "STALE" end)
   if #stale > 0 then
