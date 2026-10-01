@@ -477,13 +477,37 @@ Vielfaches groesser als die Turbine). Modelliert ist, was der Regler von
 ihm sieht: Dampfmenge, Produktion als Funktion der Stabstellung, Verbrauch
 durch die Flotte, Brennstoff und Temperatur.
 
-**Auslegungshinweis, der dabei herauskam:** `rt2_reactor.ROD_MIN = 70`
-ist eine bewusste Leistungsgrenze. Extreme Reactors senkt die Strahlung
+**Staebe am Anschlag ist der GESUNDE Zustand.** `rt2_reactor.ROD_MIN = 70`
+ist eine bewusste Leistungsgrenze; Extreme Reactors senkt die Strahlung
 proportional zum Stabeinschub, also sind rund 30 % des Nennwerts nutzbar.
-Ein Reaktor, dessen 30 % den Dampfbedarf der Flotte nicht decken, haengt
-dauerhaft bei Staeben 70 mit leerem Tank -- das ist eine Auslegungsfrage,
-kein Reglerfehler, und der Knoten sagt es auch so ("fahren VOLLEN
-Durchfluss und erreichen trotzdem keine 900 RPM -- Fehlt Dampf?").
+Bei einem ausreichend grossen Reaktor deckt das den Flottenbedarf
+muehelos -- und dann passiert folgendes:
+
+`getHotFluidAmountMax` ist 1000 mB je Kuehlmittel-Port
+(`ReactorVariant.setPartFluidCapacity`), nicht die 200000 Obergrenze. Die
+Tankgroesse liegt damit in der Groessenordnung EINES Takts Flottenbedarf.
+Weil in jedem Takt abgezogen wird, bleibt der gemessene Fuellstand
+dauerhaft unter dem Sollwert von 70 % -- der Stabregler fordert also fuer
+immer mehr Leistung und steht am Anschlag. Das sieht nach einem
+festgefahrenen Regler aus, ist aber richtig: die Turbinen bekommen jeden
+mB, den sie anfordern, nichts schwingt, und der Reaktor laeuft an seiner
+erlaubten Obergrenze. Festgehalten in
+`rt2_er_physics_scenarios_test.lua`, damit es niemand "repariert".
+
+Der umgekehrte Fall -- ein Reaktor, dessen 30 % den Bedarf NICHT decken --
+haengt ebenfalls bei Staeben 70, aber mit leerem Tank und einer Flotte
+unter dem Zielband. Das ist eine Auslegungsfrage, kein Reglerfehler, und
+der Knoten sagt es auch so ("fahren VOLLEN Durchfluss und erreichen
+trotzdem keine 900 RPM -- Fehlt Dampf?").
+
+**Der unbelastete Rotor ist der gefaehrlichste Zustand.** Aus denselben
+Formeln: ohne eingehaengte Spule haelt ein Rotor mit 80 Blaettern die
+Zieldrehzahl schon bei rund **3 mB/t**, und bei 10 mB/t -- einem einzigen
+Feintrimm-Schritt -- liegt sein Gleichgewicht ueber **4000 RPM**. Mit
+Spule braucht dieselbe Drehzahl 2000 mB/t. Deshalb ist "Spule drin" die
+Grundstellung in jedem Fehlerfall (unlesbare Drehzahl, geworfener
+Peripherieaufruf, geparkte aber noch drehende Turbine), und deshalb darf
+eine einmal gekuppelte Turbine nicht wieder aushaengen.
 
 ### Einmal gekuppelt bleibt gekuppelt
 

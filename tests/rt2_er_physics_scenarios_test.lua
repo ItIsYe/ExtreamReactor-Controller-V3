@@ -128,4 +128,163 @@ do
     running, parked))
 end
 
+-- ── 3. Ueberdimensionierter Reaktor: Staebe am Anschlag ist GESUND ────────
+--
+-- Der Normalfall einer gewachsenen Anlage: der Reaktor kann bei Staeben 70
+-- (rt2_reactor.ROD_MIN, die bewusste Leistungsgrenze) ein Mehrfaches des
+-- Flottenbedarfs liefern. Dazu ein realistisch KLEINER Dampftank --
+-- getHotFluidAmountMax ist 1000 mB je Kuehlmittel-Port
+-- (ReactorVariant.setPartFluidCapacity), nicht die 200000 Obergrenze, also
+-- liegt die Tankgroesse in der Groessenordnung EINES Takts Flottenbedarf.
+--
+-- Folge: der gemessene Fuellstand bleibt dauerhaft unter dem Sollwert von
+-- 70 %, weil in jedem Takt abgezogen wird -- der Stabregler fordert also
+-- fuer immer mehr Leistung und steht am Anschlag. Das sieht nach einem
+-- festgefahrenen Regler aus, ist aber der gesunde Zustand: die Turbinen
+-- bekommen jeden mB, den sie anfordern, und nichts schwingt. Dieser Test
+-- haelt das fest, damit es niemand "repariert".
+do
+  local h = harness.new({ turbine_count = 6, reactor_headroom = 4.0, steam_capacity = 20000 })
+  h:run(900)
+
+  local starved = 0
+  for _, n in ipairs(h.turbine_names) do
+    local t = h.plant.turbines[n]
+    if t.fluid_consumed_last_tick < t.max_intake_rate then starved = starved + 1 end
+    assert_true(math.abs(t:rotor_speed() - rt2_turbine.FULL_TARGET_RPM) <= rt2_turbine.RPM_BAND,
+      string.format('%s steht bei %.0f RPM statt im Band um %d',
+        n, t:rotor_speed(), rt2_turbine.FULL_TARGET_RPM))
+    assert_true(t.energy_generated_last_tick > 0, n .. ' liefert keine Energie')
+  end
+  assert_true(starved == 0, string.format(
+    '%d Turbinen bekommen weniger Dampf als angefordert, obwohl der Reaktor ein Mehrfaches liefern kann',
+    starved))
+  assert_true(h.plant.reactor.rods == 70, string.format(
+    'bei Dampfueberschuss muss der Stabregler am Anschlag stehen (erwartet 70, ist %d)',
+    h.plant.reactor.rods))
+end
+
+-- ── 4. Ungleiche Flotte ──────────────────────────────────────────────────
+--
+-- In einer gewachsenen Anlage sind die Turbinen selten identisch, und das
+-- Verhaeltnis Spule zu Blaettern entscheidet, wieviel Gegenmoment je
+-- Drehzahl zur Verfuegung steht. Zwei Grenzfaelle gehoeren ausdruecklich
+-- dazu:
+--
+--   * eine Turbine, deren Spule STAERKER bremst, als der Dampf schieben
+--     kann (Ludicrite auf derselben Blattzahl) -- sie bleibt bei vollem
+--     Durchfluss unter dem Zielband. Richtig ist: Durchfluss am Anschlag,
+--     Spule bleibt drin, und das Einlernen zaehlt sie nicht mit.
+--   * eine Turbine OHNE Spule -- sie kann gar nicht gebremst werden.
+--     Richtig ist: Durchfluss 0, denn jeder Dampf treibt sie unbegrenzt
+--     hoch (ein unbelasteter Rotor haelt die Zieldrehzahl schon bei rund
+--     3 mB/t; bei 10 mB/t liegt sein Gleichgewicht ueber 4000 RPM).
+do
+  local ER = require('support.er_plant_model')
+  local builds = {
+    { blades = 80, shaft_blocks = 20, coil_blocks = 74, coil = 'enderium' },
+    { blades = 80, shaft_blocks = 20, coil_blocks = 37, coil = 'enderium' },
+    { blades = 32, shaft_blocks = 8,  coil_blocks = 30, coil = 'enderium' },
+    { blades = 32, shaft_blocks = 8,  coil_blocks = 10, coil = 'gold' },
+    { blades = 80, shaft_blocks = 20, coil_blocks = 74, coil = 'ludicrite' },
+    { blades = 80, shaft_blocks = 20, coil_blocks = 0,  coil = 'iron' },
+  }
+  local h = harness.new({ turbine_count = #builds, reactor_headroom = 4.0, steam_capacity = 20000 })
+  for i, b in ipairs(builds) do
+    b.variant = 'reinforced'
+    h.plant.turbines[h.turbine_names[i]] = ER.new_turbine(b)
+  end
+
+  local peak, overspeed = 0, 0
+  for _ = 1, 12000 do
+    h:step()
+    for _, n in ipairs(h.turbine_names) do
+      local rpm = h.plant.turbines[n]:rotor_speed()
+      if rpm > peak then peak = rpm end
+      if rpm > rt2_turbine.OVERSPEED_RPM then overspeed = overspeed + 1 end
+    end
+  end
+
+  assert_true(overspeed == 0, string.format(
+    'ungleiche Flotte: Ueberdrehzahl in %d Takten, Spitze %.0f RPM -- %s',
+    overspeed, peak, h:describe()))
+
+  -- Die zu stark bebremste Turbine: Durchfluss am Anschlag, Spule drin.
+  local strong_coil = h.plant.turbines[h.turbine_names[5]]
+  assert_true(strong_coil.max_intake_rate == strong_coil.variant.max_permitted_flow, string.format(
+    'eine Turbine unter dem Zielband muss den Durchfluss am Anschlag fahren, hat aber %d',
+    strong_coil.max_intake_rate))
+  assert_true(strong_coil.inductor_engaged, 'und die Spule nicht abwerfen')
+
+  -- Die Turbine ohne Spule bekommt keinen Dampf -- sie ist nicht bremsbar.
+  local no_coil = h.plant.turbines[h.turbine_names[6]]
+  assert_true(no_coil.max_intake_rate == 0, string.format(
+    'eine Turbine ohne Spule darf keinen Dampf bekommen, hat aber %d mB/t',
+    no_coil.max_intake_rate))
+end
+
+-- ── 5. Eine Turbine mit zeitweise unlesbaren Messwerten ──────────────────
+--
+-- In CC:Tweaked ganz normal: ein Chunk laedt nach, der Multiblock meldet
+-- kurz eine verkuerzte Methodenliste, ein Aufruf wirft. Vier Stoerungsarten
+-- nacheinander auf EINER Turbine, dazwischen jeweils Erholung. Verlangt
+-- wird: kein Absturz, keine Ueberdrehzahl irgendwo in der Flotte, die
+-- gestoerte Turbine faellt in den sicheren Zustand (Dampf aus, Spule
+-- bleibt drin -- sie ist die Bremse) und erholt sich danach wieder.
+do
+  local h = harness.new({ turbine_count = 4, reactor_headroom = 4.0, steam_capacity = 20000 })
+  local victim = h.turbine_names[2]
+  local mode = 'ok'
+  local base_call = _G.peripheral.call
+  _G.peripheral.call = function(name, method, ...)
+    if name == victim then
+      if mode == 'no_rpm' and method == 'getRotorSpeed' then return nil end
+      if mode == 'no_flow' and method == 'getFluidFlowRateMax' then return nil end
+      if mode == 'throws' and (method == 'getRotorSpeed' or method == 'setFluidFlowRateMax') then
+        error('peripheral detached', 0)
+      end
+      -- Der Schreibvorgang wird quittiert, aber nicht ausgefuehrt.
+      if mode == 'coil_write_lost' and method == 'setInductorEngaged' then return true end
+    end
+    return base_call(name, method, ...)
+  end
+
+  local peak, overspeed, crashes = 0, 0, 0
+  local function phase(m, seconds)
+    mode = m
+    for _ = 1, seconds * 10 do
+      local ok = pcall(function() h:step() end)
+      if not ok then crashes = crashes + 1 end
+      for _, n in ipairs(h.turbine_names) do
+        local rpm = h.plant.turbines[n]:rotor_speed()
+        if rpm > peak then peak = rpm end
+        if rpm > rt2_turbine.OVERSPEED_RPM then overspeed = overspeed + 1 end
+      end
+    end
+  end
+
+  phase('ok', 400)
+  for _, fault in ipairs({ 'no_rpm', 'no_flow', 'throws', 'coil_write_lost' }) do
+    phase(fault, 60)
+    local v = h.plant.turbines[victim]
+    assert_true(v.inductor_engaged, string.format(
+      'Stoerung "%s": die Spule muss eingehaengt bleiben -- sie ist die Bremse', fault))
+    if fault == 'no_rpm' then
+      assert_true(v.max_intake_rate == 0, string.format(
+        'Stoerung "%s": ohne Drehzahlmessung muss der Dampf abgestellt werden, steht aber auf %d',
+        fault, v.max_intake_rate))
+    end
+    phase('ok', 150)
+  end
+  _G.peripheral.call = base_call
+
+  assert_true(crashes == 0, string.format('%d Reglertakte sind an der gestoerten Turbine gescheitert', crashes))
+  assert_true(overspeed == 0, string.format(
+    'Ueberdrehzahl in %d Takten waehrend der Stoerungen, Spitze %.0f RPM -- %s',
+    overspeed, peak, h:describe()))
+  local v = h.plant.turbines[victim]
+  assert_true(v.energy_generated_last_tick > 0,
+    'die gestoerte Turbine muss sich nach dem letzten Aussetzer wieder erholen -- ' .. h:describe())
+end
+
 print('rt2_er_physics_scenarios_test.lua: ok')
