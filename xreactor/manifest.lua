@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 801,
-  manifest_id = "manifest-v801",
+  manifest_version = 802,
+  manifest_id = "manifest-v802",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "874a7940", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "7f549f88", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 3137, hash = "7fe91602", always = true },
@@ -23,7 +23,7 @@ return {
   { path = "adapters/monitor.lua", size_bytes = 9049, hash = "28eda995", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "52ca674c", always = true },
   { path = "core/update_handshake.lua", size_bytes = 4701, hash = "94353b43", always = true },
-  { path = "core/comms.lua", size_bytes = 26782, hash = "37e0e8f1" },
+  { path = "core/comms.lua", size_bytes = 27851, hash = "f37ec63d" },
   { path = "core/health.lua", size_bytes = 2169, hash = "552a7e16" },
   { path = "core/logger.lua", size_bytes = 31349, hash = "7c76bc52" },
   { path = "core/me_bridge_compat.lua", size_bytes = 6009, hash = "03240bb9", required_for={"FUEL","REPROCESSING"} },
@@ -65,7 +65,7 @@ return {
 
   roles = {
     master = {
-    { path = "master/config_edits.lua", size_bytes = 8693, hash = "f6e43664", required_for={"MASTER"} },
+    { path = "master/config_edits.lua", size_bytes = 10709, hash = "2410e737", required_for={"MASTER"} },
     { path = "master/context.lua", size_bytes = 5445, hash = "5907d199", required_for={"MASTER"} },
     { path = "master/loop.lua", size_bytes = 4318, hash = "2b30d64b", required_for={"MASTER"} },
     { path = "core/alert_rules.lua", size_bytes = 20372, hash = "07be024b", required_for={"MASTER"} },

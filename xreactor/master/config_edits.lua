@@ -62,11 +62,19 @@ function M.cycle_target(edits_state, key, nodes, constants)
   return st.target
 end
 
--- Sendet einen neuen Wert an die aktuell ausgewaehlten Ziele (ALLE Nodes
--- der Rolle, oder genau der ausgewaehlte Node, falls er noch existiert und
--- weiterhin zur erwarteten Rolle gehoert -- sonst Fallback auf ALLE mit
--- Warnung, damit ein verschwundener/umbenannter Node keinen "toten"
--- Editor hinterlaesst). opts = { nodes=, comms=, constants=, log= }.
+-- Sendet einen neuen Wert an die aktuell ausgewaehlten Ziele: ALLE Nodes
+-- der Rolle nur dann, wenn "ALL" auch ausdruecklich ausgewaehlt ist --
+-- sonst genau der ausgewaehlte Node.
+--
+-- Ist der ausgewaehlte Node verschwunden, umbenannt oder hat er nicht mehr
+-- die erwartete Rolle, schlaegt der Versand mit einer Begruendung FEHL.
+-- Vorher fiel er in diesem Fall auf ALLE zurueck (mit Warnung im
+-- Protokoll, aber ohne Rueckfrage): eine fuer genau einen Node gedachte
+-- Konfigurationsaenderung erreichte damit jeden Node derselben Rolle.
+-- Gegenprobe: Ziel "FUEL-gone" bei vorhandenen FUEL-a/b/c -> alle drei
+-- bekamen den Reservebefehl. Ein "toter" Editor entsteht dadurch nicht:
+-- cycle_target() waehlt weiter, und der Fehlertext benennt das Problem.
+-- opts = { nodes=, comms=, constants=, log= }.
 function M.send_edit(edits_state, key, value, opts)
   local def = M.SETTINGS[key]
   if not def then return false, "unbekannte Einstellung: " .. tostring(key) end
@@ -79,10 +87,11 @@ function M.send_edit(edits_state, key, value, opts)
   elseif opts.nodes[st.target] and opts.nodes[st.target].role == role then
     target_ids = { st.target }
   else
-    target_ids = M.available_targets(opts.nodes, role)
     if opts.log then
-      opts.log(("Config-Edit-Ziel %s (%s) nicht mehr verfuegbar -- sende an ALLE"):format(tostring(st.target), key), "WARN")
+      opts.log(("Config-Edit-Ziel %s (%s) nicht mehr verfuegbar -- nichts gesendet"):format(
+        tostring(st.target), key), "WARN")
     end
+    return false, ("Ziel %s nicht verfuegbar -- bitte neu auswaehlen"):format(tostring(st.target))
   end
 
   if #target_ids == 0 then
@@ -109,6 +118,35 @@ end
 -- Findet den Ziel-Eintrag, dessen ausgehende message_id zu einer
 -- eingehenden ACK/einem Timeout passt (message_id == ack_for). Linear
 -- ueber die wenigen bekannten Einstellungen/Ziele -- kein Hot-Path.
+-- Vergleicht zwei Node-IDs so, wie utils.normalize_node_id() sie erzeugt
+-- (getrimmt, Leerraum und Sonderzeichen zu "_"). Bewusst lokal statt per
+-- require: dieses Modul haelt keine Abhaengigkeiten, und fuer einen
+-- Gleichheitsvergleich reicht dieselbe Normalform.
+local function same_node(a, b)
+  if a == nil or b == nil then return false end
+  local function norm(v)
+    local raw = tostring(v):match("^%s*(.-)%s*$") or ""
+    raw = raw:gsub("%s+", "_"):gsub("[^%w%-%_%.:]+", "_")
+    return (raw:gsub("^_+", ""):gsub("_+$", ""))
+  end
+  return norm(a) == norm(b)
+end
+
+-- Die Quelle gehoert zum Zustellnachweis. core/comms.lua prueft sie fuer
+-- seinen Inflight-Eintrag, aber dieser Handler korrelierte bisher
+-- ausschliesslich ueber die Nachrichten-ID -- ein ACK eines ANDEREN Nodes
+-- mit derselben ID bestaetigte damit einen Edit, auf den das eigentliche
+-- Ziel nie geantwortet hatte. Zweite Verteidigungslinie, unabhaengig
+-- davon, ob die Transportebene sauber filtert.
+local function ack_source_matches(message, node_id)
+  local src = message and (message.src or message.sender_id)
+  -- Kein Absender im Umschlag: dann gibt es nichts zu widerlegen. Die
+  -- Transportebene hat ihre eigene Pruefung; hier wird nur ein
+  -- WIDERSPRUCH abgewiesen, nicht eine fehlende Angabe.
+  if src == nil then return true end
+  return same_node(src, node_id)
+end
+
 local function find_pending(edits_state, message_id)
   if not message_id then return nil end
   for key, st in pairs(edits_state) do
@@ -152,15 +190,17 @@ local function resolve_if_terminal(st)
 end
 
 function M.handle_ack_delivered(edits_state, message)
-  local _, _, _, t = find_pending(edits_state, message and message.ack_for)
+  local _, _, node_id, t = find_pending(edits_state, message and message.ack_for)
   if not t then return false end
+  if not ack_source_matches(message, node_id) then return false end
   if t.status == "QUEUED" then t.status = "DELIVERED" end
   return true
 end
 
 function M.handle_ack_applied(edits_state, message)
-  local key, st, _, t = find_pending(edits_state, message and message.ack_for)
+  local key, st, node_id, t = find_pending(edits_state, message and message.ack_for)
   if not t then return false end
+  if not ack_source_matches(message, node_id) then return false end
   local result = message.payload and message.payload.result or {}
   local def = key and M.SETTINGS[key] or nil
   if result.ok == false then

@@ -453,11 +453,23 @@ local function dispatch_handlers(message)
   return applied_result
 end
 
+-- Rueckgabe: false GENAU DANN, wenn dieses ACK wegen seiner HERKUNFT
+-- verworfen wurde (falscher Absender, fremder Empfaenger). In allen
+-- anderen Faellen true -- auch wenn es hier nichts zu tun gab, etwa weil
+-- der Inflight-Eintrag schon aufgeloest ist.
+--
+-- Der Aufrufer braucht diese Unterscheidung: handle_message() rief bisher
+-- handle_ack() und DANACH unbedingt dispatch_handlers(). Die
+-- Transportebene verwarf das ACK also korrekt fuer ihren Inflight-Eintrag
+-- und reichte es trotzdem an die Anwendungshandler weiter. Der
+-- Config-Edit-Handler korreliert nur ueber die Nachrichten-ID -- ein ACK
+-- eines ANDEREN Nodes mit derselben ID bestaetigte damit einen Edit, auf
+-- den das eigentliche Ziel nie geantwortet hatte.
 local function handle_ack(message)
   local ack_for = message.ack_for
-  if not ack_for then return end
+  if not ack_for then return true end
   local entry = state.inflight[ack_for]
-  if not entry then return end
+  if not entry then return true end
 
   -- The ACK source is part of the delivery proof. A peer cannot complete a
   -- command merely by guessing/observing its message ID.
@@ -467,13 +479,13 @@ local function handle_ack(message)
       and utils.normalize_node_id(actual_source) ~= utils.normalize_node_id(expected_source) then
     log(("Ignoring ACK %s from unexpected source %s (expected %s)"):format(
       tostring(ack_for), tostring(actual_source), tostring(expected_source)), "WARN")
-    return
+    return false
   end
   if message.dst ~= nil
       and utils.normalize_node_id(message.dst) ~= utils.normalize_node_id(state.node_id) then
     log(("Ignoring ACK %s addressed to %s (local %s)"):format(
       tostring(ack_for), tostring(message.dst), tostring(state.node_id)), "WARN")
-    return
+    return false
   end
   if message.type == constants.message_types.ACK_DELIVERED then
     entry.delivered = true
@@ -496,6 +508,7 @@ local function handle_ack(message)
       ))
     end
   end
+  return true
 end
 
 local function handle_message(message)
@@ -522,7 +535,13 @@ local function handle_message(message)
   end
 
   if message.type == constants.message_types.ACK_DELIVERED or message.type == constants.message_types.ACK_APPLIED then
-    handle_ack(message)
+    -- Ein wegen seiner Herkunft verworfenes ACK erreicht die
+    -- Anwendungshandler gar nicht erst. Alles andere wird wie bisher
+    -- weitergereicht -- auch ein ACK ohne passenden Inflight-Eintrag
+    -- (doppelt, oder nach einem Neustart dieser Node).
+    if handle_ack(message) == false then
+      return
+    end
     dispatch_handlers(message)
     return
   end
