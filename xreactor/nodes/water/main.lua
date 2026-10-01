@@ -250,7 +250,24 @@ local function manage_clusters()
     local max_vol = tonumber(cluster.max_volume) or math.huge
     local fill_side, drain_side, integrator = cluster.fill_side, cluster.drain_side, cluster.integrator
     local level = tank_name and read_tank_level(tank_name)
-    cluster_states[name] = cluster_states[name] or { filling = false, draining = false, read_failed = false, write_error = nil }
+    -- known = false heisst: der ISTZUSTAND der Ausgaenge ist unbekannt.
+    --
+    -- Vorher begann ein frischer Softwarezustand schlicht mit
+    -- filling=false, draining=false -- und die Zweige unten schreiben nur,
+    -- wenn sich daran etwas AENDERT. Ein externer Ausgang, der beim
+    -- Neustart der Node bereits an war, blieb damit an, waehrend die
+    -- Software "nicht fuellend" meldete: ein unbekannter Istzustand wurde
+    -- wie ein bestaetigtes Aus behandelt. Es gibt in dieser Datei auch
+    -- keinen Readback (kein getOutput), mit dem sich das haette
+    -- nachtraeglich abgleichen lassen.
+    --
+    -- Solange known false ist, schreibt jeder Zweig den vollstaendigen
+    -- Sollzustand BEIDER Ausgaenge, unabhaengig von den lokalen Flags.
+    -- Erst ein bestaetigter Schreibvorgang setzt known auf true; schlaegt
+    -- er fehl, bleibt der Zustand unbekannt und der naechste Takt
+    -- versucht es erneut.
+    cluster_states[name] = cluster_states[name]
+      or { filling = false, draining = false, known = false, read_failed = false, write_error = nil }
     local state = cluster_states[name]
     if level == nil then
       -- Sicherheits-Standard bei unbekanntem Tankstand: BLOCK_ALL, beide
@@ -261,7 +278,7 @@ local function manage_clusters()
       local ok_f = not fill_side or set_rs_output(fill_side, false, integrator)
       local ok_d = not drain_side or set_rs_output(drain_side, false, integrator)
       if ok_f and ok_d then
-        state.filling = false; state.draining = false
+        state.filling = false; state.draining = false; state.known = true
       else
         state.write_error = "BLOCK_ALL write failed"
         utils.log("WATER", "Cluster " .. name .. ": BLOCK_ALL Write fehlgeschlagen -- Zustand unsicher", "ERROR")
@@ -269,14 +286,14 @@ local function manage_clusters()
       goto continue
     end
     state.read_failed = false
-    if level < min_vol and not state.filling then
+    if level < min_vol and (not state.filling or not state.known) then
       -- State wird erst nach bestaetigtem Erfolg BEIDER Writes aktualisiert
       -- -- bei Teilfehler werden bestmoeglich beide Ausgaenge deaktiviert
       -- statt einen widerspruechlichen halb-angewendeten Zustand zu melden.
       local ok_fill = not fill_side or set_rs_output(fill_side, true, integrator)
       local ok_drain = not drain_side or set_rs_output(drain_side, false, integrator)
       if ok_fill and ok_drain then
-        state.filling = true; state.draining = false
+        state.filling = true; state.draining = false; state.known = true
         state.write_error = nil
         utils.log("WATER", ("Cluster %s: filling (level=%.0f < min=%.0f)"):format(name, level, min_vol))
       else
@@ -285,11 +302,11 @@ local function manage_clusters()
         if fill_side then set_rs_output(fill_side, false, integrator) end
         if drain_side then set_rs_output(drain_side, false, integrator) end
       end
-    elseif level > max_vol and not state.draining then
+    elseif level > max_vol and (not state.draining or not state.known) then
       local ok_fill = not fill_side or set_rs_output(fill_side, false, integrator)
       local ok_drain = not drain_side or set_rs_output(drain_side, true, integrator)
       if ok_fill and ok_drain then
-        state.draining = true; state.filling = false
+        state.draining = true; state.filling = false; state.known = true
         state.write_error = nil
         utils.log("WATER", ("Cluster %s: draining (level=%.0f > max=%.0f)"):format(name, level, max_vol))
       else
@@ -298,13 +315,16 @@ local function manage_clusters()
         if fill_side then set_rs_output(fill_side, false, integrator) end
         if drain_side then set_rs_output(drain_side, false, integrator) end
       end
-    elseif level >= min_vol and level <= max_vol and (state.filling or state.draining) then
+    elseif level >= min_vol and level <= max_vol
+        and (state.filling or state.draining or not state.known) then
       local ok_fill = not fill_side or set_rs_output(fill_side, false, integrator)
       local ok_drain = not drain_side or set_rs_output(drain_side, false, integrator)
       if ok_fill and ok_drain then
-        state.filling = false; state.draining = false
+        local was_unknown = not state.known
+        state.filling = false; state.draining = false; state.known = true
         state.write_error = nil
-        utils.log("WATER", ("Cluster %s: in range (level=%.0f)"):format(name, level))
+        utils.log("WATER", ("Cluster %s: in range (level=%.0f)%s"):format(
+          name, level, was_unknown and " -- Ausgaenge beim Start einmal sicher gesetzt" or ""))
       else
         state.write_error = "stop write failed"
         utils.log("WATER", "Cluster " .. name .. ": Stop-Write fehlgeschlagen", "ERROR")

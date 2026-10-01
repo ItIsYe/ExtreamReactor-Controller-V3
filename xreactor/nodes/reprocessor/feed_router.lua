@@ -143,13 +143,38 @@ function M:refresh_peripherals()
     self._state.bridge = nil
   end
 
+  -- Eine ausdrueckliche Bindung ist verbindlich.
+  --
+  -- Vorher startete die allgemeine Methodensuche auch dann, wenn ein
+  -- konkreter Name KONFIGURIERT, aber gerade nicht verfuegbar war -- und
+  -- band dann einen beliebigen anderen Sorter. Der verstellt seine
+  -- Default-Farbe und damit sein Routing (siehe feed_cycle unten), und auf
+  -- einem gemeinsamen Peripherie-Netz mit FUEL gehoert der naechste
+  -- gefundene Sorter oft einem ganz anderen Zweig der Anlage.
+  --
+  -- Gegenprobe vorher: konfiguriert "sorter_mine", vorhanden nur
+  -- "sorter_fremd" -> gebunden wurde "sorter_fremd", und zwar ohne jede
+  -- Meldung (die Warnung kam nur, wenn gar nichts gefunden wurde).
+  --
+  -- Dieselbe Unterscheidung macht der ME-Bridge-Zweig oben schon: ein
+  -- ausgelieferter Konventionsname darf per Fahigkeitssuche aufgeloest
+  -- werden, ein selbst gesetzter Name nicht. Fuer den Sorter gibt es
+  -- keinen Konventionsnamen (config.lua: sorter = nil), die Trennung ist
+  -- hier also schlicht "konfiguriert" gegen "nicht konfiguriert".
   local sorter_name = cfg.sorter
   local sorter_adapter = nil
-  if type(sorter_name) == "string" and sorter_name ~= "" and peripheral.isPresent(sorter_name) then
-    sorter_adapter = logistical_sorter.detect(sorter_name, "REPROC")
-  end
-  if not sorter_adapter then
-    -- Kein (oder kein gueltiger) konfigurierter Name -- per Methodensignatur suchen.
+  local sorter_is_bound = type(sorter_name) == "string" and sorter_name ~= ""
+  if sorter_is_bound then
+    if peripheral.isPresent(sorter_name) then
+      sorter_adapter = logistical_sorter.detect(sorter_name, "REPROC")
+    end
+    if not sorter_adapter then
+      self.warn_once("sorter_bound_missing",
+        "FeedRouter: gebundener Logistical Sorter fehlt: " .. tostring(sorter_name)
+          .. " -- es wird KEIN anderer Sorter ersatzweise gebunden")
+    end
+  else
+    -- Nichts konfiguriert: dann darf die Methodensuche entscheiden.
     local found_sorter_name, found_adapter = find_sorter_by_methods()
     if found_adapter then
       sorter_name, sorter_adapter = found_sorter_name, found_adapter
@@ -159,7 +184,9 @@ function M:refresh_peripherals()
     self._state.sorter = sorter_adapter
     self._state.sorter_name = sorter_name
   else
-    self.warn_once("sorter_abs", "FeedRouter: Logistical Sorter nicht gefunden: " .. tostring(cfg.sorter))
+    if not sorter_is_bound then
+      self.warn_once("sorter_abs", "FeedRouter: Logistical Sorter nicht gefunden: " .. tostring(cfg.sorter))
+    end
     self._state.sorter = nil
   end
 
