@@ -1014,6 +1014,84 @@ Schirm stand dagegen:
 `logistics.enabled` bleibt ein reiner Sicherheitsschalter mit Default `false`
 — das ist Absicht und aendert sich nicht. Sichtbar ist jetzt, was er bewirkt.
 
+### Mehrere Rollen gemeinsam: der Gesamtanlagen-Test
+
+Die Boot-Tests pruefen EINE Rolle. Die meisten Betriebsfehler liegen aber
+ZWISCHEN zwei Rollen, und die bisherigen Kettentests pruefen diese Naht mit
+**handgeschriebenen** Daten — genau die Handschrift ist das Problem: sie
+bleibt richtig, waehrend die echte Nachricht sich aendert.
+
+Jetzt laufen die Rollen wirklich gegeneinander:
+
+| Baustein | Aufgabe |
+|---|---|
+| `support/cc_node_boot.lua` | CC-Umgebung, echte Rolle booten |
+| `support/node_message_bus.lua` | Funknetz: `modem.transmit` → `modem_message` bei den anderen |
+| `support/plant_nodes.lua` | fertig verdrahtete RT-/MASTER-/FUEL-Knoten |
+
+Vier Hindernisse mussten dafuer weg, alle im Harness, keines im Produkt:
+
+1. **Zwei Rollen in einem Prozess.** `bootstrap` merkt sich beim Laden
+   `native_require = _G.require` und setzt danach `_G.require =
+   bootstrap.require`. Die zweite Rolle fing sich damit das `require` der
+   ersten ein und lief im Kreis („Circular dependency while loading
+   shared.constants"). `reset_module_cache()` setzt `_G.require` auf Luas
+   eigenes zurueck und leert beide Modul-Caches — jede Rolle bekommt ihren
+   eigenen Modulgraphen, wie zwei Computer.
+2. **Die Repo-Dateien muessen auf der virtuellen Platte liegen.** Sonst
+   benutzt `bootstrap` seinen Zweitweg (`native_require`) statt des eigenen
+   Laders, und zwei Lader mit getrennter Buchfuehrung erzeugen Zyklen, die es
+   im Spiel nicht gibt.
+3. **`parallel` darf nicht verworfen werden.** Mehrere Rollen erledigen
+   echte Arbeit nicht in einem Service, sondern im `after_cycle`-Haken ihrer
+   Lauf-Schleife — `nodes/fuel/main.lua` tickt so seinen Logistik-Router.
+   Wird `parallel` weggestubbt, sieht der Test eine FUEL-Node **ohne
+   Reaktoren**: ein Fehler, den es im Spiel nicht gibt, und der genau wie der
+   echte aussieht. `capture_loops()` haelt die Optionen fest, der Bus tickt
+   `after_cycle` jede Runde.
+4. **Nicht jede Rolle laeuft ueber `parallel`.** `master/runtime_loop.lua`
+   hat seine eigene `os.pullEvent`-Schleife. Ein Waechter beendet den Boot
+   dort nach wenigen Events, statt den Test haengen zu lassen.
+
+Was damit abgesichert ist:
+
+- `plant_rt_master_chain_test.lua` — die Kette, die zweimal gerissen ist:
+  RT lernt ein → meldet `capacity_ready`/`capacity_max` → MASTER rechnet
+  daraus einen Prozentsatz → RT nimmt ihn an (`result.ok`) und regelt. Beide
+  Risse (Einlernen endet nie; erste Vorgabe nach Reconnect abgelehnt) waeren
+  hier aufgefallen.
+- `plant_fuel_chain_test.lua` — die Brennstoffkette ueber **drei** Rollen:
+  RT liest den Reaktor → MASTER relais ihn als `FUEL_STATUS` → FUEL kennt
+  den Fuellstand.
+
+Beide Tests laufen in unter einer halben Sekunde.
+
+### Die Reaktor-Kennung ist der heikle Punkt der Brennstoffkette
+
+FUEL hat keinen eigenen Zugriff auf die Reaktoren. Der Fuellstand kommt ueber
+RT → MASTER → FUEL, und zusammengehalten wird die Kette von der **Kennung**,
+die RT aus der Reaktor-Identitaet bildet (`core/reactor_identity.lua`):
+
+```
+reactors[].id         BIGREACTORS-REACTOR-165cb1c6
+reactors[].global_id  node-101:BIGREACTORS-REACTOR-165cb1c6
+```
+
+`master/fuel_relay.lua` legt den Fuellstand unter **beiden** ab (die kurze
+Form als Alias fuer Routen aelteren Datums). In `fuel_routes.lua` muss
+`reactor_id` genau eine davon sein.
+
+Steht dort etwas anderes — von Hand getippt, oder gelernt bevor das
+Multiblock neu gebaut wurde —, dann passt nichts zusammen, und **nichts sagt
+es**: `fuel_pct` bleibt leer, FUEL fordert nie Brennstoff an, die Anlage tut
+nichts. Dass `identity_known = true` dabei danebensteht, macht es nicht
+besser: das Feld heisst nur „eine Kennung ist konfiguriert", nicht „das Netz
+kennt diesen Reaktor".
+
+Darum nimmt `plant_fuel_chain_test.lua` die Kennung nicht aus einer
+Konstante, sondern aus dem, was RT wirklich sendet — genau wie das Einlernen
+am Router-Schirm.
+
 ## Dateien unter `/xreactor_config/`
 
 | Datei | Inhalt |
@@ -1108,6 +1186,8 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_setpoints_on_reconnect_test.lua` | die erste Leistungsvorgabe nach einem Reconnect wird angenommen, SAFE bleibt gesperrt |
 | `rt2_uneven_control_rods_test.lua` | ungleich stehende Staebe gleichen sich wieder aus -- die Eigenschaft, die v808 wegoptimiert hatte |
 | `fuel_boot_routes_test.lua` | FUEL bootet mit einer echten Routen-Datei: die vier Lagen, in denen eine fertige Route unwirksam bleibt, und dass der Schirm sie unterscheidet |
+| `plant_rt_master_chain_test.lua` | RT und MASTER echt gebootet, echtes Funknetz: Einlernen -> Kapazitaet -> Vorgabe -> Quittung |
+| `plant_fuel_chain_test.lua` | drei Rollen: RT liest den Reaktor, MASTER relais ihn, FUEL kennt den Fuellstand -- mit der Kennung aus RTs eigener Meldung |
 | `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |
 | plus Modultests je `rt2_*`-Datei (`rt2_turbine`, `rt2_reactor`, `rt2_state_machine`, `rt2_orchestrator`, `rt2_engine`, `rt2_adapter`, `rt2_safety`, `rt2_projection`, `rt2_master_link`, `rt2_command_handler`) | |
 

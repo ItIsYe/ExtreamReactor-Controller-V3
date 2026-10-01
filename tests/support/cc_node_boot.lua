@@ -46,6 +46,28 @@
 
 local M = {}
 
+-- Das UNBERUEHRTE require() von Lua, einmal beim Laden dieses Moduls
+-- festgehalten.
+--
+-- Warum das noetig ist: core/bootstrap.lua merkt sich beim Laden
+-- native_require = _G.require und setzt in setup() anschliessend
+-- _G.require = bootstrap.require. Wird eine zweite Rolle gebootet, laedt
+-- main.lua bootstrap.lua erneut per dofile -- und diese zweite Instanz
+-- fuengt sich als "native" require die bootstrap.require der ERSTEN ein.
+-- Jede Delegation laeuft dann im Kreis, und der Boot stirbt mit
+-- "Circular dependency while loading shared.constants".
+local PRISTINE_REQUIRE = rawget(_G, 'require')
+
+-- Kennung, mit der die Umgebung das Erreichen der Event-Schleife meldet.
+--
+-- Nicht jede Rolle laeuft ueber parallel.waitForAny(): master/runtime_loop.lua
+-- hat seine eigene Schleife mit os.pullEvent(). Ein gestubbtes pullEvent, das
+-- immer dasselbe Event liefert, laesst den Boot dort unendlich kreisen -- der
+-- Test haengt, statt etwas zu sagen. Nach einer Handvoll Events wird deshalb
+-- genau dieser Fehler geworfen, und boot() liest ihn als "der Boot ist durch,
+-- die Rolle wartet jetzt auf Ereignisse".
+M.EVENT_LOOP_SENTINEL = 'XR_BOOT_EVENT_LOOP_REACHED'
+
 local Env = {}
 Env.__index = Env
 
@@ -66,7 +88,11 @@ function M.new(opts)
     clock_ms = opts.start_ms or 1700000000000,
     sleeps = 0,
     sleep_limit = opts.sleep_limit or 400,
+    pull_events = 0,
+    pull_event_limit = opts.pull_event_limit or 40,
     loop_entered = false,
+    loop_errors = {},
+    loops = {},
   }, Env)
   return self
 end
@@ -126,15 +152,98 @@ function Env:advance(ms)
   return self
 end
 
-function Env:install()
+-- Setzt die Modul-Caches zurueck, damit die NAECHSTE Rolle ihren eigenen
+-- Modulgraphen bekommt.
+--
+-- bootstrap.require() cached in _G.__xreactor_loaded und delegiert sonst an
+-- Luas require() (package.loaded). Beides muss weg, sonst teilen zwei
+-- gebootete Rollen denselben modulglobalen Zustand -- etwa den
+-- Faehigkeits-Cache in adapters/turbine.lua -- und das waeren keine zwei
+-- Computer mehr, sondern einer mit zwei Namen.
+--
+-- Die bereits gebootete Rolle behaelt ihre Modultabellen ueber die Closures
+-- ihrer Services; sie laeuft also unveraendert weiter. Genau das ist
+-- gewollt: zwei Rollen, zwei Modulgraphen, wie zwei Computer.
+function M.reset_module_cache()
+  rawset(_G, '__xreactor_loaded', nil)
+  rawset(_G, '__xreactor_loading', nil)
+  -- Das globale require() auf Luas eigenes zuruecksetzen (siehe
+  -- PRISTINE_REQUIRE): sonst delegiert die naechste bootstrap-Instanz an die
+  -- vorige und laeuft im Kreis.
+  rawset(_G, 'require', PRISTINE_REQUIRE)
+  local drop = {}
+  for name in pairs(package.loaded) do
+    if name:match('^nodes%.') or name:match('^core%.') or name:match('^services%.')
+        or name:match('^adapters%.') or name:match('^shared%.') or name:match('^master%.')
+        or name:match('^optional%.') or name == 'xreactor.release' then
+      drop[#drop + 1] = name
+    end
+  end
+  for _, name in ipairs(drop) do package.loaded[name] = nil end
+  return #drop
+end
+
+-- Setzt die CC-Globals dieser Node. Mehrfach aufrufbar: laufen mehrere
+-- Rollen in einem Prozess, teilen sie sich _G -- vor jedem Takt muss also
+-- die Node aktiviert werden, deren Platte und Peripherie gelten soll.
+-- node_message_bus.lua macht das von selbst.
+function Env:activate()
   local env = self
-  local real_dofile = dofile
+  local real_dofile = env._real_dofile or dofile
+  env._real_dofile = real_dofile
+
+  -- Die Repo-Dateien unter /xreactor/ sind fuer die virtuelle Platte SICHTBAR.
+  --
+  -- Das ist kein Komfort, sondern Treue zum Original: auf dem Computer liegen
+  -- die Module auf der Platte, also laedt core/bootstrap.lua sie mit seinem
+  -- EIGENEN Loader (load_module, hinter `if fs.exists(path)`). Sind sie
+  -- unsichtbar, faellt bootstrap auf das native require() von Lua zurueck --
+  -- und dann gibt es zwei Lader mit zwei getrennten Buchfuehrungen. Ein
+  -- Modul, das waehrend seines eigenen Ladens erneut angefordert wird, ist
+  -- fuer den einen Lader fertig und fuer den anderen "gerade im Laden": der
+  -- Boot stirbt mit "Circular dependency while loading shared.constants",
+  -- obwohl es im Spiel keinen Zyklus gibt. Genau daran ist der MASTER-Boot
+  -- hier gescheitert.
+  local function repo_path(p)
+    local name = tostring(p)
+    if name:sub(1, 10) ~= '/xreactor/' then return nil end
+    return '.' .. name
+  end
+
+  local function read_repo_file(p)
+    local mapped = repo_path(p)
+    if not mapped then return nil end
+    local handle = io.open(mapped, 'r')
+    if not handle then return nil end
+    local content = handle:read('*a')
+    handle:close()
+    return content
+  end
 
   _G.fs = {
-    exists = function(p) return env.files[p] ~= nil end,
+    exists = function(p)
+      if env.files[p] ~= nil then return true end
+      return read_repo_file(p) ~= nil
+    end,
     open = function(p, mode)
       if mode == 'r' then
-        if env.files[p] == nil then return nil end
+        if env.files[p] == nil then
+          local repo = read_repo_file(p)
+          if repo == nil then return nil end
+          local offset = 1
+          return {
+            readAll = function() return repo end,
+            readLine = function()
+              if offset > #repo then return nil end
+              local stop = repo:find('\n', offset, true)
+              local line
+              if stop then line = repo:sub(offset, stop - 1); offset = stop + 1
+              else line = repo:sub(offset); offset = #repo + 1 end
+              return line
+            end,
+            close = function() end,
+          }
+        end
         local offset = 1
         return {
           readAll = function() return env.files[p] end,
@@ -234,10 +343,31 @@ function Env:install()
   os.startTimer = function() return 1 end
   os.cancelTimer = function() end
   os.queueEvent = function() end
-  os.pullEvent = function() return 'timer', 1 end
+  env.pull_events = 0
+  os.pullEvent = function()
+    env.pull_events = env.pull_events + 1
+    if env.pull_events > env.pull_event_limit then
+      env.loop_entered = true
+      error(M.EVENT_LOOP_SENTINEL, 0)
+    end
+    return 'timer', 1
+  end
   os.pullEventRaw = os.pullEvent
-  os.reboot = function() error('unerwarteter Reboot waehrend des Boots', 0) end
-  os.shutdown = function() error('unerwartetes Shutdown waehrend des Boots', 0) end
+  -- Ein Reboot beendet den Boot, ohne den Test zu toeten.
+  --
+  -- Die Rollen fangen Fehler selbst ab (master/runtime_loop.lua's
+  -- Crash-Handler, nodes/support/runtime.lua's crash_screen) und starten danach
+  -- neu. Die Kennung von oben laeuft also durch EINEN solchen Handler, und am
+  -- Ende steht ein os.reboot(). Das ist hier kein Fehler, sondern das Ende des
+  -- Boots -- ob es einer war, entscheidet boot() an loop_entered.
+  os.reboot = function()
+    env.reboot_requested = true
+    error(M.EVENT_LOOP_SENTINEL, 0)
+  end
+  os.shutdown = function()
+    env.shutdown_requested = true
+    error(M.EVENT_LOOP_SENTINEL, 0)
+  end
   os.sleep = function()
     env.sleeps = env.sleeps + 1
     if env.sleeps > env.sleep_limit then
@@ -297,10 +427,56 @@ function Env:install()
   _G.colors = _G.colors or setmetatable({}, { __index = function() return 1 end })
   _G.colours = _G.colors
 
-  -- Der Boot soll nach init() enden, nicht in die Event-Schleife laufen.
+  -- keys: die UI-Dienste vergleichen Tastencodes dagegen (core/ui_router.lua,
+  -- nodes/*/monitor_ui.lua). Fehlt die Tabelle, stirbt der erste UI-Takt mit
+  -- "attempt to index global 'keys'" -- im Spiel gibt es sie immer.
+  -- Die Werte muessen nur EINDEUTIG sein, nicht echt: verglichen wird gegen
+  -- genau diese Tabelle.
+  _G.keys = _G.keys or (function()
+    local names = {
+      'up', 'down', 'left', 'right', 'enter', 'space', 'backspace',
+      'pageUp', 'pageDown', 'c', 'p', 'q',
+    }
+    local out, next_code = {}, 200
+    for _, name in ipairs(names) do out[name] = next_code; next_code = next_code + 1 end
+    -- Alles Weitere bekommt stabil einen eigenen Code, damit ein Vergleich
+    -- gegen einen hier nicht aufgefuehrten Namen nicht auf nil laeuft.
+    return setmetatable(out, { __index = function(t, key)
+      if type(key) ~= 'string' then return nil end
+      next_code = next_code + 1
+      t[key] = next_code
+      return next_code
+    end })
+  end)()
+
+  -- Die an parallel uebergebenen Funktionen werden EINMAL aufgerufen, nicht
+  -- verworfen.
+  --
+  -- Grund: mehrere Rollen erledigen echte Arbeit NICHT in einem Service,
+  -- sondern im after_cycle-Haken ihrer Lauf-Schleife -- nodes/fuel/main.lua
+  -- tickt so seinen Logistik-Router und seinen Ventil-Router. Wird parallel
+  -- einfach verworfen, laufen diese Haken nie, und der Test sieht eine FUEL-
+  -- Node ohne Reaktoren: ein Fehler, den es im Spiel nicht gibt, und
+  -- schlimmer noch, er sieht genau wie der echte aus.
+  --
+  -- Haengen koennen die Funktionen dabei nicht: capture_loops() ersetzt
+  -- run_fast_loop/run_slow_loop durch Rekorder, die die Optionen festhalten
+  -- und sofort zurueckkehren.
+  local function run_loop_bodies(...)
+    env.loop_entered = true
+    for index = 1, select('#', ...) do
+      local body = (select(index, ...))
+      if type(body) == 'function' then
+        local ok, err = pcall(body)
+        if not ok and not tostring(err):find(M.EVENT_LOOP_SENTINEL, 1, true) then
+          env.loop_errors[#env.loop_errors + 1] = tostring(err)
+        end
+      end
+    end
+  end
   _G.parallel = {
-    waitForAny = function() env.loop_entered = true end,
-    waitForAll = function() env.loop_entered = true end,
+    waitForAny = run_loop_bodies,
+    waitForAll = run_loop_bodies,
   }
 
   -- print() waehrend des Boots einsammeln statt ausgeben: die Nodes schreiben
@@ -310,12 +486,13 @@ function Env:install()
   -- boot() gibt print() danach zurueck -- sonst verschluckt die Umgebung auch
   -- die Ausgaben des TESTS selbst, und ein gruener Testlauf sieht aus wie ein
   -- stiller Absturz.
-  self.real_print = print
-  _G.print = function(...)
-    local parts = {}
-    for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
-    env.prints[#env.prints + 1] = table.concat(parts, ' ')
-  end
+  -- print() wird hier ABSICHTLICH NICHT angefasst.
+  --
+  -- activate() laeuft bei mehreren Rollen vor jedem Takt (node_message_bus.lua).
+  -- Wuerde es den print-Abgriff setzen, haette der TEST nach dem ersten Takt
+  -- kein print() mehr -- ein gruener Lauf saehe dann aus wie ein stiller
+  -- Absturz. Eingesammelt wird nur, wo es gebraucht wird: in boot() und um
+  -- Service-Takte herum (capture_prints/release_prints).
 
   -- dofile() muss BEIDES koennen:
   --
@@ -341,10 +518,14 @@ function Env:install()
     return real_dofile(mapped)
   end
 
+  return self
+end
+
+function Env:install()
   if self.node_id then
     self:add_file('/xreactor_config/node_id.txt', self.node_id)
   end
-  return self
+  return self:activate()
 end
 
 -- Greift die Services ab, die main.lua anlegt, damit der Test danach echte
@@ -371,6 +552,49 @@ function Env:capture_services()
   return self
 end
 
+-- Greift nodes/support/runtime.lua's Lauf-Schleifen ab.
+--
+-- run_fast_loop()/run_slow_loop() laufen im Spiel endlos. Hier werden sie
+-- durch Rekorder ersetzt: sie halten ihre Optionen fest (services, comms und
+-- vor allem after_cycle) und kehren sofort zurueck. Der after_cycle-Haken
+-- laesst sich danach gezielt ticken -- genau dort tickt nodes/fuel/main.lua
+-- seinen Logistik-Router, und ohne ihn bleibt die Reaktorliste leer.
+function Env:capture_loops()
+  local env = self
+  local ok_runtime, real_runtime = pcall(require, 'nodes.support.runtime')
+  if not ok_runtime or type(real_runtime) ~= 'table' then return self end
+  local wrapper = {}
+  for key, value in pairs(real_runtime) do wrapper[key] = value end
+  wrapper.run_fast_loop = function(opts)
+    env.loops.fast = opts or {}
+    return true
+  end
+  wrapper.run_slow_loop = function(opts)
+    env.loops.slow = opts or {}
+    return true
+  end
+  _G.__xreactor_loaded = _G.__xreactor_loaded or {}
+  _G.__xreactor_loaded['nodes.support.runtime'] = wrapper
+  return self
+end
+
+-- Die after_cycle-Haken der abgegriffenen Schleifen einmal ausfuehren.
+function Env:tick_loops(times)
+  for _ = 1, (times or 1) do
+    for _, which in ipairs({ 'fast', 'slow' }) do
+      local opts = self.loops[which]
+      if opts and type(opts.after_cycle) == 'function' then
+        local ok, err = pcall(opts.after_cycle)
+        if not ok then
+          error('after_cycle der "' .. which .. '"-Schleife ist gescheitert: '
+            .. tostring(err), 2)
+        end
+      end
+    end
+  end
+  return self
+end
+
 -- Greift utils.log() ab, damit der Test die Warnungen des Boots lesen kann.
 -- Genau dort stehen die Config-Warnungen, die im Betrieb niemand sieht.
 function Env:capture_logs()
@@ -389,24 +613,48 @@ end
 function Env:boot(main_path)
   self:capture_services()
   self:capture_logs()
+  self:capture_loops()
+  self:capture_prints()
   local ok, err = pcall(dofile, './xreactor/' .. main_path)
   -- print() dem Test zurueckgeben, auch wenn der Boot gescheitert ist.
-  if self.real_print then _G.print = self.real_print end
+  self:release_prints()
+  -- Die Event-Schleife erreicht zu haben IST das Ende eines gelungenen Boots
+  -- -- bei parallel.waitForAny() kehrt der Stub einfach zurueck, bei einer
+  -- eigenen pullEvent-Schleife kommt die Kennung von oben.
+  if not ok and tostring(err):find(M.EVENT_LOOP_SENTINEL, 1, true) then
+    if self.loop_entered then
+      -- Die Rolle hat ihre Event-Schleife erreicht: Boot durch.
+      ok, err = true, nil
+    else
+      -- Reboot/Shutdown OHNE je die Schleife erreicht zu haben -- das ist ein
+      -- echter Abbruch (z.B. der Erststart-Assistent, der eine Rolle
+      -- schreiben und neu starten will).
+      err = self.reboot_requested
+        and 'die Rolle hat einen Neustart angefordert, ohne die Event-Schleife'
+          .. ' zu erreichen -- fehlt /xreactor_config/role.lua?'
+        or 'die Rolle hat ein Shutdown angefordert, ohne die Event-Schleife zu erreichen'
+    end
+  end
   if not ok then
     error('Boot von ' .. tostring(main_path) .. ' gescheitert: ' .. tostring(err), 0)
   end
   return self
 end
 
--- Wieder einsammeln, falls ein Test nach dem Boot Service-Takte fahren will,
--- deren print()-Ausgaben er pruefen moechte.
+-- print() nach env.prints umleiten. Paarweise mit release_prints() benutzen.
 function Env:capture_prints()
   local env = self
+  if self.real_print == nil then self.real_print = print end
   _G.print = function(...)
     local parts = {}
     for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
     env.prints[#env.prints + 1] = table.concat(parts, ' ')
   end
+  return self
+end
+
+function Env:release_prints()
+  if self.real_print then _G.print = self.real_print end
   return self
 end
 
@@ -423,16 +671,19 @@ function Env:tick_service(name, times, dt, event)
   --   pcall(service.tick, service, dt, event)
   -- Methodenform also, mit dem Service als erstem Argument. Ein Service, der
   -- seinen tick als schlichte Funktion ablegt, ignoriert ihn einfach.
+  self:capture_prints()
   for _ = 1, (times or 1) do
     if service.tick then
       local ok, err = pcall(service.tick, service, dt or 0.1, event)
       if not ok then
+        self:release_prints()
         error('Service "' .. tostring(name) .. '" ist im tick gescheitert: '
           .. tostring(err), 2)
       end
     end
     self:advance(100)
   end
+  self:release_prints()
   return self
 end
 
