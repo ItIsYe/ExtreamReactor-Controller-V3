@@ -95,12 +95,28 @@ do
 
   reset(counts)
   h:run(60)                      -- 600 Takte Messfenster
-  local w = writes(counts)
-  assert_true(w == 0, string.format(
-    'im Beharrungszustand darf NICHTS geschrieben werden, es waren %d Zugriffe'
-      .. ' (Spule %d, Staebe %d, Durchfluss %d, Aktiv %d)',
-    w, counts.setInductorEngaged or 0, counts.setAllControlRodLevels or 0,
-    counts.setFluidFlowRateMax or 0, counts.setActive or 0))
+
+  -- Spule und Durchfluss: nichts zu stellen, also nichts geschrieben.
+  assert_true((counts.setInductorEngaged or 0) == 0, string.format(
+    'die Spule darf im Beharrungszustand nicht geschrieben werden, es waren %d Zugriffe',
+    counts.setInductorEngaged or 0))
+  assert_true((counts.setFluidFlowRateMax or 0) == 0, string.format(
+    'der Durchfluss darf im Beharrungszustand nicht geschrieben werden, es waren %d Zugriffe',
+    counts.setFluidFlowRateMax or 0))
+  assert_true((counts.setActive or 0) == 0,
+    'und nichts muss eingeschaltet werden')
+
+  -- Die STAEBE dagegen werden bewusst in jedem Takt geschrieben. Siehe den
+  -- Kopf von rt2_adapter.apply_reactor(): control_rod_level ist der
+  -- MITTELWERT ueber alle Staebe, und das bedingungslose Schreiben ist die
+  -- Selbstheilung fuer ungleich stehende Staebe. In v808 war hier ein
+  -- Dirty-Check, der genau diese Eigenschaft entfernt hat -- ein Reaktor mit
+  -- ungleichen Staeben blieb damit stehen, weil der Mittelwert auf dem
+  -- Sollwert lag.
+  assert_true((counts.setAllControlRodLevels or 0) == 600, string.format(
+    'die Staebe muessen in JEDEM Takt geschrieben werden (Selbstheilung bei'
+      .. ' ungleichen Staeben), es waren %d von 600',
+    counts.setAllControlRodLevels or 0))
 end
 
 -- ── 2. Von aussen umgeschaltete Spule wird zurueckgestellt ───────────────
@@ -127,6 +143,11 @@ do
 end
 
 -- ── 3. Von aussen verstellte Staebe werden zurueckgestellt ───────────────
+--
+-- Das deckt der bedingungslose Schreibweg ab (siehe Block 1). Der Test
+-- bleibt, weil er die EIGENSCHAFT prueft, nicht die Umsetzung: egal wie der
+-- Schreibweg spaeter aussieht, ein von aussen verstellter Stab muss
+-- zurueckkommen.
 do
   local h = harness.new({ turbine_count = 6, reactor_headroom = 2.0, steam_capacity = 20000 })
   local counts = count_calls(h)
@@ -144,52 +165,33 @@ do
       .. tostring(r.rods))
 end
 
--- ── 4. Eine Sicherheitsausloesung wird IMMER geschrieben ─────────────────
+-- ── 4. Der Stab-Schreibweg kennt keine Ausnahme ──────────────────────────
 --
--- Schutzentscheidungen haengen nicht am Dirty-Check: stehen die Staebe
--- schon auf 100, wird trotzdem geschrieben. Eine Bremsung darf nie an
--- einer Ersparnis scheitern.
+-- Jede Entscheidung wird geschrieben -- die gewoehnliche Tankregelung
+-- genauso wie die Sicherheitsausloesung. Festgehalten, damit ein kuenftiger
+-- Spar-Versuch hier auffaellt: wer das aendert, braucht zuerst die
+-- Information, ob die Staebe UNTEREINANDER gleich stehen (siehe den
+-- Modulkopf), denn control_rod_level ist nur ihr Mittelwert.
 do
   local rt2_adapter = require('nodes.rt.rt2_adapter')
   local calls = {}
   local fake = {
     apply_rod_level = function(name, level) calls[#calls + 1] = level; return true end,
   }
-  rt2_adapter.apply_reactor(fake, 'r', 'RT',
+
+  for _, case in ipairs({
     { rods = 100, reason = 'SAFETY_FULL_INSERT', safety_tripped = true },
-    { current_rods = 100 })
-  assert_true(#calls == 1,
-    'SAFETY_FULL_INSERT muss geschrieben werden, auch wenn die Staebe schon stehen')
-
-  calls = {}
-  rt2_adapter.apply_reactor(fake, 'r', 'RT',
-    { rods = 100, reason = 'NO_STEAM_READING' }, { current_rods = 100 })
-  assert_true(#calls == 1,
-    'NO_STEAM_READING muss geschrieben werden, auch wenn die Staebe schon stehen')
-
-  calls = {}
-  rt2_adapter.apply_reactor(fake, 'r', 'RT',
-    { rods = 94, reason = 'DEADBAND' }, { current_rods = 94 })
-  assert_true(#calls == 0, 'DEADBAND auf unveraenderter Stellung darf nicht schreiben')
-
-  -- Ganzzahlvergleich: der Mod speichert Stabstellungen ganzzahlig, und
-  -- apply_rod_level() rundet beim Schreiben genauso.
-  calls = {}
-  rt2_adapter.apply_reactor(fake, 'r', 'RT',
-    { rods = 94.4, reason = 'TANK_LOW_WITHDRAW' }, { current_rods = 94 })
-  assert_true(#calls == 0,
-    '94,4 gegen gemessene 94 ist nach dem Runden dieselbe Stellung')
-
-  calls = {}
-  rt2_adapter.apply_reactor(fake, 'r', 'RT',
-    { rods = 94.6, reason = 'TANK_LOW_WITHDRAW' }, { current_rods = 94 })
-  assert_true(#calls == 1, '94,6 rundet auf 95 und muss geschrieben werden')
-
-  -- Unbekannter Messwert ist nie ein Grund, das Schreiben zu unterlassen.
-  calls = {}
-  rt2_adapter.apply_reactor(fake, 'r', 'RT',
-    { rods = 94, reason = 'DEADBAND' }, { current_rods = nil })
-  assert_true(#calls == 1, 'ohne Messwert muss geschrieben werden')
+    { rods = 100, reason = 'NO_STEAM_READING' },
+    { rods = 94,  reason = 'DEADBAND' },
+    { rods = 94,  reason = 'RATE_LIMITED' },
+    { rods = 94,  reason = 'CONVERGING' },
+    { rods = 92,  reason = 'TANK_LOW_WITHDRAW' },
+  }) do
+    calls = {}
+    rt2_adapter.apply_reactor(fake, 'r', 'RT', case)
+    assert_true(#calls == 1,
+      'jede Stabentscheidung muss geschrieben werden, auch ' .. case.reason)
+  end
 end
 
 -- ── 5. Unlesbare Spule: immer schreiben ──────────────────────────────────

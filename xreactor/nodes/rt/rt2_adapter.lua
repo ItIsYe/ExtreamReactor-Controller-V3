@@ -138,47 +138,40 @@ end
 -- rt2_reactor.compute_active_decision() against this tick's own reading
 -- (false once the reactor reads active), so this never issues a redundant
 -- setActive(true) once the reactor is confirmed on.
--- Stellt die Staebe nur, wenn sie nicht schon so stehen.
+-- Die Staebe werden IN JEDEM TAKT geschrieben -- absichtlich, kein
+-- Versehen.
 --
--- Auch dieser Schreibweg lief bedingungslos in jedem Takt -- gemessen 1,00
--- Schreibzugriff je Takt im Beharrungszustand, dazu die Readback-
--- Bestaetigung aus apply_rod_level(). Die Regelentscheidungen DEADBAND,
--- CONVERGING und RATE_LIMITED geben ausdruecklich die aktuelle Stellung
--- zurueck, bedeuten also "nichts tun".
+-- In v808 stand hier ein Dirty-Check wie beim Durchfluss und bei der Spule:
+-- steht die gewuenschte Stellung schon an, nicht schreiben. Der war falsch,
+-- und zwar aus einem Grund, der im Code nirgends aufgeschrieben war:
 --
--- Verglichen wird auf GANZZAHLEN, weil der Mod Stabstellungen ganzzahlig
--- speichert und apply_rod_level() mit genau dieser Rundung schreibt
--- (normalize_write_level). Ohne das Runden wuerde eine Entscheidung von
--- 94,4 ewig gegen einen Messwert von 94 verglichen und immer geschrieben.
+--   adapters/reactor.lua's control_rod_level ist der MITTELWERT ueber alle
+--   Staebe (read_control_rods -> detail.average), nicht die Stellung eines
+--   einzelnen.
 --
--- Schutzentscheidungen werden IMMER geschrieben, wie beim Durchfluss: eine
--- Sicherheitsausloesung und eine fehlende Dampfmessung fahren die Staebe
--- voll ein, und das darf nie an einer Ersparnis haengen -- auch dann nicht,
--- wenn der Messwert behauptet, es stuende schon so an.
-local PROTECTIVE_ROD_REASONS = {
-  SAFETY_FULL_INSERT = true,
-  NO_STEAM_READING = true,
-}
-
-local function rods_already_set(reactor_decision, reading)
-  if reactor_decision.safety_tripped == true then return false end
-  if PROTECTIVE_ROD_REASONS[reactor_decision.reason] then return false end
-  local wanted = tonumber(reactor_decision.rods)
-  local measured = tonumber(reading and reading.current_rods)
-  if wanted == nil or measured == nil then return false end
-  return math.floor(wanted + 0.5) == math.floor(measured + 0.5)
-end
-
-function M.apply_reactor(reactor_adapter, name, log_prefix, reactor_decision, reading)
-  local result = {}
-  local ok, err
-  if rods_already_set(reactor_decision, reading) then
-    result.rods_unchanged = true
-    ok = true
-  else
-    ok, err = reactor_adapter.apply_rod_level(name, reactor_decision.rods, log_prefix)
-  end
-  result.ok, result.err = ok, err
+-- Sind die Staebe eines Reaktors NICHT gleich eingestellt -- ein von Hand
+-- verstellter Stab, ein zur Haelfte fehlgeschlagener Schreibvorgang, ein
+-- frisch zusammengesetztes Multiblock -- kann der Mittelwert genau auf dem
+-- Sollwert liegen, waehrend kein einzelner Stab dort steht. Der Dirty-Check
+-- hat dann dauerhaft "steht schon richtig" gesagt und nie wieder
+-- geschrieben. Der Reaktor blieb mit ungleichen Staeben stehen, und von
+-- aussen sah das aus wie ein Regler, der nicht mehr regelt.
+--
+-- Das bedingungslose Schreiben war genau die Selbstheilung dafuer: es zieht
+-- alle Staebe in jedem Takt auf denselben Wert. Diese Eigenschaft hatte
+-- niemand aufgeschrieben, also habe ich sie beim Sparen mitentfernt.
+--
+-- Was es kostet: EIN Schreibzugriff je Reaktor und Takt. Der grosse Posten
+-- war die Spule (einer je TURBINE und Takt, bei 20 Turbinen also 20 von 21),
+-- und dort greift der Dirty-Check weiter -- die Spule ist ein einzelner
+-- Wahrheitswert, der keine Gleichheit ueber mehrere Aktoren behaupten muss.
+--
+-- Wer das hier wieder sparen will, braucht zuerst die Information, ob die
+-- Staebe UNTEREINANDER gleich stehen (read_control_rods_detail liefert
+-- min/max/complete) -- der Mittelwert allein genuegt nicht.
+function M.apply_reactor(reactor_adapter, name, log_prefix, reactor_decision)
+  local ok, err = reactor_adapter.apply_rod_level(name, reactor_decision.rods, log_prefix)
+  local result = { ok = ok, err = err }
   if reactor_decision.activate and type(reactor_adapter.set_active) == "function" then
     result.active_ok, result.active_err = reactor_adapter.set_active(name, true, log_prefix)
   end

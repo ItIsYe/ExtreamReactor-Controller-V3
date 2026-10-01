@@ -205,12 +205,6 @@ function M.tick(ctx)
   for _, t in ipairs(result.turbines) do
     adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
   end
-  -- Messwert je Reaktorname, damit apply_reactor() seinen Dirty-Check
-  -- gegen die TATSAECHLICHE Stabstellung fuehren kann.
-  local readings_by_name = {}
-  for _, ri in ipairs(reactor_inputs) do
-    if ri.name then readings_by_name[ri.name] = ri.reactor end
-  end
   for index, decision in ipairs(result.reactors) do
     -- Der Name aus der Entscheidung selbst, nicht ueber die Position:
     -- die Einheitenliste wird je Takt an die gemeldeten Reaktoren
@@ -219,8 +213,7 @@ function M.tick(ctx)
     -- einem Reaktor die Staebe des anderen zu stellen.
     local name = decision.name or reactor_names[index]
     if name then
-      adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX,
-        decision, readings_by_name[name])
+      adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
     end
   end
 

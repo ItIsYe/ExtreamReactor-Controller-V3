@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 808,
-  manifest_id = "manifest-v808",
+  manifest_version = 809,
+  manifest_id = "manifest-v809",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "0281c3fb", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "e3a49c7c", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 3137, hash = "7fe91602", always = true },
@@ -134,9 +134,9 @@ return {
     { path = "nodes/rt/main.lua", size_bytes = 41351, hash = "ee0a9934", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 16155, hash = "55f61fc0", required_for={"RT"} },
     { path = "nodes/rt/mockup_pages.lua", size_bytes = 18994, hash = "b99a2388", required_for={"RT"} },
-    { path = "nodes/rt/rt2_adapter.lua", size_bytes = 9510, hash = "4a9a53d1", required_for={"RT"} },
+    { path = "nodes/rt/rt2_adapter.lua", size_bytes = 9583, hash = "614763cb", required_for={"RT"} },
     { path = "nodes/rt/rt2_command_handler.lua", size_bytes = 8123, hash = "bdb1b251", required_for={"RT"} },
-    { path = "nodes/rt/rt2_engine.lua", size_bytes = 21486, hash = "e2b65aa0", required_for={"RT"} },
+    { path = "nodes/rt/rt2_engine.lua", size_bytes = 21187, hash = "460aab5c", required_for={"RT"} },
     { path = "nodes/rt/rt2_master_link.lua", size_bytes = 3229, hash = "069dfa32", required_for={"RT"} },
     { path = "nodes/rt/rt2_orchestrator.lua", size_bytes = 34919, hash = "8954a727", required_for={"RT"} },
     { path = "nodes/rt/rt2_projection.lua", size_bytes = 6948, hash = "09f20d45", required_for={"RT"} },
