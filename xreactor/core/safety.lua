@@ -125,6 +125,25 @@ function safety.evaluate_coolant_limit(input)
   local measurement_valid = ratio_valid and measurement_state ~= "INVALID"
   local last_valid_ratio = tonumber(state.last_valid_ratio)
   local stale_fallback_used = false
+  -- Die Schonfrist fuer eine Null-Messung ist ENDLICH.
+  --
+  -- Vorher fehlte die letzte Bedingung, und genau daran scheiterte die
+  -- Abschaltung bei echtem Kuehlmittelverlust: last_valid_ratio wird im
+  -- Glitch-Zweig unten bewusst NICHT fortgeschrieben, also blieb bei einem
+  -- dauerhaft leeren Tank jede weitere Nullmessung erneut ein
+  -- Glitch-Kandidat. Die Folge war kein spaeterer Trip, sondern gar keiner:
+  -- der Zweig setzt state.low_ticks in jedem Takt auf 0 zurueck, sobald
+  -- invalid_grace_samples abgelaufen ist, und triggered braucht
+  -- low_ticks >= trip_samples. Gegenprobe: 0.80 gefolgt von 1000
+  -- Nullmessungen ergab low_ticks=0 und zero_glitch_ticks=1000.
+  --
+  -- Mit dem Zaehlervergleich gilt die Null nach Ablauf der Schonfrist als
+  -- das, was sie dann ist: eine gueltige Leermessung. Sie laeuft ab da
+  -- durch den normalen Zweig, setzt last_valid_ratio auf 0 und zaehlt
+  -- low_ticks hoch -- der Trip faellt also spaetestens nach
+  -- zero_glitch_grace_samples + trip_samples Messungen. Ein echter
+  -- kurzer Aussetzer (gesund -> wenige Nullen -> gesund) wird weiterhin
+  -- vollstaendig verschluckt.
   local zero_glitch_candidate = measurement_valid
     and ratio == 0
     and tonumber(amount) == 0
@@ -132,6 +151,7 @@ function safety.evaluate_coolant_limit(input)
     and amount_max > 0
     and type(last_valid_ratio) == "number"
     and last_valid_ratio > low_threshold
+    and (tonumber(state.zero_glitch_ticks) or 0) < zero_glitch_grace_samples
   local zero_glitch_pending = false
 
   if measurement_valid and not zero_glitch_candidate then

@@ -88,6 +88,16 @@ return {
     coolant_hysteresis = 0.05,
     coolant_trip_samples = 3,
     coolant_invalid_grace_samples = 3,
+    -- Wie viele Regeltakte eine Sicherheitsmessung (Temperatur oder
+    -- Kuehlmittel) ausfallen darf, bevor der Messausfall SELBST eine
+    -- Sicherheitslage ist. 200 Takte sind bei 10 Hz 20 Sekunden -- lang
+    -- genug fuer einen nachladenden Chunk oder ein kurz zerlegtes
+    -- Multiblock, kurz genug, dass ein echter Sensorausfall nicht
+    -- unbegrenzt als "sicher" durchgeht. Gezaehlt wird nur ein Kanal, der
+    -- auf diesem Reaktor schon einmal gelesen wurde: ein passiv
+    -- gekuehlter Reaktor und eine noch nicht gebundene Peripherie loesen
+    -- damit nie aus (siehe nodes/rt/rt2_safety.lua).
+    measurement_grace_samples = 200,
     -- Eskalation: wenn ein Reaktor innerhalb von coolant_trip_escalation_window_s
     -- coolant_trip_escalation_count mal in SAFE getrippt ist (wiederholtes
     -- Auslösen statt einem einzelnen Ereignis), wird der automatische
