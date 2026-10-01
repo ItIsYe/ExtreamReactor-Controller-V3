@@ -37,6 +37,10 @@ local last_logged_max_output
 -- erneut "EINLERNEN FERTIG" mit derselben Zahl auflaufen -- im
 -- Dauerbetrieb mit knappem Dampf dutzendfach.
 local last_logged_reason
+-- Ob zuletzt gemeldet wurde, dass die Kalibrierung die MASTER-Vorgabe
+-- ueberstimmt. Nur fuer die Entprellung der Meldung -- am Verhalten
+-- aendert das nichts (siehe status_fields' calibration_overrides_master).
+local last_logged_override
 -- Wie stark die gemessene Leistung steigen muss, damit die Nachfuehrung
 -- ueberhaupt gemeldet wird. Ohne Schwelle stand im Protokoll
 -- "Leistung nach oben korrigiert: 18040 -> 18041 RF/t" -- eine Zeile, die
@@ -71,6 +75,7 @@ function M.init(opts)
   last_logged_capacity_diag = nil
   last_logged_max_output = nil
   last_logged_reason = nil
+  last_logged_override = nil
   last_projection = nil
   -- Die MASTER-Liveness-Schwelle der Zustandsmaschine folgt
   -- config.comms.peer_timeout_s, weil Health-Check und Monitor-Anzeige
@@ -197,6 +202,30 @@ function M.tick(ctx)
     local name = decision.name or reactor_names[index]
     if name then
       adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
+    end
+  end
+
+  -- Wenn die Kalibrierung die MASTER-Vorgabe ueberstimmt, einmal sagen.
+  --
+  -- Der Vorrang ist beabsichtigt und bleibt (Betreiberentscheidung, siehe
+  -- status_fields' calibration_overrides_master): ohne ihn gaebe es einen
+  -- Start-Deadlock. Aber eine als 0 % uebermittelte Pause ist waehrend des
+  -- Einlernens eben KEINE Stillsetzfunktion, und das darf nicht
+  -- stillschweigend geschehen -- bisher stand auf dem Schirm die
+  -- MASTER-Vorgabe, waehrend der Knoten auf 100 % regelte.
+  local overriding = (result.capacity.learning == true)
+    and (tonumber(result.effective_percent) ~= tonumber(result.master_percent))
+  if overriding ~= last_logged_override then
+    last_logged_override = overriding
+    if overriding then
+      local msg = string.format(
+        "v2 EINLERNEN hat Vorrang: MASTER gibt %s %% vor, geregelt wird auf %s %%."
+          .. " Zum Anhalten SCRAM verwenden -- das wirkt auch waehrend des Einlernens.",
+        tostring(result.master_percent), tostring(result.effective_percent))
+      ctx.log("WARN", msg)
+      pcall(print, "[RT] " .. msg)
+    else
+      ctx.log("INFO", "v2 MASTER-Vorgabe gilt wieder unveraendert")
     end
   end
 
@@ -370,6 +399,28 @@ function M.status_fields()
     -- sie las bisher v1's ctx.targets, das unter v2 niemand mehr fuellt,
     -- und zeigte deshalb dauerhaft "SOLL 0.0 / MASTER % 0.0".
     master_percent = last_result.master_percent,
+    -- Was in DIESEM Takt wirklich gegolten hat. Waehrend des Einlernens
+    -- faehrt die Flotte auf 100 %, auch wenn MASTER weniger vorgibt --
+    -- siehe calibration_overrides_master unten. Ohne dieses Feld zeigte
+    -- der Schirm die MASTER-Vorgabe an, waehrend der Knoten etwas
+    -- anderes tat.
+    effective_percent = last_result.effective_percent,
+    -- Die Kalibrierung ueberstimmt gerade die MASTER-Vorgabe.
+    --
+    -- Das ist BEABSICHTIGT und bleibt so (Betreiberentscheidung): ohne
+    -- diesen Vorrang gaebe es einen Start-Deadlock -- MASTER teilt seinen
+    -- Bedarf gegen capacity_max auf, das beim Start 0 ist, also kaeme 0 %
+    -- zurueck, also liefe keine Turbine, also floesse nichts, also bliebe
+    -- capacity_max 0.
+    --
+    -- Die Folge muss man aber SEHEN koennen: eine als 0 % uebermittelte
+    -- Pause ist waehrend des Einlernens keine Stillsetzfunktion. Wer
+    -- wirklich anhalten will, nimmt SCRAM -- das wirkt in jedem Zustand,
+    -- auch waehrend des Einlernens (nachgewiesen: Zustand SAFE,
+    -- Durchfluss 0).
+    calibration_overrides_master = (last_result.capacity.learning == true)
+      and (tonumber(last_result.effective_percent) ~= tonumber(last_result.master_percent))
+      or false,
     power_target = (last_result.capacity.max_output or 0)
       * ((tonumber(last_result.effective_percent or last_result.master_percent) or 0) / 100),
     turbines = turbines,

@@ -436,6 +436,34 @@ Die Spule kuppelt jetzt auch dann, wenn der Regler die Turbine als
 angekommen ansieht. Festgehalten in
 `rt2_settled_turbine_couples_test.lua`.
 
+### Die Kalibrierung gewinnt gegen die MASTER-Vorgabe
+
+Waehrend des Einlernens faehrt die Flotte auf 100 %, auch wenn MASTER
+weniger vorgibt -- einschliesslich eines ausdruecklichen 0-%-Holds.
+
+Das ist eine **Betreiberentscheidung und bleibt so**. Ohne diesen Vorrang
+gaebe es einen Start-Deadlock: MASTER teilt seinen Bedarf gegen
+`capacity_max` auf, das beim Start 0 ist, also kaeme 0 % zurueck, also
+liefe keine Turbine, also floesse nichts, also bliebe `capacity_max` 0.
+
+Die Folge muss man trotzdem kennen: **eine als 0 % uebermittelte Pause ist
+waehrend des Einlernens keine Stillsetzfunktion.** Wer wirklich anhalten
+will, nimmt **SCRAM** -- das wirkt in jedem Zustand, auch waehrend des
+Einlernens (nachgewiesen: Zustand SAFE, Durchfluss 0, Staebe 100).
+
+Sichtbar ist der Vorrang an drei Stellen:
+
+| | |
+|---|---|
+| `status_fields().effective_percent` | die tatsaechlich wirksame Vorgabe |
+| `status_fields().master_percent` | die uebermittelte |
+| `status_fields().calibration_overrides_master` | beide weichen gerade ab |
+
+Dazu eine einmalige WARN-Meldung, die den Weg zum echten Anhalten nennt.
+Festgehalten in `rt2_calibration_precedence_test.lua` -- einschliesslich
+der Zusicherung, dass der Vorrang selbst bestehen bleibt, damit ihn
+niemand versehentlich "repariert".
+
 ### Das Anlagenmodell aus dem Mod-Quelltext
 
 `tests/support/er_plant_model.lua` bildet die Turbine 1:1 nach dem
@@ -691,6 +719,8 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_coil_hold_limit_cycle_test.lua` | geschlossener Regelkreis MIT Spulenlast: kein Grenzzyklus, keine Ueberdrehzahl |
 | `rt2_er_physics_integration_test.lua` | ganzer Stapel gegen die Turbinenphysik aus dem Mod-Quelltext |
 | `rt2_er_physics_scenarios_test.lua` | Basic-Turbinen am Anschlag, knapper Dampf, MASTER-Vorgabe mit Slot-Rotation |
+| `rt2_calibration_precedence_test.lua` | Einlernen ueberstimmt die MASTER-Vorgabe -- gewollt, sichtbar, und SCRAM wirkt trotzdem |
+| `rt2_safety_measurement_loss_test.lua` | fehlende Sicherheitsmessungen: Schonfrist, Ausloesung, Erholung |
 | `rt2_unreadable_flow_commands_zero_test.lua` | unbekannter Durchfluss wird nie als 0 geschrieben |
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
 | `rt2_monitor_v2_display_test.lua` | RT-Schirm zeigt den wirklichen Zustand |
