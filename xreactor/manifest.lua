@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 800,
-  manifest_id = "manifest-v800",
+  manifest_version = 801,
+  manifest_id = "manifest-v801",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "666f26c7", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "874a7940", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 3137, hash = "7fe91602", always = true },
@@ -164,7 +164,7 @@ return {
     { path = "nodes/energy/matrix_topology_cache.lua", size_bytes = 3249, hash = "47734995", required_for={"ENERGY"} },
     { path = "nodes/energy/runtime_context.lua", size_bytes = 1928, hash = "f9d9a168", required_for={"ENERGY"} },
     { path = "nodes/energy/status_payload.lua", size_bytes = 9180, hash = "87e940b8", required_for={"ENERGY"} },
-    { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 6118, hash = "04b90706", required_for={"ENERGY"} },
+    { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 8976, hash = "ae143087", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_model.lua", size_bytes = 4456, hash = "f05fc8fb", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_pages.lua", size_bytes = 20318, hash = "9feb81df", required_for={"ENERGY"} },
     },

@@ -33,6 +33,11 @@ function M.new(opts)
   local function sample_storage_stats(ts)
     local now = ts or runtime.now_ms()
     local total, capacity, input, output = 0, 0, 0, 0
+    -- Der wahre Energieinhalt ueber ALLE Speicher, auch die ohne bekannte
+    -- Kapazitaet. total/capacity bleiben dagegen ein zusammengehoeriges
+    -- Zaehler/Nenner-Paar -- siehe read_capacity() unten.
+    local stored_all = 0
+    local capacity_unknown = 0
     local stores = {}
     local any_stale = false
     for _, storage in ipairs(runtime.devices.storages or {}) do
@@ -60,6 +65,22 @@ function M.new(opts)
           return tonumber(value) or 0, false
         end
 
+        -- Wie read_metric, aber ohne die 0-Erfindung: eine fehlende
+        -- Methode und ein nil-Rueckgabewert ergeben beide "unbekannt"
+        -- (nil) statt einer Null, die sich spaeter nicht mehr von einem
+        -- echten Messwert unterscheiden laesst.
+        local function read_capacity(fn)
+          if not fn then return nil, false end
+          local value, err = fn()
+          if err then
+            if type(runtime.record_error) == "function" then
+              runtime.record_error(storage.name .. ".capacity", err)
+            end
+            return nil, true
+          end
+          return tonumber(value), false
+        end
+
         local stored_v, err1 = read_metric("stored", adapter and adapter.getStored)
         local in_v, err2 = read_metric("input", adapter and adapter.getInput)
         local out_v, err3 = read_metric("output", adapter and adapter.getOutput)
@@ -73,14 +94,28 @@ function M.new(opts)
         -- A failed capacity read must mark the whole storage sample stale and
         -- participate in failure backoff; otherwise a frozen cached capacity
         -- can be presented as fresh forever.
+        --
+        -- UNBEKANNT wird nicht mehr erfunden. Vorher fiel die Kapazitaet bei
+        -- fehlendem Messwert auf `stored` zurueck -- und read_metric() macht
+        -- aus einer FEHLENDEN Methode wie aus einem nil-Rueckgabewert beides
+        -- "0, kein Fehler". Ergebnis: stored=1000, capacity=1000, also
+        -- scheinbar frische 100 % Fuellstand, ohne jede Stale-Markierung.
+        -- Das ist kein Randfall: adapters/energy_storage.lua gibt fuer den
+        -- passiven ER2-Reaktorport ausdruecklich capacity = nil zurueck,
+        -- weil dieses Geraet die Kapazitaet nur in getEnergyStats() fuehrt.
+        -- Der MASTER rechnet aus stored/capacity seinen Lastabwurf
+        -- (master/runtime_ops_profile.lua) -- ein erfundener Nenner ist dort
+        -- teurer als ein fehlender.
         if (now - st.last_capacity_ts) >= CAPACITY_INTERVAL_MS or st.last_capacity_ts == 0 then
-          local cap_v, err_cap = read_metric("capacity", adapter and adapter.getCapacity)
+          local cap_v, err_cap = read_capacity(adapter and adapter.getCapacity)
           had_error = had_error or err_cap
           if not err_cap then
-            if type(cap_v) == "number" and cap_v > 0 then
+            if cap_v and cap_v > 0 then
               st.cached_capacity = cap_v
-            elseif type(stored) == "number" then
-              st.cached_capacity = stored
+              st.capacity_known = true
+            else
+              st.cached_capacity = 0
+              st.capacity_known = false
             end
             st.last_capacity_ts = now
           end
@@ -97,12 +132,23 @@ function M.new(opts)
       end
 
       stored = tonumber(stored) or 0
-      cap = tonumber(cap) or stored
+      cap = tonumber(cap) or 0
       in_rate = tonumber(in_rate) or 0
       out_rate = tonumber(out_rate) or 0
+      local capacity_known = st.capacity_known == true and cap > 0
       if had_error then any_stale = true end
-      total = total + stored
-      capacity = capacity + cap
+      stored_all = stored_all + stored
+      -- Zaehler und Nenner nur gemeinsam: ein Speicher ohne bekannte
+      -- Kapazitaet darf seinen Inhalt nicht in einen Quotienten einbringen,
+      -- zu dem er keinen Nenner beitraegt -- sonst waere der Fuellstand
+      -- genau so verfaelscht wie mit der erfundenen Kapazitaet, nur in die
+      -- andere Richtung.
+      if capacity_known then
+        total = total + stored
+        capacity = capacity + cap
+      else
+        capacity_unknown = capacity_unknown + 1
+      end
       input = input + in_rate
       output = output + out_rate
       stores[#stores + 1] = {
@@ -114,6 +160,7 @@ function M.new(opts)
         input = in_rate,
         output = out_rate,
         is_matrix = storage.is_matrix or false,
+        capacity_known = capacity_known,
         ok = not had_error
       }
     end
@@ -121,7 +168,13 @@ function M.new(opts)
       ts = ts or runtime.now_ms(),
       stale = any_stale,
       stores = stores,
-      total = { stored = total, capacity = capacity, input = input, output = output }
+      capacity_unknown = capacity_unknown,
+      capacity_complete = capacity_unknown == 0,
+      total = {
+        stored = total, capacity = capacity, input = input, output = output,
+        -- Der wahre Gesamtinhalt, unabhaengig von der Kapazitaetsabdeckung.
+        stored_all = stored_all,
+      }
     }
     return runtime.snapshot
   end
@@ -134,7 +187,9 @@ function M.new(opts)
     local snapshot = runtime.snapshot or {
       ts = 0,
       stores = {},
-      total = { stored = 0, capacity = 0, input = 0, output = 0 }
+      capacity_unknown = 0,
+      capacity_complete = true,
+      total = { stored = 0, capacity = 0, input = 0, output = 0, stored_all = 0 }
     }
     local age = now - (snapshot.ts or 0)
     -- Absichtlich KEIN synchrones sample_storage_stats() hier, wenn der
@@ -149,6 +204,10 @@ function M.new(opts)
       capacity = tonumber(snapshot.total and snapshot.total.capacity) or 0,
       input = tonumber(snapshot.total and snapshot.total.input) or 0,
       output = tonumber(snapshot.total and snapshot.total.output) or 0,
+      stored_all = tonumber(snapshot.total and snapshot.total.stored_all)
+        or tonumber(snapshot.total and snapshot.total.stored) or 0,
+      capacity_unknown = tonumber(snapshot.capacity_unknown) or 0,
+      capacity_complete = snapshot.capacity_complete ~= false,
       stores = runtime.utils.deep_copy(snapshot.stores or {}),
       freshness_ms = age,
       stale = snapshot.stale == true or (snapshot.ts or 0) <= 0
