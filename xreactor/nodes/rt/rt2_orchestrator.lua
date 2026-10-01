@@ -62,6 +62,29 @@ M.LEARN_TOLERANCE_RPM    = 15      -- Zielband
 M.LEARN_MIN_FRACTION     = 0.8     -- so viel der Flotte muss gleichzeitig drin stehen
 M.LEARN_SAFETY_MARGIN    = 0.05    -- gemeldet wird 95 % des gemessenen Hoechstwerts
 M.LEARN_STABLE_MS        = 6000    -- so lange darf er sich nicht mehr verbessern
+-- Wie viel BESSER ein Messwert sein muss, damit er als Verbesserung gilt
+-- und die Stabilitaetsuhr neu startet.
+--
+-- Ohne diese Schwelle endete das Einlernen nie. Der Rotor naehert sich der
+-- Zieldrehzahl asymptotisch, und die Leistung steigt mit ihm monoton --
+-- also war `output > best_output` in JEDEM Takt wahr, mit immer kleineren
+-- Schritten. Gemessen am quelltextnahen Anlagenmodell, vier Turbinen alle
+-- im Zielband:
+--
+--   t= 240s best=96127 ... t=1140s best=96408 ... t=2000s immer noch LEARNING
+--
+-- Die Folge war nicht nur ein fehlendes Ende: learning=true haelt
+-- effective_percent dauerhaft auf 100 (die Kalibrierung hat Vorrang), und
+-- capacity_ready bleibt false -- der MASTER bekommt also keinen brauchbaren
+-- Wert und seine Vorgabe bleibt wirkungslos. Genau dieses Bild: "Master
+-- 0 %, Turbinen trotzdem auf 100 %".
+--
+-- 0.1 % liegt deutlich ueber dem asymptotischen Kriechen (im Beispiel rund
+-- 0.008 % je 6-Sekunden-Fenster) und deutlich unter jeder echten
+-- Verbesserung (eine Turbine mehr, zurueckkehrender Dampf). Der gemeldete
+-- Hoechstwert bleibt davon unberuehrt: best_output/max_output werden weiter
+-- bei JEDER Verbesserung nachgezogen, nur die Uhr nicht.
+M.LEARN_MIN_IMPROVEMENT  = 0.001
 M.TOPOLOGY_DEBOUNCE_MS   = 3000    -- so lange muss eine geaenderte Turbinenzahl anhalten
 M.SATURATION_FRACTION    = 0.95    -- ab hier gilt der Durchfluss als am Anschlag
 
@@ -303,15 +326,23 @@ local function measure_capacity(previous, turbines, now_ms)
   end
 
   if output > (state.best_output or 0) then
+    -- Nur eine NENNENSWERTE Verbesserung startet die Stabilitaetsuhr neu --
+    -- siehe LEARN_MIN_IMPROVEMENT. Der Hoechstwert selbst wird trotzdem
+    -- immer nachgezogen, sonst wuerde das Einlernen unter dem tatsaechlich
+    -- gemessenen Wert enden.
+    local significant = output >= (state.best_output or 0) * (1 + M.LEARN_MIN_IMPROVEMENT)
     state.best_output = output
     -- Ganzzahlig: RF/t mit acht Nachkommastellen ist nicht nur unsinnig zu
     -- lesen, der Wert ueberlebt auch eine Serialisierung nicht unveraendert.
     state.max_output = math.floor(output * (1 - M.LEARN_SAFETY_MARGIN))
     -- Wieviele Turbinen liefen, als dieser Hoechstwert floss.
     state.sustainable_turbines = at_target
-    state.last_improved_ms = now_ms
-    state.reason = M.LEARNING
-    return state
+    if significant then
+      state.last_improved_ms = now_ms
+    end
+    -- KEIN frueher Ausstieg mehr: bei einer unbedeutenden Verbesserung muss
+    -- die Stabilitaetspruefung unten trotzdem laufen, sonst bleibt das
+    -- Einlernen genau daran haengen.
   end
 
   if now_ms - state.last_improved_ms >= M.LEARN_STABLE_MS then

@@ -436,6 +436,46 @@ Die Spule kuppelt jetzt auch dann, wenn der Regler die Turbine als
 angekommen ansieht. Festgehalten in
 `rt2_settled_turbine_couples_test.lua`.
 
+### Das Einlernen braucht eine Mindest-Verbesserung, um zu enden
+
+Das Einlernen endet, wenn sich der gemessene Hoechstwert
+`LEARN_STABLE_MS` (6 s) lang nicht mehr verbessert hat. Die Bedingung war
+aber ein strikter Groesser-Vergleich:
+
+```lua
+if output > state.best_output then ... last_improved_ms = now_ms end
+```
+
+Der Rotor naehert sich der Zieldrehzahl **asymptotisch** (rpm ist ein
+Integrator, siehe oben), und die Leistung steigt mit ihm monoton. Dieser
+Vergleich wird damit nie falsch -- die Stabilitaetsuhr startete in jedem
+Takt neu, mit immer kleineren Schritten:
+
+```
+t= 240s best=96127 ... t=1140s best=96408 ... t=2000s immer noch LEARNING
+```
+
+**Daraus wurden drei Symptome, die nach drei Fehlern aussahen:**
+
+| Beobachtung | Ursache |
+|---|---|
+| "Master 0 %, Turbinen trotzdem auf 100 %" | `learning=true` haelt `effective_percent` auf 100 (die Kalibrierung hat Vorrang) |
+| "der Master bekommt keinen Wert" | `capacity_ready` blieb false, und `master/runtime_ops_profile.lua` verwirft die Kapazitaet dann vollstaendig |
+| "ein Wert wird eingelernt" | stimmte -- `best_output` stieg ja, nur endete es nie |
+
+Nur eine Verbesserung um mindestens `LEARN_MIN_IMPROVEMENT` (**0,1 %**)
+startet die Uhr jetzt neu. Das liegt deutlich ueber dem asymptotischen
+Kriechen (im Beispiel rund 0,008 % je 6-Sekunden-Fenster) und deutlich
+unter jeder echten Verbesserung (eine Turbine mehr, zurueckkehrender
+Dampf). Der gemeldete Hoechstwert wird weiter bei **jeder** Verbesserung
+nachgezogen -- sonst endete das Einlernen unter dem tatsaechlich
+gemessenen Wert. Am Modell endet es damit nach 186,6 s bei 96028 statt bei
+den asymptotischen 96408: 0,4 % darunter, und die 5 % Sicherheitsreserve
+decken das. Die Nachfuehrung nach oben holt den Rest ohnehin.
+
+Festgehalten in `rt2_learning_terminates_test.lua`, samt Durchstich: nach
+dem Einlernen parkt 0 % die Flotte und 50 % faehrt die Haelfte.
+
 ### Die Kalibrierung gewinnt gegen die MASTER-Vorgabe
 
 Waehrend des Einlernens faehrt die Flotte auf 100 %, auch wenn MASTER
@@ -781,6 +821,7 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_er_physics_integration_test.lua` | ganzer Stapel gegen die Turbinenphysik aus dem Mod-Quelltext |
 | `rt2_er_physics_scenarios_test.lua` | Basic-Turbinen am Anschlag, knapper Dampf, MASTER-Vorgabe mit Slot-Rotation |
 | `rt2_calibration_precedence_test.lua` | Einlernen ueberstimmt die MASTER-Vorgabe -- gewollt, sichtbar, und SCRAM wirkt trotzdem |
+| `rt2_learning_terminates_test.lua` | das Einlernen endet auch bei asymptotisch steigendem Ausstoss, danach wirkt die MASTER-Vorgabe |
 | `rt2_safety_measurement_loss_test.lua` | fehlende Sicherheitsmessungen: Schonfrist, Ausloesung, Erholung |
 | `rt2_unreadable_flow_commands_zero_test.lua` | unbekannter Durchfluss wird nie als 0 geschrieben |
 | `rt2_fuel_chain_test.lua` | Reaktor-Fuellstand bis zur FUEL-Node (beide Wege) |
