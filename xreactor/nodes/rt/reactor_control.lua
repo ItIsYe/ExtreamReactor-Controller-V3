@@ -56,14 +56,40 @@ function M.clamp_rods(ctx, level, allow_overmax)
 end
 
 -- ── Steam-Quellen-Erkennung und -Messung ────────────────────────────────────
+-- So lange wird nach einem erfolglosen Suchlauf nicht erneut gesucht.
+--
+-- Der Normalfall dieser Anlage ist, dass es GAR KEINEN externen Dampftank
+-- gibt -- der Reaktor hat seinen internen (getHotFluidAmount), und genau
+-- daraus regelt rt2_reactor.lua. Dieser Suchlauf lief trotzdem bei jedem
+-- Aufruf komplett durch: peripheral.getNames() plus getType() je
+-- Peripherie, dazu ein safe_wrap() fuer jeden Namen, der "steam" enthaelt.
+-- Aufgerufen wird er aus get_available_steam(), also aus der Statusaufnahme
+-- UND aus dem Schirm -- in einem Netz mit vielen Peripherien eine
+-- vollstaendige Enumeration pro Bild, fuer ein Ergebnis, das dauerhaft nil
+-- ist.
+--
+-- 30 s sind lang genug, dass die Suche nicht mehr ins Gewicht faellt, und
+-- kurz genug, dass ein nachtraeglich angebauter Tank von allein gefunden
+-- wird.
+M.STEAM_TANK_RESCAN_MS = 30000
+
 function M.resolve_steam_tank_name(ctx)
   if ctx.steam_tank_name and peripheral.isPresent(ctx.steam_tank_name) then
     return ctx.steam_tank_name
+  end
+  -- Erfolglos gesucht und die Wartezeit noch nicht um: nicht erneut suchen.
+  -- Ein Uhr-Ruecksprung macht den Zeitstempel ungueltig, dann wird sofort
+  -- wieder gesucht (dieselbe Regel wie ueberall sonst).
+  local now = os.epoch("utc")
+  local retry_at = tonumber(ctx.steam_tank_absent_until)
+  if retry_at and now < retry_at and now >= (retry_at - M.STEAM_TANK_RESCAN_MS) then
+    return nil
   end
   for _, name in ipairs(peripheral.getNames()) do
     local ptype = peripheral.getType(name)
     if ptype and string.find(ptype, "ultimate_fluid_tank") then
       ctx.steam_tank_name = name
+      ctx.steam_tank_absent_until = nil
       return ctx.steam_tank_name
     end
   end
@@ -72,10 +98,12 @@ function M.resolve_steam_tank_name(ctx)
       local tank = ctx.utils.safe_wrap(name)
       if tank and (tank.tanks or tank.getFluidAmount) then
         ctx.steam_tank_name = name
+        ctx.steam_tank_absent_until = nil
         return ctx.steam_tank_name
       end
     end
   end
+  ctx.steam_tank_absent_until = now + M.STEAM_TANK_RESCAN_MS
   return nil
 end
 

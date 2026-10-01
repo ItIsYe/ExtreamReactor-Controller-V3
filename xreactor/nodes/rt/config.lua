@@ -5,7 +5,7 @@
 -- ueberschrieben, falls der Nutzer bewusst einen anderen Wert gesetzt
 -- hat), und die Migration wird als abgeschlossen persistiert, damit sie
 -- nur einmal laeuft.
-local CURRENT_VERSION = 7
+local CURRENT_VERSION = 8
 
 -- Auto-generated per computer via os.getComputerID(), same pattern as
 -- installer/valve_naming.lua's "VALVE-<id>" and utils.normalize_node_id()'s
@@ -82,12 +82,28 @@ return {
   safety = {
     max_temperature = 2000,
     temperature_hysteresis = 50,
-    temperature_trip_samples = 3,
+    -- Entprellung der Sicherheitsgrenzen, GEZAEHLT IN REGELTAKTEN.
+    --
+    -- Der Regeltakt liegt bei 10 Hz (nodes/rt/main.lua's RECEIVE_TIMEOUT).
+    -- 3 Takte sind damit 300 ms -- diese Werte stammen aus der Zeit des
+    -- langsamen v1-Reglers, wo dieselbe 3 noch mehrere Sekunden bedeutete.
+    -- Mit dem 10-Hz-Takt entprellen sie praktisch nichts mehr: drei
+    -- aufeinanderfolgende Aussetzer der Messung reichen fuer eine
+    -- Abschaltung.
+    --
+    -- 10 Takte = 1 Sekunde. Das ist weiterhin schnell (eine echte
+    -- Ueberschreitung haelt an und wird in einer Sekunde erkannt), aber es
+    -- ueberlebt einen einzelnen zuckenden Messwert -- und gerade der
+    -- Kuehlmittelanteil zuckt, wenn der Tank einen Augenblick leerlaeuft.
+    --
+    -- Die Grenzwerte selbst bleiben unveraendert; entprellt wird nur, wie
+    -- lange eine Ueberschreitung anhalten muss.
+    temperature_trip_samples = 10,
     max_rpm = 1800,
     min_water = 0.2,
     coolant_hysteresis = 0.05,
-    coolant_trip_samples = 3,
-    coolant_invalid_grace_samples = 3,
+    coolant_trip_samples = 10,
+    coolant_invalid_grace_samples = 10,
     -- Wie viele Regeltakte eine Sicherheitsmessung (Temperatur oder
     -- Kuehlmittel) ausfallen darf, bevor der Messausfall SELBST eine
     -- Sicherheitslage ist. 18000 Takte sind bei 10 Hz 30 MINUTEN
@@ -114,6 +130,37 @@ return {
     coolant_recovery_confirm_ms = 4000
   },
 
+  -- ── NICHT MEHR AUSGEWERTETE ABSCHNITTE ────────────────────────────────
+  --
+  -- Was hier unter `autonom` und `rails` steht, liest der rt2-Regler NICHT.
+  -- Es ist Erbe des v1-Reglers, der mit v768 entfernt wurde. Die Abschnitte
+  -- bleiben stehen, weil bestehende Installationen sie auf Platte haben und
+  -- core/utils.lua's migrate_config() fehlende Schluessel sonst bei jedem
+  -- Boot neu ergaenzen und persistieren wuerde.
+  --
+  -- WARUM DAS HIER STEHT: diese Werte sind ueber den Config-Editor am MASTER
+  -- bearbeitbar. Wer dort an `rails.coil.engage_rpm`, `rails.turbine_flow.*`
+  -- oder `rails.reactor_rods.min` dreht, aendert am Verhalten des Reglers
+  -- NICHTS -- und das sieht von aussen wie ein kaputter Editor aus. Die
+  -- wirksamen Werte liegen im Quelltext, je mit ihrer Begruendung:
+  --
+  --   Zieldrehzahl, Zielband, Spulenschwellen, Durchflussgrenzen,
+  --   Schrittweiten, Vorhalt            -> nodes/rt/rt2_turbine.lua
+  --   Stabgrenzen, Tanksollwert, Totband,
+  --   Stellrate der Staebe              -> nodes/rt/rt2_reactor.lua
+  --   Einlernen (Zielband, Mindestanteil,
+  --   Reserve, Stabilitaetsfenster)     -> nodes/rt/rt2_orchestrator.lua
+  --
+  -- Eine Ausnahme: `rails.reactor_rods.min/.max` wertet
+  -- nodes/rt/reactor_control.lua weiterhin aus -- aber ausschliesslich fuer
+  -- die EINMALIGE Anfangsstellung beim Start und fuer den Update-Quiesce,
+  -- nicht fuer die laufende Regelung. Dass dort 80 steht, waehrend der
+  -- Regler mit rt2_reactor.ROD_MIN = 70 arbeitet, ist deshalb kein
+  -- Widerspruch in der Regelung, aber eine Stolperstelle beim Lesen.
+  --
+  -- Der Abschnitt `safety` dagegen IST wirksam (nodes/rt/rt2_safety.lua ueber
+  -- core/safety.lua), ebenso `comms`, `channels`, `heartbeat_interval`,
+  -- `status_interval`, `scan_interval`, `monitor_*` und `reactors`/`turbines`.
   autonom = {
     -- control_rod_level: nicht mehr aktiv genutzt (INITIAL_ROD_LEVEL in CONFIG übernimmt).
     -- Bleibt als Dokumentation erhalten, wird aber nicht ausgewertet.

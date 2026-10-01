@@ -56,6 +56,18 @@ local LEGACY_PEER_TIMEOUT_S = 12.0
 -- dort nie angekommen. Mit v7 gilt die Betreibervorgabe von 30 Minuten.
 local RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION = 7
 local LEGACY_MEASUREMENT_GRACE_SAMPLES = 200
+-- v8: die Entprellung der Sicherheitsgrenzen wird in REGELTAKTEN gezaehlt,
+-- und der Takt ist seit dem 10-Hz-Umbau zehnmal kuerzer. Die historischen
+-- 3 Takte bedeuteten damit nur noch 300 ms (siehe nodes/rt/config.lua).
+-- Wie bei jeder Migration hier: nur der bekannte ALTE DEFAULT wird
+-- angehoben -- ein bewusst anders gesetzter Wert bleibt stehen.
+local RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION = 8
+local LEGACY_TRIP_SAMPLES = 3
+local LEGACY_TRIP_SAMPLE_KEYS = {
+  "temperature_trip_samples",
+  "coolant_trip_samples",
+  "coolant_invalid_grace_samples",
+}
 
 function M.migrate_schema_version(config_values, defaults, add_warning)
   if type(config_values) ~= "table" then
@@ -105,6 +117,22 @@ function M.migrate_schema_version(config_values, defaults, add_warning)
         tostring(default_safety.measurement_grace_samples),
         RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION))
       changed = true
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION then
+    local safety_cfg = type(config_values.safety) == "table" and config_values.safety or nil
+    local default_safety = type(defaults.safety) == "table" and defaults.safety or nil
+    if safety_cfg and default_safety then
+      for _, key in ipairs(LEGACY_TRIP_SAMPLE_KEYS) do
+        if safety_cfg[key] == LEGACY_TRIP_SAMPLES and default_safety[key] ~= nil then
+          safety_cfg[key] = default_safety[key]
+          add_warning(string.format(
+            "safety.%s migrated from historical default %s -> %s (config schema v%d)",
+            key, tostring(LEGACY_TRIP_SAMPLES), tostring(default_safety[key]),
+            RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION))
+          changed = true
+        end
+      end
     end
   end
   if config_values.version ~= defaults.version then

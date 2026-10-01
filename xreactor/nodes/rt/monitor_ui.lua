@@ -227,7 +227,17 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 function M.update(monitor, ctx)
   if not monitor then return ctx.last_status_snapshot end
   local now = os.epoch("utc")
-  if now - M.last_monitor_update < (ctx.config.monitor_interval * 1000) then return ctx.last_status_snapshot end
+  -- Der Vergleich gilt nur VORWAERTS. Springt os.epoch("utc") zurueck (Welt
+  -- neu geladen), liegt M.last_monitor_update in der Zukunft, die Differenz
+  -- ist negativ und damit immer kleiner als das Intervall -- der Schirm
+  -- waere bis zum Aufholen der Uhr eingefroren, und zwar auf einem alten
+  -- Bild, das gesund aussieht. Dieselbe Regel wie im Regler (siehe
+  -- rt2_master_link.lua's is_connected und rt2_unit.lua's Stellintervall):
+  -- ein Zeitstempel aus der Zukunft wird verworfen, nicht ausgesessen.
+  local since = now - M.last_monitor_update
+  if since >= 0 and since < (ctx.config.monitor_interval * 1000) then
+    return ctx.last_status_snapshot
+  end
   M.last_monitor_update = now
 
   local snapshot = M.update_status_snapshot(ctx)

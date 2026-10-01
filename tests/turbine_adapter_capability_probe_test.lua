@@ -160,6 +160,16 @@ end
 -- ══ 7. Eine Turbine mit den ALTEN Namen laeuft trotzdem ═════════════════
 --
 -- getRotorRPM ist nicht verboten -- es darf nur nicht geraten werden.
+--
+-- Fuer den DURCHFLUSS gilt das NICHT, und das ist der Unterschied:
+-- getFluidFlowRate ist kein alter Name derselben Groesse, sondern eine
+-- ANDERE Groesse (getFluidConsumedLastTick -- der Verbrauch des letzten
+-- Ticks, nicht der gestellte Sollwert). Als Rueckmesswert gelesen liegt er
+-- im Beharrungszustand systematisch unter dem Sollwert, der Regler liest
+-- daraus dauerhaft "zu wenig gestellt" und dreht bis zum Anschlag auf.
+-- Darum bleibt der Wert hier UNBEKANNT -- der Regler nimmt dann seinen
+-- eigenen zuletzt gestellten Wert und regelt korrekt weiter (siehe
+-- adapters/turbine.lua's FLOW_METHODS).
 
 do
   install_peripheral({ 'getActive', 'getRotorRPM', 'getFluidFlowRate' },
@@ -167,7 +177,21 @@ do
   local turbine = fresh_adapter()
   local info = turbine.inspect('T1', 'RT')
   assert_eq(info.rpm, 880, 'ist nur getRotorRPM da, wird eben die genommen')
-  assert_eq(info.flow, 1400, 'dasselbe fuer den Durchfluss')
+  assert_eq(info.flow, 'n/a',
+    'der Verbrauch ist KEIN Ersatz fuer den Sollwert -- lieber unbekannt als falsch')
+  assert_eq(info.features.flow, false,
+    'und die Faehigkeit wird auch nicht behauptet')
+
+  -- Gegenprobe: mit der richtigen Methode kommt der Wert an.
+  install_peripheral({ 'getActive', 'getRotorSpeed', 'getFluidFlowRateMax',
+                       'getFluidFlowRateMaxMax' },
+    { getActive = true, getRotorSpeed = 900, getFluidFlowRateMax = 1400,
+      getFluidFlowRateMaxMax = 2000 })
+  local ok_turbine = fresh_adapter()
+  local ok_info = ok_turbine.inspect('T1', 'RT')
+  assert_eq(ok_info.flow, 1400, 'getFluidFlowRateMax ist der Sollwert und wird gelesen')
+  assert_eq(ok_info.flow_limit, 2000,
+    'und die Bauartgrenze kommt aus getFluidFlowRateMaxMax')
 end
 
 -- ══ Eine noch nicht fertige Turbine darf sich nicht festfahren ═════════

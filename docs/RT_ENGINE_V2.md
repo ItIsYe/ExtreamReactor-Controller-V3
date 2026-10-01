@@ -744,6 +744,221 @@ sich die Faehigkeiten ausserdem je Peripherie:
 
 Festgehalten in `turbine_adapter_capability_probe_test.lua`.
 
+### Keine wirkungslosen Schreibzugriffe
+
+Die Taktzeit der Regelschleife ergibt sich aus der Summe der
+Peripherieaufrufe je Takt. `RECEIVE_TIMEOUT` gibt 100 ms **vor**, haelt sie
+aber nicht ein, wenn ein Durchgang laenger braucht — und an dieser Taktzeit
+hingen mehrere Betriebsmeldungen, bis hin zu „MASTER DOWN", weil ein
+blockierender Durchgang den Heartbeat verpasste.
+
+Der Durchfluss hatte seinen Dirty-Check. Spule und Staebe wurden dagegen
+**bedingungslos in jedem Takt** geschrieben. Am Anlagenmodell gemessen,
+6 Turbinen im eingeschwungenen Beharrungszustand (nichts zu stellen),
+600 Takte:
+
+| Schreibweg | vorher | nachher |
+|---|---|---|
+| `setInductorEngaged` | 3600 (6,00/Takt) | 0 |
+| `setAllControlRodLevels` | 600 (1,00/Takt) | 0 |
+| `setFluidFlowRateMax` | 0 | 0 |
+
+Sieben Schreibzugriffe je Takt, von denen keiner etwas veraenderte; bei
+50 Turbinen waeren es 510 je Sekunde.
+
+Verglichen wird gegen den **Messwert**, nicht gegen die letzte eigene
+Entscheidung — damit heilt ein von aussen umgeschalteter Induktor oder eine
+von Hand verstellte Stabstellung im naechsten Takt von selbst. Zwei Regeln
+bleiben:
+
+- **Unbekannt wird immer geschrieben.** Ist der Spulenzustand nicht lesbar
+  (`coil_known = false`), ist das kein „steht schon richtig".
+- **Schutzentscheidungen werden immer geschrieben.** `SAFETY_FULL_INSERT`
+  und `NO_STEAM_READING` fahren die Staebe voll ein, auch wenn der Messwert
+  behauptet, es stuende schon so an. Eine Bremsung darf nie an einer
+  Ersparnis scheitern.
+
+Festgehalten in `rt2_redundant_hardware_writes_test.lua`.
+
+### Die Durchflussgrenze kommt vom Geraet
+
+`TurbineVariant` riegelt je Bauart ab — Basic 1000, Reinforced 2000 — und
+`setMaxIntakeRate()` klemmt jeden Schreibwert stillschweigend darauf. Der
+Regler hatte 2000 fest verdrahtet. An einer **Basic**-Turbine folgte daraus
+eine Kette, die von aussen wie ein kaputter Regler aussieht:
+
+- Der Rueckmesswert klemmt bei 1000, die Entscheidung rechnet 1000 + Schritt
+  — „steht schon so an" wird nie wahr, also wird in **jedem** Takt
+  geschrieben (gemessen: 1200 Schreibzugriffe in 600 Takten bei zwei
+  Turbinen, also einer je Turbine und Takt).
+- Die Notfreigabe der Spule verlangt Durchfluss ≥ `max_flow`. Bei 2000 ist
+  das an einer Basic nie erfuellt — eine Turbine, deren Spule den Hochlauf
+  verhindert, kommt **nie** mehr frei.
+- Die Saettigungsdiagnose (95 % von 2000 = 1900) schlaegt nie an, also bleibt
+  die Meldung aus, die dem Betreiber sagt, dass Dampf oder Spule das Problem
+  sind (gemessen: `saturated = 0`, obwohl beide Turbinen am Anschlag standen).
+
+Die Grenze wird jetzt je Turbine mit `getFluidFlowRateMaxMax` gelesen —
+`nodes/rt/turbine_control.lua` fragt die Methode seit jeher ab, benutzt hat
+sie nur niemand. Nicht lesbar heisst `nil`, und dann gilt der eigene Default
+(2000), nie etwas Kleineres.
+
+Im selben Zug entfallen ist der Rueckfall des Rueckmesswerts auf
+`getFluidFlowRate`. Die beiden Methoden messen verschiedene Dinge:
+
+| Methode | bedeutet |
+|---|---|
+| `getFluidFlowRateMax` | `getMaxIntakeRate()` — der **Sollwert** |
+| `getFluidFlowRate` | `getFluidConsumedLastTick()` — der **Verbrauch** |
+
+Der Verbrauch liegt im Beharrungszustand systematisch unter dem Sollwert; als
+Rueckmesswert gelesen heisst das dauerhaft „zu wenig gestellt", und der
+Regler dreht bis zum Anschlag auf. Ein falscher Wert ist hier schaedlicher
+als gar keiner — bei „unbekannt" nimmt der Regler seinen eigenen zuletzt
+gestellten Wert.
+
+Festgehalten in `rt2_per_turbine_flow_limit_test.lua`.
+
+### Die Stellrate der Staebe passt zur Dampfkette
+
+Die Dampfkette antwortet auf eine Stabbewegung erst nach Sekunden, und der
+interne Dampftank fasst nur die Groessenordnung **eines Ticks**
+Flottenbedarf. Ein Regler, der seine gesamte Vollmacht (70–100 % Einschub)
+innerhalb einer Antwortzeit der Strecke durchfaehrt, kann nicht einschwingen
+— er stellt immer gegen eine Wirkung, die noch aussteht. Der
+Durchflussregler loest dasselbe Problem mit dem Vorhalt; die Staebe haben
+keinen, also muss die Rate passen.
+
+Bis v807 war die Rate 12 %/s (`MAX_STEP` 6 je 500 ms), die ganze Vollmacht
+also in 2,5 s. Gemessen am Anlagenmodell, 6 Turbinen, 180 s Messfenster, in
+der Auslegung, in der Tankinhalt und Waermetraegheit in derselben
+Groessenordnung liegen:
+
+| Schritt / Intervall | Rate | Tankhub | Umkehr/min | rpm | im Zielband |
+|---|---|---|---|---|---|
+| 6 / 500 ms (vorher) | 12 %/s | 0,940 | 12,0 | 862 | **0 %** |
+| 3 / 500 ms | 6 %/s | 0,940 | 9,3 | 876 | 0 % |
+| 6 / 1500 ms | 4 %/s | 0,940 | 8,0 | 868 | 0 % |
+| **2 / 1000 ms (jetzt)** | **2 %/s** | 0,695 | 6,7 | **899** | **100 %** |
+
+Entscheidend ist die **Rate**, nicht der Einzelschritt: 4 %/s und 6 %/s sind
+immer noch zu schnell. Dass die Flotte ihr Zielband verliert, kostet nicht
+nur Drehzahl — es verhindert auch die Nachfuehrung der Kapazitaet, weil
+`at_target` dauerhaft unter `required_at_target` bleibt.
+
+**Was sich nicht verschlechtert:** in der realistischen Auslegung (interner
+Tank, 1000 mB je Kuehlmittelport) sitzt die Regelung am Anschlag — Staebe
+fest auf `ROD_MIN`, 899 rpm, alle Turbinen im Zielband, **kein einziger**
+Richtungswechsel. Das gilt vorher und nachher unveraendert, ueber
+Reaktorreserven von 1,15 bis 4,0 nachgemessen. Das ist der gesunde Zustand,
+nicht ein Mangel.
+
+**Was es kostet:** ein Lastsprung wird langsamer aufgefangen — der Tank
+erholt sich in 12,7 s statt in 5,1 s. Vertretbar, weil die Rotoren der
+Flotte Minuten an Schwungenergie tragen. Eine **Sicherheitsausloesung** ist
+davon nicht beruehrt: sie geht nicht ueber die Tankregelung, sondern setzt
+die Staebe im selben Takt auf `ROD_MAX`.
+
+`ROD_MIN = 70` bleibt unberuehrt — das ist eine Betreibervorgabe, keine
+Regelgroesse.
+
+Festgehalten in `rt2_rod_loop_stability_test.lua`.
+
+### Eine Schwelle fuer die MASTER-Verbindung, nicht drei
+
+Der Knoten konnte „MASTER DOWN" anzeigen, waehrend er im Zustand MASTER
+regelte. Es gab drei Schwellen fuer dieselbe Tatsache:
+
+| Stelle | Schwelle |
+|---|---|
+| `core/comms.lua` Peer-Tabelle | `comms.peer_timeout_s` = 20 s |
+| `rt2_master_link` (Zustandsmaschine) | 20 s |
+| `health_payload` Rueckfallweg | `heartbeat_interval * 5` = **10 s** |
+
+Dazu zwei Fehler im Rueckfallweg: `main.lua` uebergab
+`master_seen_ts or os.epoch("utc")` — ein **nie gesehener** MASTER kam mit
+einem Alter von 0 ms an und galt als verbunden. Und `master_peer_state()`
+griff mit `pairs()` einen **beliebigen** MASTER-Peer heraus; die Peer-Tabelle
+kann einen abgemeldeten unter alter Kennung und den laufenden enthalten,
+welchen der Durchlauf erwischte, war Zufall.
+
+Jetzt: derselbe `peer_timeout_s`, `nil` bleibt `nil`, und der **frischeste**
+Peer gewinnt.
+
+Festgehalten in `rt_master_health_single_threshold_test.lua`.
+
+### Uhr-Ruecksprung: eine Regel, ueberall
+
+`os.epoch("utc")` kann zurueckspringen (Welt neu geladen, Serverzeit
+korrigiert). Die Regel im Regler lautet seit mehreren Vorfaellen im Feld:
+**ein Zeitstempel aus der Zukunft ist wertlos und wird verworfen, nicht
+ausgesessen.** Zwei Stellen hielten sich nicht daran:
+
+- `rt2_master_link.is_connected()` — `(now - last_seen)` war negativ und
+  damit immer kleiner als das Zeitfenster. Ein **toter MASTER galt
+  unbegrenzt als verbunden**, nachgemessen: ein Ruecksprung um einen Tag
+  hielt die Verbindung einen Tag lang auf „verbunden". Der Knoten waere in
+  dieser Zeit im Zustand MASTER geblieben und der eingefrorenen
+  Leistungsvorgabe gefolgt.
+- `monitor_ui.update()` — der Schirm fror auf einem alten, **gesund
+  aussehenden** Bild ein, bis die Uhr aufgeholt hatte.
+
+Festgehalten in `rt_clock_rollback_guards_test.lua`.
+
+### Die erste Vorgabe nach einem Reconnect
+
+Der Zustand MASTER/AUTONOM wird nur im Regeltakt neu entschieden. Eine
+Vorgabe, die mit der **ersten** Nachricht nach einem Reconnect ankam, traf
+also noch auf AUTONOM und wurde mit `INVALID_STATE` abgelehnt — obwohl
+`note_master_seen()` in derselben Zustellung schon gelaufen war.
+
+MASTER liest ein `INVALID_STATE` als Modus-Desync, verwirft seine Annahme
+ueber den Modus und schickt `SET_MODE` nach. Das heilt sich, kostet aber eine
+Runde und eine WARN-Zeile fuer einen voellig normalen Vorgang.
+
+`SET_SETPOINTS` wird jetzt auch angenommen, wenn die MASTER-Verbindung
+nachweislich steht. Das ist **keine** zweite Wahrheit ueber den Modus:
+gelesen wird dasselbe Verbindungssignal, aus dem auch `rt2_state`
+entscheidet — nur jetzt statt im naechsten Takt. SAFE bleibt gesperrt.
+
+Festgehalten in `rt2_setpoints_on_reconnect_test.lua`.
+
+### Entprellung der Sicherheitsgrenzen in Regeltakten
+
+`temperature_trip_samples` und `coolant_trip_samples` zaehlen **Regeltakte**.
+Mit dem 10-Hz-Takt bedeuteten die historischen 3 Takte nur noch 300 ms —
+drei zuckende Messwerte in Folge reichten fuer eine Abschaltung. Die Werte
+stammten aus der Zeit des langsamen v1-Reglers, wo dieselbe 3 mehrere
+Sekunden bedeutete.
+
+Schema v8 hebt sie auf 10 Takte (1 s) an. Weiterhin schnell — eine echte
+Ueberschreitung haelt an —, aber ein einzelner Aussetzer ueberlebt es, und
+gerade der Kuehlmittelanteil zuckt, wenn der Tank einen Augenblick
+leerlaeuft. Die Grenzwerte selbst bleiben unveraendert; wie bei jeder
+Migration hier wird nur der bekannte **alte Default** angehoben — ein bewusst
+anders gesetzter Wert bleibt stehen.
+
+### Nicht mehr ausgewertete Config-Abschnitte
+
+`autonom` und `rails` liest der rt2-Regler **nicht** — sie sind Erbe des mit
+v768 entfernten v1-Reglers. Sie bleiben stehen, weil bestehende
+Installationen sie auf Platte haben und `migrate_config()` fehlende
+Schluessel sonst bei jedem Boot neu ergaenzen und persistieren wuerde.
+
+Das ist deshalb wichtig, weil diese Werte **ueber den Config-Editor am MASTER
+bearbeitbar** sind: wer dort an `rails.coil.engage_rpm`,
+`rails.turbine_flow.*` oder `rails.reactor_rods.min` dreht, aendert am
+Verhalten nichts — und das sieht wie ein kaputter Editor aus. Die wirksamen
+Werte liegen im Quelltext (`rt2_turbine.lua`, `rt2_reactor.lua`,
+`rt2_orchestrator.lua`), je mit ihrer Begruendung.
+
+Eine Ausnahme: `rails.reactor_rods.min/.max` wertet `reactor_control.lua`
+weiterhin aus — aber ausschliesslich fuer die **einmalige** Anfangsstellung
+beim Start und fuer den Update-Quiesce, nicht fuer die laufende Regelung.
+
+Wirksam bleiben `safety`, `comms`, `channels`, `heartbeat_interval`,
+`status_interval`, `scan_interval`, `monitor_*` und `reactors`/`turbines`.
+
 ## Dateien unter `/xreactor_config/`
 
 | Datei | Inhalt |
@@ -830,6 +1045,12 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `rt2_learning_test.lua` | Einlernen: 80 %, Zielband, Hoechstwert, Warten statt Abbruch, Umbau |
 | `rt2_clock_backwards_no_regulator_lock_test.lua` | eine zurueckspringende Uhr sperrt weder Durchfluss- noch Stabregelung aus |
 | `rt2_turbine_flow_decoupled_from_tank_test.lua` | der Dampftank regelt den Reaktor, nicht die Turbinen |
+| `rt2_redundant_hardware_writes_test.lua` | eine Anlage, an der nichts zu stellen ist, stellt nichts -- echte Aenderungen und Schutzentscheidungen kommen trotzdem an |
+| `rt2_per_turbine_flow_limit_test.lua` | die Durchflussgrenze kommt vom Geraet (Basic 1000 / Reinforced 2000), Saettigung und Notfreigabe greifen auch an einer Basic |
+| `rt2_rod_loop_stability_test.lua` | die Stabregelung schwingt nicht dauerhaft, und am Anschlag bleibt alles wie es war |
+| `rt_master_health_single_threshold_test.lua` | Health-Check und Zustandsmaschine benutzen EINE Schwelle fuer den MASTER |
+| `rt_clock_rollback_guards_test.lua` | ein Uhr-Ruecksprung friert weder die MASTER-Verbindung noch den Schirm ein |
+| `rt2_setpoints_on_reconnect_test.lua` | die erste Leistungsvorgabe nach einem Reconnect wird angenommen, SAFE bleibt gesperrt |
 | `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |
 | plus Modultests je `rt2_*`-Datei (`rt2_turbine`, `rt2_reactor`, `rt2_state_machine`, `rt2_orchestrator`, `rt2_engine`, `rt2_adapter`, `rt2_safety`, `rt2_projection`, `rt2_master_link`, `rt2_command_handler`) | |
 

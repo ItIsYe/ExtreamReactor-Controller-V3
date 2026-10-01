@@ -43,7 +43,31 @@ local handlers = {}
 -- the old false-success bug (nil return silently became {ok=true}) has
 -- no equivalent construction here: every branch returns a real result.
 handlers.SET_SETPOINTS = function(command, world)
-  if world.state ~= rt2_state.states.MASTER then
+  -- Angenommen wird die Vorgabe, wenn der Knoten im Zustand MASTER ist ODER
+  -- die MASTER-Verbindung nachweislich steht.
+  --
+  -- Warum die zweite Bedingung noetig ist: der Zustand wird nur im
+  -- REGELTAKT neu entschieden (rt2_state ueber rt2_master_link). Eine
+  -- Vorgabe, die zusammen mit der ersten Nachricht nach einem Reconnect
+  -- ankommt, trifft also noch auf den alten Zustand AUTONOM, obwohl der
+  -- Zeitstempel der Verbindung in derselben Zustellung schon gesetzt wurde
+  -- (siehe nodes/rt/main.lua's handle_command_rt2, das note_master_seen vor
+  -- handle_command aufruft -- bisher ohne Wirkung, weil der Zustand erst
+  -- einen Takt spaeter folgt).
+  --
+  -- Die Folge war nicht nur eine verlorene Vorgabe: MASTER behandelt ein
+  -- INVALID_STATE als Modus-Desync, verwirft seine Annahme ueber den Modus
+  -- und schickt ein SET_MODE nach (master/message_handlers.lua). Das heilt
+  -- sich, kostet aber eine Runde und erzeugt eine WARN-Zeile fuer einen
+  -- Vorgang, der voellig in Ordnung ist.
+  --
+  -- Das ist KEINE zweite Wahrheit ueber den Modus: gelesen wird dasselbe
+  -- Verbindungssignal, aus dem auch rt2_state entscheidet -- nur eben jetzt
+  -- statt im naechsten Takt. SAFE bleibt aussen vor (das deckt die
+  -- Sperre in M.handle ab).
+  local accepted = world.state == rt2_state.states.MASTER
+    or (world.master_connected == true and world.state ~= rt2_state.states.SAFE)
+  if not accepted then
     return fail("node not in MASTER state (currently " .. tostring(world.state) .. ")", "INVALID_STATE")
   end
   local value = command.value or {}

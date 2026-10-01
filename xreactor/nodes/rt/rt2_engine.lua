@@ -105,11 +105,11 @@ function M.note_master_seen(now_ms)
   if engine then engine.note_master_seen(now_ms) end
 end
 
-function M.handle_command(command)
+function M.handle_command(command, now_ms)
   if not engine then
     return { ok = false, error = "v2 engine not initialized", reason_code = "NOT_READY" }
   end
-  return engine.handle_command(command)
+  return engine.handle_command(command, now_ms)
 end
 
 function M.current_state()
@@ -183,6 +183,18 @@ function M.tick(ctx)
     reactor_inputs[index] = { name = name, safety_tripped = safety_result.tripped, reactor = reading }
   end
 
+  -- Sicherheitszustand verschwundener Reaktoren vergessen -- aus demselben
+  -- Grund wie beim Turbinenzustand im Orchestrator: nach Name gefuehrt und
+  -- bisher unbegrenzt wachsend, und die Entprellzaehler eines abgebauten
+  -- Reaktors sind fuer einen spaeter gleichnamigen schlicht falsch.
+  local live_reactors = {}
+  for index, name in ipairs(reactor_names) do
+    live_reactors[name or ("reactor" .. index)] = true
+  end
+  for key in pairs(reactor_state) do
+    if not live_reactors[key] then reactor_state[key] = nil end
+  end
+
   local result = engine.tick({
     now_ms = now_ms,
     hardware_ready = (#reactor_names > 0) and (#turbine_readings > 0),
@@ -193,6 +205,12 @@ function M.tick(ctx)
   for _, t in ipairs(result.turbines) do
     adapter.apply_turbine(ctx.adapters.turbine, t.name, ctx.CONFIG.LOG_PREFIX, t)
   end
+  -- Messwert je Reaktorname, damit apply_reactor() seinen Dirty-Check
+  -- gegen die TATSAECHLICHE Stabstellung fuehren kann.
+  local readings_by_name = {}
+  for _, ri in ipairs(reactor_inputs) do
+    if ri.name then readings_by_name[ri.name] = ri.reactor end
+  end
   for index, decision in ipairs(result.reactors) do
     -- Der Name aus der Entscheidung selbst, nicht ueber die Position:
     -- die Einheitenliste wird je Takt an die gemeldeten Reaktoren
@@ -201,7 +219,8 @@ function M.tick(ctx)
     -- einem Reaktor die Staebe des anderen zu stellen.
     local name = decision.name or reactor_names[index]
     if name then
-      adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX, decision)
+      adapter.apply_reactor(ctx.adapters.reactor, name, ctx.CONFIG.LOG_PREFIX,
+        decision, readings_by_name[name])
     end
   end
 

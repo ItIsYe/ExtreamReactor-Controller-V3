@@ -59,8 +59,56 @@ M.DEADBAND = 0.06             -- +/-6 percentage points: no rod movement inside 
 -- proportional band. MIN_STEP stays at 1 because the mod stores rod levels
 -- as integers -- a smaller step would be rounded away on write and the
 -- controller would stall just outside the deadband.
+-- MAX_STEP 2 statt 6, zusammen mit MIN_ADJUST_INTERVAL_MS 1000 statt 500.
+--
+-- Was das bedeutet: die STELLRATE faellt von 12 %/s auf 2 %/s, und einmal
+-- durch die ganze Vollmacht (70..100 % Einschub) zu fahren dauert 15 s statt
+-- 2,5 s.
+--
+-- Warum das noetig war. Die Dampfkette antwortet auf eine Stabbewegung erst
+-- nach Sekunden (die Rodfuellung heizt sich auf), und der interne Dampftank
+-- fasst nur die Groessenordnung eines Ticks Flottenbedarf. Ein Regler, der
+-- seine gesamte Vollmacht innerhalb EINER Antwortzeit der Strecke
+-- durchfaehrt, kann nicht einschwingen -- er stellt immer gegen eine
+-- Wirkung, die noch aussteht. Das ist derselbe Fehler, den der Durchfluss-
+-- regler ueber den Vorhalt loest (siehe rt2_turbine.lua); die Staebe haben
+-- keinen Vorhalt, also muss die Rate passen.
+--
+-- Gemessen am quelltextnahen Anlagenmodell, 6 Turbinen, 180 s Messfenster.
+-- "Resonanz" ist die Auslegung, in der Tankinhalt und Waermetraegheit in
+-- derselben Groessenordnung liegen -- dort war der Kreis am schlechtesten:
+--
+--   Schritt/Intervall   Resonanz: Tankhub  Umkehr/min  rpm    im Zielband
+--   6 / 500 ms (vorher)           0,940       12,0     862      0 %
+--   3 / 500 ms                    0,940        9,3     876      0 %
+--   6 / 1500 ms                   0,940        8,0     868      0 %
+--   2 / 1000 ms (jetzt)           0,695        6,7     899    100 %
+--
+-- Entscheidend ist die RATE, nicht der Einzelschritt: 6/1500 (4 %/s) ist
+-- immer noch zu schnell, 3/500 (6 %/s) auch. Erst bei 2 %/s haelt die
+-- Flotte ihr Zielband.
+--
+-- Was es NICHT verschlechtert: in der realistischen Auslegung (interner
+-- Tank, also 1000 mB je Kuehlmittelport) sitzt die Regelung am Anschlag --
+-- Staebe fest auf ROD_MIN, 899 rpm, alle Turbinen im Zielband, kein einziger
+-- Richtungswechsel. Das gilt vorher und nachher unveraendert, ueber
+-- Reaktorreserven von 1,15 bis 4,0 nachgemessen.
+--
+-- Was es kostet: ein Lastsprung wird langsamer aufgefangen -- der Tank
+-- erholt sich in 12,7 s statt in 5,1 s. Das ist vertretbar, weil die
+-- Rotoren der Flotte Minuten an Schwungenergie tragen; eine Dampfdelle von
+-- dreizehn Sekunden kostet ein paar Umdrehungen, keine Abschaltung. Und eine
+-- SICHERHEITSAUSLOESUNG ist davon ohnehin nicht beruehrt: sie geht nicht
+-- ueber diesen Weg, sondern setzt die Staebe im selben Takt auf ROD_MAX
+-- (siehe compute_rod_level's safety_override und rt2_unit.lua, wo das
+-- Stellintervall ausdruecklich nur die gewoehnliche Tankregelung bremst).
+--
+-- MIN_STEP bleibt 1: der Mod speichert Stabstellungen ganzzahlig, ein
+-- kleinerer Schritt wuerde beim Schreiben weggerundet -- und seit
+-- rt2_adapter.apply_reactor() nicht mehr schreibt, was sich nicht aendert,
+-- wuerde der Regler daran stehenbleiben statt nur zu zappeln.
 M.MIN_STEP = 1
-M.MAX_STEP = 6
+M.MAX_STEP = 2
 M.PROPORTIONAL_BAND = 0.25    -- full authority once |error| exceeds DEADBAND + this
 
 -- Rod movement is rate limited on top of that. At 10 Hz with the old fixed
@@ -70,7 +118,7 @@ M.PROPORTIONAL_BAND = 0.25    -- full authority once |error| exceeds DEADBAND + 
 -- swing with 9 direction reversals in 40 s). Adjusting at most twice a
 -- second gives the tank time to show the effect of the last move before the
 -- next one. A safety trip ignores this gate entirely.
-M.MIN_ADJUST_INTERVAL_MS = 500
+M.MIN_ADJUST_INTERVAL_MS = 1000
 
 -- Damping against overshoot. Looking only at WHERE the tank is -- and never
 -- at which way it is already moving -- is what made the loop cycle: traced

@@ -77,7 +77,14 @@ assert_eq(payload.status, 'OK', 'healthy payload should be OK')
 assert_eq(#payload.reasons, 0, 'healthy payload should have no reasons')
 
 ctx.comms = { get_peers = function() return {} end }
-ctx.master_seen = os.epoch('utc') - 15000
+-- 25 s: ueber comms.peer_timeout_s (20 s, der Default aus
+-- nodes/rt/config.lua). Hier stand vorher 15000 -- das war ueber der alten
+-- Schwelle heartbeat_interval * 5 (10 s), die der Health-Check als EINZIGER
+-- benutzte, waehrend Peer-Tabelle und Zustandsmaschine mit 20 s arbeiteten.
+-- Genau diese Abweichung liess den Knoten "MASTER DOWN" anzeigen, waehrend
+-- er im Zustand MASTER regelte; der Health-Check folgt jetzt derselben
+-- Schwelle, also muss der Messwert auch wirklich darueber liegen.
+ctx.master_seen = os.epoch('utc') - 25000
 ctx.devices.registry_summary.kinds.reactor.bound = 0
 ctx.devices.registry_summary.kinds.turbine.bound = 0
 

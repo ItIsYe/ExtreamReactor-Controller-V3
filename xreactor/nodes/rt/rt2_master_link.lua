@@ -37,10 +37,29 @@ function M.new(opts)
   end
 
   -- Pure given the object's own state: no argument mutates anything.
+  --
+  -- Ein Uhr-RUECKSPRUNG wird ausdruecklich behandelt. Ohne diese Pruefung
+  -- war (now - last_seen) negativ und damit immer kleiner als das Zeitfenster:
+  -- ein toter MASTER galt unbegrenzt als verbunden, bis die Uhr den Sprung
+  -- aufgeholt hatte. Nachgemessen: ein Ruecksprung um einen Tag hielt
+  -- is_connected() einen Tag lang auf true. Der Knoten waere in dieser Zeit
+  -- im Zustand MASTER geblieben und haette der eingefrorenen
+  -- Leistungsvorgabe gefolgt, obwohl niemand mehr vorgibt.
+  --
+  -- Jedes andere zeitabhaengige Teil des Reglers behandelt den Ruecksprung
+  -- schon (rt2_unit.lua's Stellintervall, rt2_turbine.lua's Stellsperre,
+  -- rt2_orchestrator.lua's push_rpm_sample) -- und zwar nach derselben
+  -- Regel: ein Bezugspunkt aus der Zukunft ist wertlos, also wird er
+  -- verworfen statt ausgesessen. Hier heisst das "nicht verbunden": der
+  -- Knoten faellt fuer hoechstens einen Heartbeat nach AUTONOM, die naechste
+  -- MASTER-Nachricht setzt den Zeitstempel auf die neue Uhr, und damit heilt
+  -- es sich in Sekunden selbst.
   function self.is_connected(now_ms)
     if type(self.last_seen_ms) ~= "number" then return false end
     now_ms = tonumber(now_ms) or self.last_seen_ms
-    return (now_ms - self.last_seen_ms) < self.timeout_ms
+    local age_ms = now_ms - self.last_seen_ms
+    if age_ms < 0 then return false end
+    return age_ms < self.timeout_ms
   end
 
   function self.last_seen()

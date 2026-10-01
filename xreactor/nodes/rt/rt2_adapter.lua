@@ -38,6 +38,15 @@ function M.read_turbine(name, turbine_info)
     -- der Wert nur nicht lesbar war.
     energy = num_or_nil(turbine_info.energy),
     coil_engaged = turbine_info.coil_engaged == true,
+    -- Ob der Spulenzustand ueberhaupt LESBAR war. coil_engaged allein kann
+    -- das nicht sagen: adapters/turbine.lua macht aus einem fehlenden
+    -- getInductorEngaged ein false, und "nicht gekuppelt" sieht damit
+    -- genauso aus wie "nicht messbar". Fuer den Dirty-Check in
+    -- apply_turbine() ist der Unterschied entscheidend -- ein unbekannter
+    -- Zustand ist nie ein Grund, das Schreiben zu unterlassen (dieselbe
+    -- Regel wie beim Durchfluss, siehe dort).
+    coil_known = (type(turbine_info.features) == "table"
+      and turbine_info.features.coils == true) or false,
     -- NICHT auf 0 vorbelegen. adapters/turbine.lua's read_number() liefert
     -- bei einem fehlgeschlagenen Peripherieaufruf den String "n/a" -- daraus
     -- eine 0 zu machen heisst, "unbekannt" als "steht auf 0" auszugeben.
@@ -47,6 +56,12 @@ function M.read_turbine(name, turbine_info)
     -- im Mod weiter 2000 anstanden und die Rotoren lastfrei hochliefen.
     -- nil heisst jetzt nil, und der Aufrufer muss damit umgehen.
     current_flow = num_or_nil(turbine_info.flow),
+    -- Die Bauartgrenze dieser Turbine (Basic 1000 / Reinforced 2000), vom
+    -- Geraet erfragt. nil heisst "nicht lesbar"; der Regler nimmt dann
+    -- seinen eigenen Default. Siehe adapters/turbine.lua's
+    -- MAX_FLOW_METHODS fuer die Fehlerkette, die ein fest verdrahteter
+    -- Wert an einer Basic-Turbine ausloest.
+    max_flow = num_or_nil(turbine_info.flow_limit),
     active = turbine_info.active == true,
   }
 end
@@ -84,8 +99,31 @@ function M.apply_turbine(turbine_adapter, name, log_prefix, turbine_result)
   if turbine_result.flow_decision and turbine_result.flow_decision.unchanged ~= true then
     result.flow_ok, result.flow_err = turbine_adapter.set_flow(name, turbine_result.flow_decision.flow, log_prefix)
   end
+  -- Die Spule bekommt denselben Dirty-Check wie der Durchfluss.
+  --
+  -- Bisher wurde sie BEDINGUNGSLOS in jedem Takt geschrieben. Im
+  -- eingeschwungenen Beharrungszustand -- Flotte auf Drehzahl, nichts zu
+  -- tun -- waren das am Anlagenmodell gemessen 6,00 Schreibzugriffe je
+  -- Takt bei 6 Turbinen, also einer je Turbine und Takt, bei 10 Hz also
+  -- 60 je Sekunde, und KEINER davon hat etwas veraendert. Der Durchfluss
+  -- kam im selben Fenster auf 0. Bei 50 Turbinen sind das 500
+  -- wirkungslose Peripherieaufrufe je Sekunde, und die Taktzeit der
+  -- Regelschleife ergibt sich genau aus dieser Summe.
+  --
+  -- Verglichen wird gegen den MESSWERT, nicht gegen die letzte eigene
+  -- Entscheidung: schaltet jemand den Induktor von aussen um (Hand,
+  -- Chunk-Reload), weicht der Messwert im naechsten Takt ab und es wird
+  -- geschrieben. Ist der Zustand nicht lesbar, wird immer geschrieben --
+  -- unbekannt ist kein Grund, es zu lassen.
   if turbine_result.coil_decision then
-    result.coil_ok, result.coil_err = turbine_adapter.set_coils(name, turbine_result.coil_decision.engaged, log_prefix)
+    local wanted = turbine_result.coil_decision.engaged == true
+    local coil_unchanged = turbine_result.coil_known == true
+      and turbine_result.coil_engaged == wanted
+    if coil_unchanged then
+      result.coil_unchanged = true
+    else
+      result.coil_ok, result.coil_err = turbine_adapter.set_coils(name, wanted, log_prefix)
+    end
   end
   if turbine_result.activate and type(turbine_adapter.set_active) == "function" then
     result.active_ok, result.active_err = turbine_adapter.set_active(name, true, log_prefix)
@@ -100,9 +138,47 @@ end
 -- rt2_reactor.compute_active_decision() against this tick's own reading
 -- (false once the reactor reads active), so this never issues a redundant
 -- setActive(true) once the reactor is confirmed on.
-function M.apply_reactor(reactor_adapter, name, log_prefix, reactor_decision)
-  local ok, err = reactor_adapter.apply_rod_level(name, reactor_decision.rods, log_prefix)
-  local result = { ok = ok, err = err }
+-- Stellt die Staebe nur, wenn sie nicht schon so stehen.
+--
+-- Auch dieser Schreibweg lief bedingungslos in jedem Takt -- gemessen 1,00
+-- Schreibzugriff je Takt im Beharrungszustand, dazu die Readback-
+-- Bestaetigung aus apply_rod_level(). Die Regelentscheidungen DEADBAND,
+-- CONVERGING und RATE_LIMITED geben ausdruecklich die aktuelle Stellung
+-- zurueck, bedeuten also "nichts tun".
+--
+-- Verglichen wird auf GANZZAHLEN, weil der Mod Stabstellungen ganzzahlig
+-- speichert und apply_rod_level() mit genau dieser Rundung schreibt
+-- (normalize_write_level). Ohne das Runden wuerde eine Entscheidung von
+-- 94,4 ewig gegen einen Messwert von 94 verglichen und immer geschrieben.
+--
+-- Schutzentscheidungen werden IMMER geschrieben, wie beim Durchfluss: eine
+-- Sicherheitsausloesung und eine fehlende Dampfmessung fahren die Staebe
+-- voll ein, und das darf nie an einer Ersparnis haengen -- auch dann nicht,
+-- wenn der Messwert behauptet, es stuende schon so an.
+local PROTECTIVE_ROD_REASONS = {
+  SAFETY_FULL_INSERT = true,
+  NO_STEAM_READING = true,
+}
+
+local function rods_already_set(reactor_decision, reading)
+  if reactor_decision.safety_tripped == true then return false end
+  if PROTECTIVE_ROD_REASONS[reactor_decision.reason] then return false end
+  local wanted = tonumber(reactor_decision.rods)
+  local measured = tonumber(reading and reading.current_rods)
+  if wanted == nil or measured == nil then return false end
+  return math.floor(wanted + 0.5) == math.floor(measured + 0.5)
+end
+
+function M.apply_reactor(reactor_adapter, name, log_prefix, reactor_decision, reading)
+  local result = {}
+  local ok, err
+  if rods_already_set(reactor_decision, reading) then
+    result.rods_unchanged = true
+    ok = true
+  else
+    ok, err = reactor_adapter.apply_rod_level(name, reactor_decision.rods, log_prefix)
+  end
+  result.ok, result.err = ok, err
   if reactor_decision.activate and type(reactor_adapter.set_active) == "function" then
     result.active_ok, result.active_err = reactor_adapter.set_active(name, true, log_prefix)
   end

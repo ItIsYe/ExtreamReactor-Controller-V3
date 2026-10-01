@@ -398,8 +398,17 @@ end
 local function build_rt_health_payload()
   return health_payload.build_health_payload({
     comms = comms, constants = constants,
-    master_seen = master_seen_ts or os.epoch("utc"),
+    -- NICHT auf "jetzt" vorbelegen. master_seen_ts ist nil, solange nie
+    -- eine MASTER-Nachricht ankam -- ein Vorbelegen auf die aktuelle Zeit
+    -- liess einen nie gesehenen MASTER mit Alter 0 als verbunden
+    -- durchgehen (siehe health_payload.is_master_connected).
+    master_seen = master_seen_ts,
     hb = config.heartbeat_interval,
+    -- Dieselbe Schwelle, die core/comms.lua fuer seine Peer-Tabelle und
+    -- rt2_master_link.lua fuer den Betriebszustand benutzt. Drei Schwellen
+    -- fuer dieselbe Tatsache waren der Grund fuer "MASTER DOWN auf dem
+    -- Schirm, waehrend der Regler im Zustand MASTER laeuft".
+    peer_timeout_s = config.comms and config.comms.peer_timeout_s or nil,
     devices = devices, registry = registry, binding = binding,
     configured_reactors = runtime_config.configured_reactors,
     configured_turbines = runtime_config.configured_turbines,
@@ -606,7 +615,10 @@ local function handle_command_rt2(message)
   end
   master_seen_ts = os.epoch("utc")
   rt2_engine.note_master_seen(master_seen_ts)
-  local result = rt2_engine.handle_command(command)
+  -- master_seen_ts ist in dieser Zustellung gerade gesetzt worden -- mit
+  -- derselben Uhrzeit kann der Kommando-Handler die MASTER-Verbindung
+  -- bewerten, ohne auf den naechsten Regeltakt zu warten.
+  local result = rt2_engine.handle_command(command, master_seen_ts)
   last_command, last_command_ts = (result.ok and "ok" or (result.error or "error")), os.epoch("utc")
   log(result.ok == false and "WARN" or "INFO", ("v2 command target=%s ok=%s%s"):format(
     tostring(command.target), tostring(result.ok),

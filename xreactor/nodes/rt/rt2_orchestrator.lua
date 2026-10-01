@@ -186,7 +186,6 @@ end
 local function measure(turbines)
   local total = #(turbines or {})
   if total == 0 then return 0, 0, 0, 0 end
-  local max_flow = rt2_turbine.MAX_FLOW
   local at_target, output, saturated, sum_all = 0, 0, 0, 0
   for index = 1, total do
     local t = turbines[index]
@@ -200,7 +199,11 @@ local function measure(turbines)
       output = output + energy
     elseif rpm and rpm < M.TARGET_RPM - M.LEARN_TOLERANCE_RPM then
       local flow = tonumber(t.current_flow)
-      if flow and flow >= max_flow * M.SATURATION_FRACTION then
+      -- Die Grenze JE TURBINE, nicht die des Reglers: an einer Basic-Turbine
+      -- (1000) haette 95 % von 2000 nie angeschlagen, und damit waere die
+      -- Saettigungsmeldung ausgeblieben, die genau dort gebraucht wird.
+      local limit = tonumber(t.max_flow) or rt2_turbine.MAX_FLOW
+      if flow and flow >= limit * M.SATURATION_FRACTION then
         saturated = saturated + 1
       end
     end
@@ -466,8 +469,15 @@ function M.new(opts)
   -- behaviour, just with one obvious place that owns the latch instead of
   -- being spread across ctx.setState()/node_state_machine:transition()
   -- calls that could (and once did) fall out of sync.
-  function self.handle_command(command)
-    local result = rt2_command_handler.handle(command, { state = self.machine.current() })
+  -- now_ms: die Uhrzeit der Zustellung. Nur dafuer da, die MASTER-Verbindung
+  -- im SELBEN Augenblick bewerten zu koennen, in dem das Kommando ankommt --
+  -- siehe rt2_command_handler's SET_SETPOINTS. Ohne Angabe bleibt es beim
+  -- Zustand der Zustandsmaschine, also beim Verhalten von vorher.
+  function self.handle_command(command, now_ms)
+    local result = rt2_command_handler.handle(command, {
+      state = self.machine.current(),
+      master_connected = now_ms ~= nil and self.master_link.is_connected(now_ms) or nil,
+    })
     if result.ok and result.effects then
       if result.effects.manual_safety_trip then
         self.manual_safety_trip = true
@@ -597,7 +607,9 @@ function M.new(opts)
       local ref_rpm, ref_ms = rate_reference(self, name, now_ms)
       local flow_decision = rt2_turbine.compute_flow_decision({
         rpm = t.rpm, target_rpm = target_rpm, current_flow = t.current_flow,
-        coil_engaged = t.coil_engaged == true,
+        -- Die Obergrenze dieser Bauart, vom Geraet gelesen. Fehlt sie,
+        -- nimmt rt2_turbine seinen eigenen Default.
+        max_flow = t.max_flow,
         -- Das Stellintervall braucht beide Zeiten; ohne sie faellt
         -- compute_flow_decision auf sein altes Verhalten zurueck.
         now_ms = now_ms,
@@ -665,6 +677,10 @@ function M.new(opts)
           -- Anschlag), und dafuer ist die eigene Stellgroesse die
           -- verlaessliche Angabe -- der Rueckmesswert kann fehlen.
           current_flow = flow_decision.flow,
+          -- Dieselbe Bauartgrenze, gegen die der Durchfluss geklemmt wird:
+          -- die Notfreigabe verlangt "Dampf am Anschlag", und das ist der
+          -- Anschlag DIESER Turbine.
+          max_flow = t.max_flow,
           -- Dieselbe Rate, aus der auch die Durchflussentscheidung
           -- rechnet (rt2_turbine.compute_rate ist die einzige Quelle):
           -- eine noch STEIGENDE Drehzahl heisst, dass die Spule den
@@ -676,7 +692,36 @@ function M.new(opts)
         activate = rt2_turbine.compute_active_decision(t.active),
         rpm = t.rpm,
         coil_engaged = t.coil_engaged == true,
+        -- Fuer den Dirty-Check der Spule in rt2_adapter.apply_turbine():
+        -- ohne diese Angabe liesse sich "nicht gekuppelt" nicht von "nicht
+        -- messbar" unterscheiden, und ein unlesbarer Zustand wuerde als
+        -- "steht schon richtig" gelten.
+        coil_known = t.coil_known == true,
       }
+    end
+
+    -- Zustand verschwundener Turbinen vergessen.
+    --
+    -- turbine_last_change_ms, turbine_last_flow und turbine_rpm_samples sind
+    -- nach NAME gefuehrt und wuchsen bisher unbegrenzt: jeder Name, der
+    -- dieser Node je unter die Augen kam, blieb darin stehen. Bei haeufig
+    -- umgesteckter Hardware oder wechselnden Peripherienamen nach einem
+    -- Modem-Reconnect ist das ein Leck, und bei einer Turbine, die unter
+    -- demselben Namen zurueckkommt, sind die alten Messpunkte sogar
+    -- schaedlich: die Rate wuerde ueber die Luecke hinweg gerechnet.
+    -- rt2_unit.lua raeumt seine Reaktoren schon so auf (siehe reconcile()).
+    local live_turbines = {}
+    for _, t in ipairs(input.turbines or {}) do
+      if t.name then live_turbines[t.name] = true end
+    end
+    for name in pairs(self.turbine_last_change_ms) do
+      if not live_turbines[name] then self.turbine_last_change_ms[name] = nil end
+    end
+    for name in pairs(self.turbine_last_flow) do
+      if not live_turbines[name] then self.turbine_last_flow[name] = nil end
+    end
+    for name in pairs(self.turbine_rpm_samples) do
+      if not live_turbines[name] then self.turbine_rpm_samples[name] = nil end
     end
 
     -- Waehrend SAFE wird nicht gemessen: der Durchfluss ist dort erzwungen

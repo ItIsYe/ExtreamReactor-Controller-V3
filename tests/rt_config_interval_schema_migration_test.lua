@@ -128,4 +128,57 @@ do
     'ein danach vom Nutzer gesetztes 200 bleibt stehen')
 end
 
+-- 7. safety.*_trip_samples: die Entprellung der Sicherheitsgrenzen wird in
+--    REGELTAKTEN gezaehlt, und der Takt ist mit dem 10-Hz-Umbau zehnmal
+--    kuerzer geworden. Die historischen 3 Takte bedeuteten damit nur noch
+--    300 ms -- drei zuckende Messwerte in Folge reichten fuer eine
+--    Abschaltung. Mit v8 gilt 1 Sekunde (10 Takte).
+do
+  assert_eq(defaults.safety.temperature_trip_samples, 10,
+    'sanity: der aktuelle Default ist 1 Sekunde bei 10 Hz')
+  assert_eq(defaults.safety.coolant_trip_samples, 10)
+  assert_eq(defaults.safety.coolant_invalid_grace_samples, 10)
+
+  local warnings = {}
+  local cfg = { version = 7, safety = {
+    temperature_trip_samples = 3,
+    coolant_trip_samples = 3,
+    coolant_invalid_grace_samples = 3,
+  } }
+  local changed = config_normalizer.migrate_schema_version(cfg, defaults,
+    function(w) table.insert(warnings, w) end)
+  assert_true(changed, 'die Migration muss eine Aenderung melden')
+  assert_eq(cfg.safety.temperature_trip_samples, 10)
+  assert_eq(cfg.safety.coolant_trip_samples, 10)
+  assert_eq(cfg.safety.coolant_invalid_grace_samples, 10)
+  assert_eq(cfg.version, defaults.version)
+  assert_true(#warnings >= 3, 'jeder migrierte Schluessel wird protokolliert')
+end
+
+do
+  -- Ein bewusst gesetzter eigener Wert bleibt stehen -- auch ein
+  -- ABSICHTLICH schaerferer.
+  local cfg = { version = 7, safety = {
+    temperature_trip_samples = 2,
+    coolant_trip_samples = 40,
+    coolant_invalid_grace_samples = 3,
+  } }
+  config_normalizer.migrate_schema_version(cfg, defaults, function() end)
+  assert_eq(cfg.safety.temperature_trip_samples, 2,
+    'ein eigener, schaerferer Wert darf nicht aufgeweicht werden')
+  assert_eq(cfg.safety.coolant_trip_samples, 40,
+    'ein eigener, traegerer Wert bleibt ebenfalls stehen')
+  assert_eq(cfg.safety.coolant_invalid_grace_samples, 10,
+    'nur der historische Default wird angehoben')
+end
+
+do
+  local cfg = deep_copy(defaults)
+  cfg.safety.temperature_trip_samples = 3
+  local changed = config_normalizer.migrate_schema_version(cfg, defaults, function() end)
+  assert_true(not changed, 'auf dem aktuellen Schemastand wird nicht erneut migriert')
+  assert_eq(cfg.safety.temperature_trip_samples, 3,
+    'ein danach vom Nutzer gesetztes 3 bleibt stehen')
+end
+
 print('rt_config_interval_schema_migration_test.lua: ok')

@@ -166,16 +166,35 @@ function M.read_turbine_flow(ctx, turbine, caps)
 end
 
 -- ── Actuator-Write (nur noch fuer den Update-Quiesce) ───────────────────────
+-- Reihenfolge wie in adapters/turbine.lua's SET_FLOW_METHODS:
+-- setFluidFlowRateMax ZUERST.
+--
+-- Hier stand setFluidFlowRate vorn -- genau umgekehrt. In Extreme Reactors
+-- ist setFluidFlowRateMax der Setzer des Sollwerts (setMaxIntakeRate), und
+-- der Rueckmesswert, gegen den apply_update_quiesce() den Erfolg prueft,
+-- wird mit getFluidFlowRateMax gelesen. Auf echter Hardware griff der
+-- richtige Zweig nur deshalb, weil es setFluidFlowRate dort nicht gibt --
+-- die Reihenfolge war also eine Falle, die auf jedem Peripheral-Stub
+-- zuschlaegt, der beide Namen annimmt (eine peripheral.wrap()-Tabelle mit
+-- __index liefert fuer JEDEN Namen eine Funktion).
+--
+-- Was daran haengt: schlaegt der Schreibweg fehl oder schreibt er auf eine
+-- andere Groesse, bleibt flow_safe falsch, item.ok bleibt falsch, der
+-- Quiesce wird NIE bestaetigt -- und rt_update_quiescing bleibt gesetzt,
+-- also regelt die Node bis zum Neustart nicht mehr (siehe
+-- nodes/rt/main.lua's control_tick).
+--
+-- caps wird nicht mehr beschrieben: der Faehigkeits-Cache gehoert der
+-- Discovery, und ein Schreibweg, der ihn nach dem Vorhandensein einer
+-- Wrapper-Funktion umschreibt, verfaelscht ihn fuer alle anderen Leser.
 local function setTurbineFlow(ctx, turbine, caps, rate)
   local clamped = M.clamp_turbine_flow(ctx, rate)
-  if caps.setFluidFlowRate or type(turbine.setFluidFlowRate) == "function" then
-    caps.setFluidFlowRate = true
-    turbine.setFluidFlowRate(clamped)
-    return true, "setFluidFlowRate"
-  elseif caps.setFluidFlowRateMax or type(turbine.setFluidFlowRateMax) == "function" then
-    caps.setFluidFlowRateMax = true
+  if caps.setFluidFlowRateMax or type(turbine.setFluidFlowRateMax) == "function" then
     turbine.setFluidFlowRateMax(clamped)
     return true, "setFluidFlowRateMax"
+  elseif caps.setFluidFlowRate or type(turbine.setFluidFlowRate) == "function" then
+    turbine.setFluidFlowRate(clamped)
+    return true, "setFluidFlowRate"
   end
   return false, "NO_FLOW_API"
 end

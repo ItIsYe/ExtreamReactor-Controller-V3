@@ -75,7 +75,27 @@ local capability_cache = {}
 -- Reactors 2 (MC 1.21.1) nennt die Drehzahl getRotorSpeed; getRotorRPM
 -- stammt aus der Big-Reactors-Aera und existiert dort nicht mehr.
 local RPM_METHODS  = { "getRotorSpeed", "getRotorRPM" }
-local FLOW_METHODS = { "getFluidFlowRateMax", "getFluidFlowRate" }
+-- NUR der Sollwert, kein Rueckfall auf getFluidFlowRate.
+--
+-- Die beiden Methoden messen verschiedene Dinge (verifiziert gegen
+-- TurbineComputerPeripheral.java, Extreme Reactors 2.4.27):
+--
+--   getFluidFlowRateMax  -> getMaxIntakeRate()       der SOLLWERT
+--   getFluidFlowRate     -> getFluidConsumedLastTick der VERBRAUCH
+--
+-- Der Regler vergleicht den gelesenen Wert gegen seine eigene Stellgroesse
+-- ("steht die Vorgabe schon so an?") und rechnet seine Schritte darauf.
+-- Der Verbrauch liegt im Beharrungszustand systematisch UNTER dem
+-- Sollwert -- als Rueckmesswert gelesen heisst das dauerhaft "zu wenig
+-- gestellt", und der Regler dreht bis zum Anschlag auf. Ein falscher Wert
+-- ist hier also schaedlicher als gar keiner: bei "unbekannt" nimmt der
+-- Regler seinen eigenen zuletzt gestellten Wert (siehe
+-- rt2_turbine.compute_flow_decision's last_commanded_flow) und regelt
+-- korrekt weiter.
+--
+-- In ER2 existieren immer beide Methoden, der Rueckfall war also nie aktiv
+-- -- er stand nur als Falle da.
+local FLOW_METHODS = { "getFluidFlowRateMax" }
 
 -- Der Ausstoss hatte als EINZIGER Messwert keine Kandidatenliste: ein fest
 -- verdrahtetes getEnergyProducedLastTick, und wenn die Turbine das nicht
@@ -103,6 +123,28 @@ local ENERGY_METHODS = { "getEnergyProducedLastTick" }
 --
 -- adapters/reactor.lua hat es immer richtig gemacht. Dieselbe Regel gilt
 -- ab jetzt auch fuer die Turbine, in beide Richtungen.
+-- Die HARTE Obergrenze dieser Turbine, vom Geraet selbst erfragt.
+--
+-- Extreme Reactors setzt sie je Bauart (TurbineVariant:
+-- setMaxPermittedFlow(1000) fuer Basic, (2000) fuer Reinforced), und
+-- setMaxIntakeRate() klemmt jeden Schreibwert stillschweigend darauf. Der
+-- Regler hatte 2000 fest verdrahtet. An einer BASIC-Turbine folgte daraus
+-- eine Kette, die von aussen wie ein kaputter Regler aussieht:
+--
+--   * Der Rueckmesswert klemmt bei 1000, die Entscheidung rechnet aber
+--     1000 + Schritt -- "steht schon so an" wird NIE wahr, also wird in
+--     JEDEM Takt geschrieben (der Dirty-Check laeuft dauerhaft leer).
+--   * compute_coil_decision's Notfreigabe verlangt Durchfluss >= max_flow.
+--     Bei 2000 ist das an einer Basic nie erfuellt -- eine Turbine, deren
+--     Spule den Hochlauf verhindert, kommt nicht mehr frei.
+--   * measure()s Saettigungsdiagnose (95 % von 2000 = 1900) schlaegt nie
+--     an, die Meldung "fahren VOLLEN Durchfluss und erreichen trotzdem
+--     keine 900 RPM" bleibt also aus.
+--
+-- nodes/rt/turbine_control.lua fragt die Methode seit jeher ab -- benutzt
+-- hat sie nur niemand.
+local MAX_FLOW_METHODS = { "getFluidFlowRateMaxMax" }
+
 local SET_FLOW_METHODS = { "setFluidFlowRateMax", "setFluidFlowRate" }
 local SET_COIL_METHODS = { "setInductorEngaged" }
 local SET_ACTIVE_METHODS = { "setActive" }
@@ -144,6 +186,7 @@ local function capabilities(name, log_prefix)
     methods = methods, set = set,
     rpm_method = first_available(set, RPM_METHODS),
     flow_method = first_available(set, FLOW_METHODS),
+    flow_limit_method = first_available(set, MAX_FLOW_METHODS),
     energy_method = first_available(set, ENERGY_METHODS),
     energy_stats = has_method(set, "getEnergyStats"),
     set_flow_method = first_available(set, SET_FLOW_METHODS),
@@ -254,6 +297,15 @@ function turbine.inspect(name, log_prefix)
     log_once(log_prefix, tostring(name) .. ":no-energy", msg)
     shout(tostring(name) .. ":no-energy", msg)
   end
+  -- Die Bauartgrenze. Nicht lesbar heisst nil -- der Regler faellt dann auf
+  -- seinen eigenen Default zurueck (rt2_turbine.MAX_FLOW), nie auf etwas
+  -- Kleineres: eine zu klein geratene Obergrenze wuerde die Turbine
+  -- dauerhaft unter Last halten.
+  local flow_limit = nil
+  if caps and caps.flow_limit_method then
+    local value = read_number(name, caps.flow_limit_method, log_prefix)
+    if type(value) == "number" and value > 0 then flow_limit = value end
+  end
   local coil = has_method(method_set, "getInductorEngaged")
     and safe_call(name, "getInductorEngaged", log_prefix) or nil
   return {
@@ -265,7 +317,8 @@ function turbine.inspect(name, log_prefix)
       rpm = caps ~= nil and caps.rpm_method ~= nil,
       flow = caps ~= nil and caps.flow_method ~= nil,
       energy = energy_readable,
-      coils = has_method(method_set, "getInductorEngaged")
+      coils = has_method(method_set, "getInductorEngaged"),
+      flow_limit = flow_limit ~= nil,
     },
     schema = {
       active = "boolean",
@@ -277,6 +330,7 @@ function turbine.inspect(name, log_prefix)
     active = active,
     rpm = rpm,
     flow = flow,
+    flow_limit = flow_limit,
     energy = energy,
     coil_engaged = coil == true,
     methods = methods
