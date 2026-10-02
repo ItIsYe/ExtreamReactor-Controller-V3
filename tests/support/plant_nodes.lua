@@ -132,10 +132,35 @@ function M.new_rt(opts)
   env:add_file('/xreactor_config/role.lua', 'return { role = "rt" }\n')
   env:add_modem(opts.modem or 'modem_0')
 
+  -- reactor_names.lua: die Namen, die der Betreiber seinen Reaktoren gibt.
+  --
+  -- WICHTIG und leicht zu uebersehen: die Zuordnung geht nach
+  -- PERIPHERIENAME, und CC:Tweaked numeriert je Computer. Auf JEDEM RT-Knoten
+  -- heissen die Reaktoren "BigReactors-Reactor_1", "_2", ... -- jeder Knoten
+  -- braucht also seine EIGENE reactor_names.lua, in der dieselben
+  -- Peripherienamen auf andere Klarnamen zeigen ("Reaktor 1"/"Reaktor 2" auf
+  -- Knoten 1, "Reaktor 3"/"Reaktor 4" auf Knoten 2, ...).
+  --
+  -- opts.reactor_aliases: Liste der Klarnamen in Peripherie-Reihenfolge.
+  local aliases = opts.reactor_aliases
+  if type(aliases) == 'table' and #aliases > 0 then
+    local parts = { 'return {', '  version = 2,', '  completed = true,', '  aliases = {' }
+    for index, alias in ipairs(aliases) do
+      parts[#parts + 1] = string.format('    ["BigReactors-Reactor_%d"] = %q,', index, alias)
+    end
+    parts[#parts + 1] = '  },'
+    parts[#parts + 1] = '  reactors = {},'
+    parts[#parts + 1] = '}'
+    env:add_file('/xreactor_config/reactor_names.lua', table.concat(parts, '\n') .. '\n')
+  end
+
   local plant = { reactors = {}, turbines = {} }
   for index = 1, (opts.reactors or 1) do
     local name = 'BigReactors-Reactor_' .. index
-    local stub = M.new_reactor_stub(opts.reactor)
+    -- Je Reaktor eigene Werte erlaubt (opts.reactor_list), sonst fuer alle
+    -- dieselben (opts.reactor).
+    local spec = opts.reactor_list and opts.reactor_list[index] or opts.reactor
+    local stub = M.new_reactor_stub(spec)
     plant.reactors[name] = stub
     plant.reactors[index] = stub
     env:add_peripheral(name, 'BigReactors-Reactor', stub.methods)

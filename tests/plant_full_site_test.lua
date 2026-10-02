@@ -2,8 +2,10 @@ package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?
 
 -- DIE GANZE ANLAGE, wie sie beim Betreiber steht:
 --
---   8 RT-Knoten (je 1 Reaktor, 3 Turbinen)   1 MASTER   1 FUEL
---   1 REPROCESSOR   4 ENERGY   10 VALVE      = 25 Knoten
+--   8 RT-Knoten (je 2 Reaktoren, 3 Turbinen)   1 MASTER   1 FUEL
+--   1 REPROCESSOR   4 ENERGY   10 VALVE        = 25 Knoten
+--
+--   16 Reaktoren, vom Betreiber benannt: "Reaktor 1" bis "Reaktor 16".
 --
 -- Alle 25 booten WIRKLICH (jede Rolle mit eigenem Modulgraphen) und reden
 -- ueber ein echtes Funknetz. Das ist die Pruefung, die kein Modultest und
@@ -32,6 +34,7 @@ local function assert_eq(a, e, m)
 end
 
 local RT_COUNT, ENERGY_COUNT, VALVE_COUNT = 8, 4, 10
+local REACTORS_PER_RT = 2         -- 8 x 2 = die 16 benannten Reaktoren
 local CAP_PER_RT = 68400          -- 3 Turbinen a 24000 FE/t minus 5 % Reserve
 local FLEET_CAP = RT_COUNT * CAP_PER_RT
 
@@ -39,10 +42,20 @@ local FLEET_CAP = RT_COUNT * CAP_PER_RT
 local function build_site(fill_ratio)
   local specs, rts = {}, {}
   for index = 1, RT_COUNT do
+    -- Die Klarnamen des Betreibers. Die Zuordnung in reactor_names.lua geht
+    -- nach PERIPHERIENAME, und CC:Tweaked numeriert je Computer -- auf jedem
+    -- Knoten heissen die Reaktoren "BigReactors-Reactor_1"/"_2". Jeder Knoten
+    -- braucht deshalb seine EIGENE reactor_names.lua, in der dieselben
+    -- Peripherienamen auf andere Klarnamen zeigen.
+    local first = (index - 1) * REACTORS_PER_RT + 1
     local env = plant.new_rt({
       computer_id = 100 + index, node_id = 'rt-' .. index,
-      turbines = 3, reactors = 1,
-      reactor = { fuel = 2600 + index * 50, fuel_max = 4000 },
+      turbines = 3, reactors = REACTORS_PER_RT,
+      reactor_aliases = { 'Reaktor ' .. first, 'Reaktor ' .. (first + 1) },
+      reactor_list = {
+        { fuel = 1500 + index * 100, fuel_max = 4000 },
+        { fuel = 2500 + index * 50,  fuel_max = 4000 },
+      },
     })
     rts[index] = env
     specs[#specs + 1] = { name = 'RT' .. index, env = env, main = 'nodes/rt/main.lua' }
@@ -156,6 +169,8 @@ do
     total_capacity = total_capacity + (tonumber(payload.capacity_max) or 0)
     assert_eq(payload.capacity_total_turbines, 3,
       'RT' .. index .. ' muss seine drei Turbinen zaehlen')
+    assert_eq(#(payload.reactors or {}), REACTORS_PER_RT,
+      'RT' .. index .. ' muss BEIDE Reaktoren melden')
   end
   assert_eq(in_master, RT_COUNT, 'alle acht RT-Knoten muessen den Zustand MASTER erreichen')
   assert_eq(learned, RT_COUNT, 'und alle acht muessen einlernen')
@@ -184,6 +199,85 @@ do
 
   local warnings, warning_detail = count_warnings(specs)
   assert_eq(warnings, 0, 'die Anlage darf keine WARN/ERROR melden -- ' .. warning_detail)
+
+  -- ── Die 16 benannten Reaktoren ────────────────────────────────────────
+  --
+  -- Hier liegt die Falle einer Anlage mit mehreren RT-Knoten: der Klarname
+  -- ist nur ANZEIGE. Die Kennung, unter der geroutet wird, hasht den
+  -- PERIPHERIENAMEN (core/registry.lua's build_device_id) -- und der ist auf
+  -- jedem Computer derselbe. Die kurzen Kennungen kollidieren also, nur die
+  -- globalen (node:reaktor) sind eindeutig.
+  local global_ids, short_ids, named = {}, {}, 0
+  for index = 1, RT_COUNT do
+    local payload = net:last_message_from('RT' .. index, 'STATUS').payload
+    for _, reactor in ipairs(payload.reactors or {}) do
+      global_ids[tostring(reactor.global_id)] = true
+      short_ids[tostring(reactor.id)] = (short_ids[tostring(reactor.id)] or 0) + 1
+      if tostring(reactor.alias):find('Reaktor ', 1, true) then named = named + 1 end
+    end
+  end
+
+  local distinct_global, distinct_short = 0, 0
+  for _ in pairs(global_ids) do distinct_global = distinct_global + 1 end
+  for _ in pairs(short_ids) do distinct_short = distinct_short + 1 end
+
+  local total_reactors = RT_COUNT * REACTORS_PER_RT
+  assert_eq(distinct_global, total_reactors,
+    'alle 16 Reaktoren brauchen eine EIGENE globale Kennung')
+  assert_eq(named, total_reactors,
+    'und alle 16 muessen ihren Klarnamen aus reactor_names.lua tragen')
+
+  -- Die kurzen Kennungen sind nur so viele wie Reaktoren JE KNOTEN: die
+  -- erste Position aller acht Knoten teilt eine, die zweite eine weitere.
+  assert_eq(distinct_short, REACTORS_PER_RT, string.format(
+    'die kurzen Kennungen MUESSEN kollidieren (%d verschiedene bei %d Reaktoren)'
+      .. ' -- daran haengt, dass eine FUEL-Route die globale Kennung braucht',
+    distinct_short, total_reactors))
+  for id, count in pairs(short_ids) do
+    assert_eq(count, RT_COUNT, string.format(
+      'die kurze Kennung %s muss von allen %d Knoten geteilt werden', id, RT_COUNT))
+  end
+
+  -- Beide Reaktoren JE KNOTEN werden wirklich gestellt, nicht nur der erste.
+  for index = 1, RT_COUNT do
+    for slot = 1, REACTORS_PER_RT do
+      assert_true(rts[index].plant.reactors[slot].writes > 0, string.format(
+        'RT%d Reaktor %d muss gestellt werden -- bei mehreren Reaktoren je Knoten'
+          .. ' wurde schon einmal nur der erste geregelt',
+        index, slot))
+    end
+  end
+
+  -- ── Die Brennstoffkette fuer alle 16 ──────────────────────────────────
+  local relayed
+  for _, record in ipairs(net:messages_from('MASTER', 'COMMAND')) do
+    local command = record.message.payload and record.message.payload.command
+    if command and command.target == 'FUEL_STATUS' then relayed = command.value end
+  end
+  assert_true(type(relayed) == 'table', 'MASTER muss die Fuellstaende weitergeben')
+
+  local relayed_global, relayed_short, relayed_named = 0, 0, 0
+  for key, entry in pairs(relayed) do
+    if tostring(key):find(':', 1, true) then relayed_global = relayed_global + 1
+    else relayed_short = relayed_short + 1 end
+    if tostring(entry.label):find('Reaktor ', 1, true) then relayed_named = relayed_named + 1 end
+  end
+  assert_eq(relayed_global, total_reactors,
+    'alle 16 Reaktoren muessen unter ihrer globalen Kennung im Relais stehen')
+  assert_eq(relayed_short, 0,
+    'und kein kollidierender kurzer Alias darf uebrig bleiben')
+  assert_eq(relayed_named, total_reactors,
+    'FUEL muss die Klarnamen sehen, nicht nur Kennungen -- sonst ist am'
+      .. ' Router-Schirm nicht zu unterscheiden, welcher Reaktor gemeint ist')
+
+  -- Und die Fuellstaende bleiben je Reaktor getrennt.
+  local first_payload = net:last_message_from('RT1', 'STATUS').payload
+  for _, reactor in ipairs(first_payload.reactors or {}) do
+    local entry = relayed[tostring(reactor.global_id)]
+    assert_true(entry ~= nil, 'Reaktor ' .. tostring(reactor.alias) .. ' muss im Relais stehen')
+    assert_eq(entry.fuel_amount, reactor.fuel_amount, string.format(
+      '%s muss SEINEN Fuellstand tragen', tostring(reactor.alias)))
+  end
 end
 
 -- ══ 2. Fast voller Speicher: WENIGE tragen, der Rest steht ═════════════

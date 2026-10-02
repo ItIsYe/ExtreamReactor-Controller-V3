@@ -1126,8 +1126,10 @@ jede Minute an RT und MASTER verlorene Zeit — die liefern ja.
 `plant_full_site_test.lua` fuehrt die Anlage des Betreibers vollstaendig:
 
 ```
-8 RT (je 1 Reaktor, 3 Turbinen)   1 MASTER   1 FUEL
+8 RT (je 2 Reaktoren, 3 Turbinen)   1 MASTER   1 FUEL
 1 REPROCESSOR   4 ENERGY   10 VALVE          = 25 Knoten
+
+16 Reaktoren, vom Betreiber benannt: "Reaktor 1" bis "Reaktor 16"
 ```
 
 Alle 25 booten wirklich, jede Rolle mit eigenem Modulgraphen, und reden ueber
@@ -1191,8 +1193,38 @@ RT4  name=BigReactors-Reactor_1  id=BIGREACTORS-REACTOR-165cb1c6  global=rt-4:BI
 
 Die kurzen Kennungen sind **identisch**. `master/fuel_relay.lua` erkennt die
 Kollision und laesst den kurzen Alias dann weg — richtig, sonst bekaeme ein
-beliebiger Knoten die Lieferung. Gemessen mit acht Knoten: 8 globale
-Kennungen, 0 Aliase.
+beliebiger Knoten die Lieferung.
+
+**Der Klarname aendert daran nichts.** `core/registry.lua`'s
+`build_device_id()` hasht Peripherienamen + Typ + Methodensignatur; der Alias
+aus `reactor_names.lua` geht **nicht** in den Hash ein. In der echten Anlage
+mit 8 Knoten × 2 Reaktoren gemessen:
+
+```
+RT1  alias=Reaktor 1   id=BIGREACTORS-REACTOR-165cb1c6  global=rt-1:...165cb1c6
+RT1  alias=Reaktor 2   id=BIGREACTORS-REACTOR-af171ec5  global=rt-1:...af171ec5
+RT2  alias=Reaktor 3   id=BIGREACTORS-REACTOR-165cb1c6  global=rt-2:...165cb1c6
+RT2  alias=Reaktor 4   id=BIGREACTORS-REACTOR-af171ec5  global=rt-2:...af171ec5
+
+=> 16 verschiedene GLOBALE Kennungen
+=>  2 verschiedene KURZE  Kennungen (jede von allen 8 Knoten geteilt)
+=> 16/16 mit Klarnamen
+```
+
+Zwei Reaktoren auf **einem** Knoten unterscheiden sich (verschiedene
+Peripherienamen). Zwei Reaktoren derselben **Position** auf verschiedenen
+Knoten nicht — „Reaktor 1", „Reaktor 3", „Reaktor 5" … teilen alle
+`BIGREACTORS-REACTOR-165cb1c6`.
+
+Die Klarnamen kommen dabei vollstaendig bis FUEL durch (16 globale Kennungen,
+16 Labels, 0 Aliase), der Router-Schirm zeigt also „Reaktor 7" und keinen
+Hash. Gespeichert werden muss trotzdem die globale Kennung.
+
+**Eine Datei je Knoten.** `reactor_names.lua` ordnet nach PERIPHERIENAME zu,
+und der ist auf jedem Computer `BigReactors-Reactor_1`/`_2`. Jeder RT-Knoten
+braucht deshalb seine eigene Datei, in der dieselben Peripherienamen auf
+andere Klarnamen zeigen — auf Knoten 1 „Reaktor 1"/„Reaktor 2", auf Knoten 2
+„Reaktor 3"/„Reaktor 4", und so weiter.
 
 **Die Folge:** eine FUEL-Route mit der KURZEN Kennung funktioniert bei EINEM
 RT-Knoten und hoert in dem Moment auf, in dem ein zweiter mit gleichnamigem

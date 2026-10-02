@@ -5,9 +5,15 @@ package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?
 --
 -- Der Grund liegt in CC:Tweaked: Peripherien werden JE COMPUTER numeriert.
 -- Der erste Reaktor heisst auf jedem RT-Computer "BigReactors-Reactor_1", und
--- core/reactor_identity.lua bildet die kurze Kennung aus diesem Namen. Acht
--- RT-Knoten liefern damit ACHT MAL dieselbe kurze Kennung -- nachgemessen
--- unten.
+-- core/registry.lua's build_device_id() hasht genau diesen Namen (plus Typ und
+-- Methodensignatur). Acht RT-Knoten liefern damit ACHT MAL dieselbe kurze
+-- Kennung -- nachgemessen unten.
+--
+-- Der KLARNAME des Betreibers ("Reaktor 1" bis "Reaktor 16" aus
+-- reactor_names.lua) aendert daran NICHTS: er ist Anzeige, er geht nicht in
+-- den Hash ein. Zwei Reaktoren auf EINEM Knoten unterscheiden sich (andere
+-- Peripherienamen), zwei Reaktoren derselben POSITION auf verschiedenen
+-- Knoten nicht.
 --
 -- master/fuel_relay.lua erkennt das und laesst den kurzen Alias dann
 -- ausdruecklich WEG ("On collision the alias is removed, preventing an
