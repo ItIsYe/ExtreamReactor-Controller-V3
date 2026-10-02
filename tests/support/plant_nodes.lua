@@ -192,6 +192,90 @@ function M.new_fuel(opts)
   return env:install()
 end
 
+-- Eine ENERGY-Node mit Induktionsmatrix.
+--
+-- Methodennamen aus adapters/induction_matrix.lua und
+-- adapters/energy_storage.lua. Beide Adapter vertragen mehrere Varianten
+-- (Mekanism hat sie ueber die Versionen umbenannt) -- hier stehen die
+-- heutigen.
+function M.new_energy(opts)
+  opts = opts or {}
+  local env = boot.new({
+    computer_id = opts.computer_id or 300,
+    node_id = opts.node_id or 'energy-1',
+  })
+  env:add_file('/xreactor_config/energy.lua', opts.config or 'return {}\n')
+  env:add_file('/xreactor_config/role.lua', 'return { role = "energy" }\n')
+  env:add_modem(opts.modem or 'modem_0')
+
+  local matrix = {
+    energy = opts.energy or 4.0e9,
+    capacity = opts.capacity or 1.0e10,
+    last_input = opts.last_input or 120000,
+    last_output = opts.last_output or 90000,
+  }
+  env.matrix = matrix
+  env:add_peripheral(opts.matrix_name or 'inductionMatrix_0', 'inductionMatrix', {
+    getEnergy = function() return matrix.energy end,
+    getMaxEnergy = function() return matrix.capacity end,
+    getEnergyStored = function() return matrix.energy end,
+    getMaxEnergyStored = function() return matrix.capacity end,
+    getStoredPower = function() return matrix.energy end,
+    getMaxStoredPower = function() return matrix.capacity end,
+    getLastInput = function() return matrix.last_input end,
+    getLastOutput = function() return matrix.last_output end,
+    getInstalledCells = function() return opts.cells or 36 end,
+    getInstalledProviders = function() return opts.providers or 36 end,
+    getMultiblockID = function() return opts.matrix_id or 'matrix-aaaa' end,
+  })
+  return env:install()
+end
+
+-- Eine REPROCESSOR-Node mit ME-Bridge und logistischem Sortierer.
+function M.new_reprocessor(opts)
+  opts = opts or {}
+  local env = boot.new({
+    computer_id = opts.computer_id or 400,
+    node_id = opts.node_id or 'reproc-1',
+  })
+  env:add_file('/xreactor_config/reprocessor.lua', opts.config or 'return {}\n')
+  env:add_file('/xreactor_config/role.lua', 'return { role = "reprocessor" }\n')
+  env:add_modem(opts.modem or 'modem_0')
+  env:add_peripheral('meBridge_0', 'meBridge', {
+    listItems = function() return {} end,
+    getItem = function() return { amount = opts.me_amount or 2000 } end,
+    exportItem = function() return opts.export_moved or 32 end,
+    importItem = function() return opts.import_moved or 32 end,
+    isConnected = function() return true end,
+  })
+  env:add_peripheral(opts.sorter or 'logisticalSorter_0', 'logisticalSorter', {
+    getTransporterMode = function() return true end,
+    setTransporterMode = function() return true end,
+    getAutoMode = function() return false end,
+    setAutoMode = function() return true end,
+  })
+  return env:install()
+end
+
+-- Eine VALVE-Node. Sie schaltet ein Redstone-Ventil und hoert auf ihrem
+-- eigenen Kanal (siehe nodes/valve/main.lua). Der Zustand des Ausgangs liegt
+-- danach in env.redstone.
+function M.new_valve(opts)
+  opts = opts or {}
+  local env = boot.new({
+    computer_id = opts.computer_id or 500,
+    node_id = opts.node_id or 'valve-1',
+  })
+  local config = opts.config
+  if config == nil then
+    config = string.format('return { node_id = %q }\n', opts.node_id or 'valve-1')
+  end
+  env:add_file('/xreactor_config/valve.lua', config)
+  env:add_file('/xreactor_config/role.lua', 'return { role = "valve" }\n')
+  env:add_modem(opts.modem or 'modem_0')
+  return env:install()
+end
+
 -- Mehrere Rollen hintereinander booten, jede mit eigenem Modulgraphen.
 --
 -- specs: { { name = 'RT', env = <env>, main = 'nodes/rt/main.lua' }, ... }

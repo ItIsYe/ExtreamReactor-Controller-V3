@@ -285,6 +285,22 @@ function Env:activate()
 
   _G.settings = { get = function() return nil end, set = function() end, save = function() end }
 
+  -- redstone: die VALVE-Node schaltet damit ihr Ventil. Der Zustand bleibt
+  -- je Seite gemerkt, damit ein Test ihn ablesen kann (env.redstone).
+  env.redstone = env.redstone or {}
+  _G.redstone = {
+    getSides = function() return { 'top', 'bottom', 'left', 'right', 'front', 'back' } end,
+    setOutput = function(side, value) env.redstone[tostring(side)] = value and true or false end,
+    getOutput = function(side) return env.redstone[tostring(side)] == true end,
+    getInput = function(side) return env.redstone_input and env.redstone_input[tostring(side)] == true or false end,
+    setAnalogOutput = function(side, value) env.redstone[tostring(side)] = tonumber(value) or 0 end,
+    getAnalogOutput = function(side) return tonumber(env.redstone[tostring(side)]) or 0 end,
+    getAnalogInput = function() return 0 end,
+    setBundledOutput = function() end,
+    getBundledInput = function() return 0 end,
+  }
+  _G.rs = _G.redstone
+
   -- textutils: core/registry.lua und core/utils.lua serialisieren damit ihre
   -- Dateien. Eine vollstaendige Runde (serialize -> unserialize) muss
   -- funktionieren, sonst laeuft der Boot in eine leere Registry.
@@ -383,10 +399,21 @@ function Env:activate()
     isPresent = function(n) return env.wrapped[n] ~= nil end,
     getType = function(n) return env.types[n] end,
     wrap = function(n) return env.wrapped[n] end,
-    find = function(kind)
+    -- peripheral.find(kind, filter): der FILTER muss durchgereicht werden.
+    -- nodes/valve/main.lua sucht sein Funkmodem so (filter prueft
+    -- isWireless), und ohne Filterauswertung bekaeme es das erste Modem --
+    -- oder, bei kabelgebundenem erstem Modem, ein falsches.
+    find = function(kind, filter)
+      local found = {}
       for _, n in ipairs(env.names) do
-        if env.types[n] == kind then return env.wrapped[n], n end
+        if env.types[n] == kind then
+          local object = env.wrapped[n]
+          if filter == nil then return object, n end
+          local ok, accepted = pcall(filter, n, object)
+          if ok and accepted then found[#found + 1] = { object, n } end
+        end
       end
+      if #found > 0 then return found[1][1], found[1][2] end
       return nil
     end,
     getMethods = function(n)

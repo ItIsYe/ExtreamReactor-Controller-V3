@@ -1121,6 +1121,89 @@ ueberhaupt meldet, unabhaengig von den konfigurierten. Die kurze Kennung, die
 Der Unterschied ist praktisch der ganze Punkt: bei einer falschen Kennung ist
 jede Minute an RT und MASTER verlorene Zeit — die liefern ja.
 
+### Die ganze Anlage auf einmal: 25 Knoten
+
+`plant_full_site_test.lua` fuehrt die Anlage des Betreibers vollstaendig:
+
+```
+8 RT (je 1 Reaktor, 3 Turbinen)   1 MASTER   1 FUEL
+1 REPROCESSOR   4 ENERGY   10 VALVE          = 25 Knoten
+```
+
+Alle 25 booten wirklich, jede Rolle mit eigenem Modulgraphen, und reden ueber
+das Funknetz. Gemessen: Boot in 0,4 s, 200 Runden in 2,2 s, **22 128
+Nachrichten zugestellt, 0 verworfen, 0 abgelehnte Kommandos, keine einzige
+WARN-Zeile.** Alle acht RT-Knoten erreichen MASTER, lernen ein und melden
+68 400 RF/t — Flotte 547 200 RF/t.
+
+#### Die Leistungsverteilung ist proportional — und eine grobe Messung luegt darueber
+
+Bei hohem Speicherstand faehrt MASTER das IDLE-Profil (20 % der Flotte) und
+verteilt das auf so wenige Knoten wie moeglich. Bei 92 % Speicher und
+547 200 RF/t Flotte:
+
+```
+0,2 x 547200 = 109440 RF/t  ->  2 Knoten (2 x 68400 = 136800) genuegen
+                            ->  109440 / 136800 = 80 % fuer diese zwei
+                            ->  die uebrigen sechs standby/shed
+```
+
+Nachgemessen, nur die Aenderungen:
+
+```
+r107  rt-1..rt-8   100% (active)     <- Flotte voll, waehrend eingelernt wird
+r112  rt-1          80% (active)     <- IDLE greift: zwei tragen
+r112  rt-2          80% (active)
+r112  rt-7           0% (standby)
+r112  rt-3           0% (shed)
+```
+
+**Wichtig fuer jede kuenftige Messung:** wer nur den LETZTEN Wert je Knoten
+ansieht, sieht ueberwiegend Nullen und haelt das fuer „alles aus". Es ist das
+Gegenteil — die Last liegt gebuendelt auf wenigen Knoten, genau wie
+`rt_sync.lua` es beschreibt („kein Reaktor dauerhaft auf 100 %, kein
+Yo-Yo-Effekt"). Der Test prueft deshalb die VERTEILUNG, nicht einen
+Mittelwert. Schwellen: unter 30 % PEAK, bis 90 % BASELOAD, darueber IDLE, ab
+98 % SHED.
+
+Weitere Stoerfaelle, gemessen und in Ordnung:
+
+| Lage | Ergebnis |
+|---|---|
+| Reaktor loest an RT3 aus | RT3 → SAFE, Durchfluss 0; die uebrigen sieben laufen weiter (31 815) |
+| RT5 40 s nicht erreichbar | die uebrigen tragen unveraendert; bei halbem Speicher ist keine Umverteilung noetig |
+
+### Mehrere RT-Knoten: die KURZE Reaktor-Kennung ist nicht eindeutig
+
+Ein Befund aus dem Anlagenlauf, und er erklaert eine ganze Klasse von „es lief,
+dann lief es nicht mehr":
+
+CC:Tweaked numeriert Peripherien **je Computer**. Der erste Reaktor heisst auf
+JEDEM RT-Computer `BigReactors-Reactor_1`, und `core/reactor_identity.lua`
+bildet die kurze Kennung aus diesem Namen. Nachgemessen an vier Knoten:
+
+```
+RT1  name=BigReactors-Reactor_1  id=BIGREACTORS-REACTOR-165cb1c6  global=rt-1:BIGREACTORS-REACTOR-165cb1c6
+RT2  name=BigReactors-Reactor_1  id=BIGREACTORS-REACTOR-165cb1c6  global=rt-2:BIGREACTORS-REACTOR-165cb1c6
+RT3  name=BigReactors-Reactor_1  id=BIGREACTORS-REACTOR-165cb1c6  global=rt-3:BIGREACTORS-REACTOR-165cb1c6
+RT4  name=BigReactors-Reactor_1  id=BIGREACTORS-REACTOR-165cb1c6  global=rt-4:BIGREACTORS-REACTOR-165cb1c6
+```
+
+Die kurzen Kennungen sind **identisch**. `master/fuel_relay.lua` erkennt die
+Kollision und laesst den kurzen Alias dann weg — richtig, sonst bekaeme ein
+beliebiger Knoten die Lieferung. Gemessen mit acht Knoten: 8 globale
+Kennungen, 0 Aliase.
+
+**Die Folge:** eine FUEL-Route mit der KURZEN Kennung funktioniert bei EINEM
+RT-Knoten und hoert in dem Moment auf, in dem ein zweiter mit gleichnamigem
+Reaktor dazukommt. In `fuel_routes.lua` gehoert deshalb immer die GLOBALE
+Kennung (`node:reaktor`).
+
+Das Einlernen am Router-Schirm nimmt sie auch von selbst
+(`reactor_targets.lua`'s `add_from_cache` liest `global_reactor_id`) —
+betroffen sind nur alte oder von Hand eingetragene Routen. Fuer die meldet der
+Schirm jetzt „Kennung unbekannt — Route neu einlernen".
+
 ## Dateien unter `/xreactor_config/`
 
 | Datei | Inhalt |
@@ -1219,6 +1302,8 @@ dass `update_monitor()` die Uebersetzung auch wirklich aufruft.
 | `plant_fuel_chain_test.lua` | drei Rollen: RT liest den Reaktor, MASTER relais ihn, FUEL kennt den Fuellstand -- mit der Kennung aus RTs eigener Meldung |
 | `fuel_stale_reactor_id_test.lua` | eine Route mit unbekannter Kennung wird als solche gemeldet, nicht als Verbindungsproblem |
 | `plant_scenarios_test.lua` | MASTER-Ausfall und Rueckkehr, Sicherheitsausloesung und Erholung, abgebaute Turbine |
+| `plant_full_site_test.lua` | die ganze Anlage: 25 Knoten, 8 RT eingelernt, proportionale Verteilung bei hohem Speicherstand, keine Ablehnung, keine WARN |
+| `fuel_multi_rt_identity_test.lua` | die kurze Reaktor-Kennung kollidiert ueber RT-Knoten; der Alias faellt weg, die globale Kennung traegt |
 | `capacity_payload_chain_test.py` | die Kapazitaets-Kette Node → Payload → MASTER → UI ist durchgehend |
 | plus Modultests je `rt2_*`-Datei (`rt2_turbine`, `rt2_reactor`, `rt2_state_machine`, `rt2_orchestrator`, `rt2_engine`, `rt2_adapter`, `rt2_safety`, `rt2_projection`, `rt2_master_link`, `rt2_command_handler`) | |
 
