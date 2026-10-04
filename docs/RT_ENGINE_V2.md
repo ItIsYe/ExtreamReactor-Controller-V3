@@ -1226,6 +1226,18 @@ braucht deshalb seine eigene Datei, in der dieselben Peripherienamen auf
 andere Klarnamen zeigen — auf Knoten 1 „Reaktor 1"/„Reaktor 2", auf Knoten 2
 „Reaktor 3"/„Reaktor 4", und so weiter.
 
+Im Betrieb bestaetigt (2026-10-04): die 16 Namen kommen am FUEL-Schirm genau
+so an, wie sie an den RT-Knoten vergeben wurden. Die Anlage ist also richtig
+eingerichtet, und `plant_full_site_test.lua` haelt diesen Zustand fest — es
+verlangt **16 verschiedene** Klarnamen und dieselbe Zuordnung Name → Reaktor
+auf beiden Seiten der Brennstoffkette.
+
+Dass die Zusicherung Zaehne hat, ist gegengeprueft: liegt auf allen Knoten
+dieselbe Namensdatei, bleiben von acht Reaktoren nur **zwei** verschiedene
+Namen uebrig (sechs Doppelungen bei vier Knoten) — und am Router-Schirm ist
+dann nicht mehr zu unterscheiden, welchen Reaktor man einlernt. Eine falsch
+eingelernte Route sieht danach voellig normal aus.
+
 **Die Folge:** eine FUEL-Route mit der KURZEN Kennung funktioniert bei EINEM
 RT-Knoten und hoert in dem Moment auf, in dem ein zweiter mit gleichnamigem
 Reaktor dazukommt. In `fuel_routes.lua` gehoert deshalb immer die GLOBALE

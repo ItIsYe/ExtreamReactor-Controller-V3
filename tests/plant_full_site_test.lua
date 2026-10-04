@@ -227,6 +227,48 @@ do
   assert_eq(named, total_reactors,
     'und alle 16 muessen ihren Klarnamen aus reactor_names.lua tragen')
 
+  -- Die Klarnamen muessen UNTERSCHIEDLICH sein -- im Betrieb bestaetigt
+  -- (die 16 Namen kommen am FUEL-Schirm genau so an, wie sie an den
+  -- RT-Knoten vergeben wurden).
+  --
+  -- Das ist keine Selbstverstaendlichkeit, sondern haengt daran, dass JEDER
+  -- RT-Knoten seine EIGENE reactor_names.lua hat. Die Zuordnung dort geht
+  -- nach PERIPHERIENAME, und der ist auf jedem Computer
+  -- "BigReactors-Reactor_1"/"_2". Liegt auf allen acht Knoten dieselbe
+  -- Datei, heissen acht Reaktoren "Reaktor 1" und acht "Reaktor 2" -- am
+  -- Router-Schirm ist dann nicht mehr zu unterscheiden, welchen man
+  -- einlernt, und eine falsch eingelernte Route sieht voellig normal aus.
+  --
+  -- Diese Zusicherung haelt den funktionierenden Zustand fest.
+  local by_name = {}
+  for index = 1, RT_COUNT do
+    local payload = net:last_message_from('RT' .. index, 'STATUS').payload
+    for _, reactor in ipairs(payload.reactors or {}) do
+      local alias = tostring(reactor.alias)
+      if by_name[alias] then
+        error(string.format(
+          'der Klarname %q kommt doppelt vor (%s und %s) -- dann traegt nicht'
+            .. ' jeder RT-Knoten seine eigene reactor_names.lua',
+          alias, by_name[alias], tostring(reactor.global_id)), 2)
+      end
+      by_name[alias] = tostring(reactor.global_id)
+    end
+  end
+
+  local distinct_names = 0
+  for _ in pairs(by_name) do distinct_names = distinct_names + 1 end
+  assert_eq(distinct_names, total_reactors,
+    'alle 16 Reaktoren muessen EINEN EIGENEN Klarnamen haben')
+
+  -- Und jeder Name zeigt auf genau einen Reaktor, auch quer durch die
+  -- Brennstoffkette: "Reaktor 7" darf am FUEL-Schirm nicht der Reaktor von
+  -- Knoten 3 sein.
+  for alias, global_id in pairs(by_name) do
+    local node = tostring(global_id):match('^([^:]+):')
+    assert_true(node ~= nil, string.format(
+      'die globale Kennung von %q muss ihren Knoten nennen (%s)', alias, global_id))
+  end
+
   -- Die kurzen Kennungen sind nur so viele wie Reaktoren JE KNOTEN: die
   -- erste Position aller acht Knoten teilt eine, die zweite eine weitere.
   assert_eq(distinct_short, REACTORS_PER_RT, string.format(
@@ -269,6 +311,22 @@ do
   assert_eq(relayed_named, total_reactors,
     'FUEL muss die Klarnamen sehen, nicht nur Kennungen -- sonst ist am'
       .. ' Router-Schirm nicht zu unterscheiden, welcher Reaktor gemeint ist')
+
+  -- Und zwar jeden Namen GENAU EINMAL, mit derselben Zuordnung Name ->
+  -- Reaktor wie an der RT-Node. Im Betrieb bestaetigt: die Namen kommen am
+  -- FUEL-Schirm so an, wie sie an den RT-Knoten vergeben wurden.
+  local relayed_by_name = {}
+  for key, entry in pairs(relayed) do
+    local label = tostring(entry.label)
+    assert_true(relayed_by_name[label] == nil, string.format(
+      'der Klarname %q darf im Relais nicht doppelt auftauchen (%s und %s)',
+      label, tostring(relayed_by_name[label]), tostring(key)))
+    relayed_by_name[label] = key
+  end
+  for alias, global_id in pairs(by_name) do
+    assert_eq(relayed_by_name[alias], global_id, string.format(
+      '%q muss im Relais auf denselben Reaktor zeigen wie an der RT-Node', alias))
+  end
 
   -- Und die Fuellstaende bleiben je Reaktor getrennt.
   local first_payload = net:last_message_from('RT1', 'STATUS').payload
