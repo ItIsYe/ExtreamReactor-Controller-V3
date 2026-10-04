@@ -1,6 +1,283 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-09-25 | beta | manifest-v737**
+**Stand: 2026-10-04 | beta | manifest-v811 | HEAD `f331e450`**
+
+---
+
+# Übergabe Sitzung 2026-10-04 — RT-Durchgang, Anlagentest, Selbstheilung
+
+**Startinfo für eine neue Sitzung.** Alles darunter ist älterer Bestand und
+weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
+
+## Stand bei Übergabe
+
+| | |
+|---|---|
+| Branch | `claude/code-review-bugs-gaps-ug5tff`, gepusht nach `origin/beta` **und** nach dem Branch |
+| HEAD | `f331e450` |
+| Fassung | `manifest-v811` / `beta-v811` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 390 Lua-Dateien + 44 Python, grün |
+| Arbeitsbaum | sauber, nichts Unverbuchtes |
+| Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
+| Ablauf | direkt committen und pushen, **kein PR** |
+
+### ⚠️ Stehende Vorgabe des Betreibers, am Sitzungsende noch in Kraft
+
+> „achtung nichts umsetzen nur prüfen und iden konzept geben"
+
+Seit dieser Nachricht wurde **nichts** implementiert — nur geprüft und
+Konzepte geliefert. Eine neue Sitzung braucht eine ausdrückliche Freigabe,
+bevor sie Code anfasst. Der Betreiber kann derzeit **nicht im Spiel testen**
+(„Bau weiter dran ich kan gead keine tests machen").
+
+## Was in dieser Sitzung gemacht wurde (11 Commits, `670bb1c0` … `f331e450`)
+
+### 1. RT-Durchgang von oben bis unten, alle P1-Befunde behoben
+
+- **Schreiblast.** Spulen-Dirty-Check in `rt2_adapter.apply_turbine`
+  (`coil_known` aus `turbine_info.features.coils`): gemessen 7,00 → 0,00
+  Schreibzugriffe/Tick; Durchfluss 21,00 → 0,10 bei 20 Turbinen.
+  Stab-Schreibzugriffe bewusst zurück auf 1/Tick (siehe Rücknahme unten).
+- **Uhrsprung.** `rt2_master_link`: `age_ms < 0` gilt als *nicht verbunden*
+  statt als frisch.
+- **MASTER-Schwelle.** `health_payload`: `DEFAULT_PEER_TIMEOUT_S = 20.0`,
+  `master_peer_state` nimmt den **frischesten** MASTER-Nachbarn,
+  Zeitstempel aus der Zukunft werden verworfen, `nil` heißt *nicht
+  verbunden*. `main.lua` übergibt `master_seen` ohne `or os.epoch`.
+- **Stabrate.** `rt2_reactor`: `MAX_STEP = 2`, `MIN_ADJUST_INTERVAL_MS = 1000`
+  → 12 %/s auf 2 %/s. Messtabelle steht im Kommentar. `ROD_MIN = 70`
+  unverändert.
+- **Durchflussgrenze je Turbine.** `adapters/turbine.lua`:
+  `MAX_FLOW_METHODS = { "getFluidFlowRateMaxMax" }`, `flow_limit` →
+  `read_turbine().max_flow`. `FLOW_METHODS` auf `{ "getFluidFlowRateMax" }`
+  verkürzt; `setTurbineFlow` setzt jetzt `setFluidFlowRateMax` zuerst und
+  verändert `caps` nicht mehr.
+- **Spule.** Notfreigabe greift schon unter 95 % der Zieldrehzahl; das
+  Einlernen terminiert wieder (Mindest-Verbesserung für die Stabilitätsuhr).
+- **RT-Konfigschema v8.** Auslöse-Stichproben 3 → 10 mit Migration
+  (`RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION`, `LEGACY_TRIP_SAMPLES = 3`).
+
+### 2. FUEL: „lädt die eingestellten Routen nicht" — Ursache war die Anzeige
+
+Die Routen **waren** geladen. Der Schirm sagte „Keine Reaktoren
+konfiguriert", weil `ui_completion` die *betriebsbereite* Liste gezählt hat.
+Vier bisher stumme Zustände sind jetzt unterscheidbar:
+`CONFIG_REQUIRED` (über `configured_reactor_count`), `NO_EXPORT_CHEST`,
+`REACTOR_ID_UNKNOWN`, und `config_normalizer` setzt
+`lg.disabled_reason = "EXPORT_CHEST_MISSING"`, wenn es die Logistik
+zwangsabschaltet. Neu: `fuel_status_network.known_reactor_count(cache)`.
+`logistics_router.refresh_peripherals()` (`:426`) wickelt Bridge und
+Export-Kiste alle `discovery_interval` (60 s) neu ein (`:1199-1202`).
+
+### 3. Gesamtanlagen-Test (Betreiberentscheidung: „Erst Gesamtanlagen-Test bauen")
+
+Neue Prüfstände: `tests/support/cc_node_boot.lua` (bootet eine echte Rolle
+auf einem virtuellen CC-Dateisystem), `tests/support/node_message_bus.lua`
+(trägt `modem.transmit` an alle anderen Knoten),
+`tests/support/plant_nodes.lua` (`new_rt` mit `reactor_aliases`/`reactor_list`,
+`new_master`, `new_fuel`, `new_energy`, `new_reprocessor`, `new_valve`,
+`boot_all`).
+
+Die echte Topologie des Betreibers ist damit nachgefahren: **8 RT, 1 MASTER,
+1 FUEL, 1 REPROCESSOR, 4 ENERGY, ~10 VALVE = 25 Knoten, 16 benannte
+Reaktoren** (zwei je RT-Knoten, „Reaktor 1" bis „Reaktor 16"). Ergebnis:
+0 verworfene und 0 abgelehnte Nachrichten, kein WARN/ERROR, die
+Leistungsaufteilung anteilig wie entworfen, beide Reaktoren je Knoten
+geregelt, und die Namen kommen bis FUEL durch — vom Betreiber im Betrieb
+bestätigt („am fuel schirm kommen die namen an wie ich die raktoren bei rt
+node benant habe").
+
+## ⛔ Zurückgenommen — nicht wieder einbauen
+
+**Der Stab-Dirty-Check (`26ee86b8`, aus v808).** `control_rod_level` ist der
+**Mittelwert** über alle Stäbe. Der Mittelwert kann dem Ziel entsprechen,
+während kein einzelner Stab dort steht — der Check hat ungleiche Stäbe
+festgefroren. Im Betrieb gemeldet als „eine rt node spint rum". Das
+unbedingte Schreiben je Tick **ist** die Selbstheilung für ungleiche Stäbe.
+Der Spulen-Check bleibt, der ist über `features.coils` abgesichert.
+
+## Offene Befunde — geprüft, Konzept vorhanden, nichts umgesetzt
+
+### A) Chunk-Entladen: keine Selbstheilung (Hauptbefund)
+
+Meldung: RT-Knoten erholen sich nicht, wenn Chunks nicht geladen waren,
+MASTER und FUEL ebenso; erst ein Neustart des RT-Knotens half. Entscheidendes
+Detail: „es waren noch lebende Werte aber nur rpm".
+
+Damit war die Stelle auffindbar:
+
+- `nodes/rt/turbine_control.lua:97-109` — `get_device_caps` schreibt
+  `ctx.capability_cache` **einmal** und prüft nie nach.
+- `nodes/rt/turbine_control.lua:56-59` — `build_capabilities` macht aus
+  einem **fehlgeschlagenen** `getMethods` ein `methods = {}`, also „kann
+  nichts".
+
+→ Eine Abfrage während Chunk-Laden oder Multiblock-Zusammenbau schreibt
+dauerhaft „Drehzahl ja, Durchfluss nein" fest. Genau das Bild, das der
+Betreiber gesehen hat.
+
+- `nodes/rt/discovery_runtime.lua:35-49` — `refresh_capability_cache` füllt
+  nur fehlende Namen auf und verwirft nur **ungebundene**; eine gebundene
+  Turbine behält einen falschen Eintrag für immer.
+- `adapters/turbine.lua:176-195` — hier existiert die Regel bereits
+  („verkürzte Methodenliste **NICHT merken**"). Es ist also eine
+  **Asymmetrie zwischen zwei Caches**, kein unbekannter Fehler.
+
+Konzept: **B1** dieselbe Regel auf `ctx.capability_cache`; **B2**
+`getMethods`-Fehlschlag von „hat keine Methoden" trennen; **B3** das
+Monitor-Handle (zurückgestuft, weil der Schirm lebte): RT wickelt
+`devices.monitor` nur einmal in `init()` (~`:745`) und nutzt es in jedem
+UI-Tick (~`:483`); `discover()` löst es nie neu auf (`monitor_name = nil`,
+~`:305`) — anders als FUEL/WATER/REPROCESSOR.
+
+### B) Selbstheilung — Konzept in drei Ebenen (letzte Antwort der Sitzung)
+
+1. **Abgeleiteter Zustand darf nie dauerhaft sein.** Negative Ergebnisse
+   verfallen mit Zeitstempel, positive bleiben. Beweisgetriebene Verwerfung:
+   gelingt ein Aufruf, den der Cache für unmöglich hält, fliegt der Eintrag.
+   `getMethods`-Fehlschlag von „keine Methoden" trennen.
+   `warn_once`/`shouted` zurücksetzbar machen, sonst ist die *nächste*
+   Störung stumm. Vorbild: `adapters/turbine.lua:176-195`. Risiko niedrig.
+   **Diese Ebene behebt den Fall oben.**
+2. **Ein Selbstprüf-Dienst, der nach der Wirkung fragt**, nicht nach der
+   Anwesenheit: „habe ich für jedes gebundene Gerät einen frischen Messwert,
+   und habe ich in den letzten N Sekunden überhaupt etwas gestellt?"
+   Reaktion gestaffelt: abgeleiteten Zustand verwerfen → Discovery erzwingen
+   (inkl. Rücknahme der Slow-Scan-Drosselung, die heute auf 60 s streckt) →
+   melden. Vorbilder im Haus: `rt2_safety.track_availability`
+   (`ever_valid` + `missing_ticks`) und `valve/controller.lua:346`
+   `tick_failsafe`. **Diese Ebene hätte geholfen, ohne die Ursache zu kennen.**
+3. **Geordneter Selbst-Neustart, letzte Stufe.** Über
+   `core/update_handshake.lua` (`request_quiesce` → sichere Ausgänge Stäbe
+   100 / Durchfluss 0 → `wait_for_runtime_stopped` → Neustart) — denselben
+   Weg nimmt `auto_update` schon. Bedingungen: **persistiert begrenzt**
+   (höchstens 1 Neustart/30 min, 3/h, danach Stillstand mit Alarm — ohne
+   Persistenz überlebt die Grenze den Neustart nicht), vorher an MASTER
+   melden und dauerhaft protokollieren, **standardmäßig AUS**.
+
+Quer darüber: **Heilung muss sichtbar sein.** Zähler im Statuspayload
+(Selbstheilungen seit Boot, letzter Grund, letzter Zeitpunkt). Ein Knoten,
+der sich alle zehn Minuten heilt, ist nicht gesund, sieht aber ohne Zähler
+genau so aus wie einer, der läuft.
+
+Stolperstelle dabei gefunden: `startup_watchdog_s = 60` steht in
+`nodes/rt/config.lua:52` und wird vom Normalizer validiert
+(`config_normalizer.lua:196-199`), **ausgewertet wird er nirgends** —
+`main.lua:410` setzt `startup_watchdog_tripped = false` fest. Der Platz ist
+belegt, die Wirkung fehlt. Ebenfalls auffällig:
+`service_manager.lua:65` `schedule_retry` wiederholt mit Backoff, verwirft
+dabei aber **nie** das Handle oder den abgeleiteten Zustand, an dem es
+scheitert.
+
+**Reihenfolge: A (Chunk-Modell in der Harness) → Ebene 1 → Ebene 2 →
+Ebene 3.** Ohne A ist keine Ebene nachweisbar.
+
+### C) Grenzen der Harness (Konzeptpunkt A)
+
+Sie kann **nicht** modellieren: veraltete `wrap`-Handles und „Peripherie da,
+aber jeder Aufruf wirft". Nötig sind drei Peripheriezustände — *da / weg /
+verkürzte Methodenliste* — plus Entwertung alter Handles.
+
+### D) Reaktor-Identität (dokumentiert, Folgearbeit offen)
+
+`core/registry.build_device_id(name, type_name, signature)` =
+`TYPE-djb2(name|type|methods)` — **der Aliasname aus `reactor_names.lua`
+steckt nicht im Hash**. CC:Tweaked nummeriert Peripherie je Rechner, also
+kollidieren kurze Reaktor-Kennungen über RT-Knoten hinweg: 16 globale
+Kennungen, aber nur 2 kurze. `master/fuel_relay.lua` veröffentlicht global
+plus kurzen Altnamen und **verwirft den Alias bei Kollision**.
+Folge: `fuel_routes.lua` muss die **globale** Kennung tragen
+(`node_id:local_id`).
+
+### E) Versionierung
+
+`scripts/manifest_sync.py --write` hebt `manifest_version`/`manifest_id`
+**nur**, wenn manifest-geführte Dateien sich ändern; `release.lua` ist als
+selbstbezüglich ausgenommen. **Tests und Dokumentation stehen nicht im
+Manifest** — Commits, die nur daran rühren, heben die Fassung nicht.
+`installer/auto_update.lua:374` aktualisiert bei
+`remote_version > local_version`. `commit_sha = "beta"` ist ein gewollter
+Platzhalter, `scripts/package_release.py:48` setzt für feste Releases eine
+echte SHA. Offenes Konzept: **Payload-Digest statt reinem Zähler**,
+Entscheidung steht aus.
+
+## Fehler dieser Sitzung — damit sie sich nicht wiederholen
+
+1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
+   beklagt hat: „wir fixen ein sac 3 andere gehn kaput … das mus doch besser
+   gehen."
+2. **Mein erster `rt2_uneven_control_rods_test.lua` lief auf dem kaputten
+   Baum grün** — ich habe `apply_reactor` mit 4 statt 5 Argumenten gerufen
+   und damit den Dirty-Check umgangen.
+   **Regel: jeder Regressionstest wird gegen den Baum VOR dem Fix gefahren**
+   (`git archive HEAD | tar -x -C /tmp/claude-0/preN`) **und muss dort aus dem
+   RICHTIGEN Grund scheitern.**
+3. **Fassungen v812–v817 gemeldet, die es nicht gibt** — ich hatte Commits
+   gezählt statt `release.lua` zu lesen, und die Ausgabe von `manifest_sync`
+   mit `>/dev/null` unterdrückt. **Regel: Fassung immer aus `release.lua`
+   lesen, nie zählen, Werkzeugausgabe nicht wegwerfen.**
+4. **„Die Stabregelung schwingt bei jeder Anlagengröße"** — falsch. Ich hatte
+   den Tank auf 200000 mB festgenagelt; bei der realistischen Größe (20000)
+   ist die Regelung ruhig.
+5. **„MASTER schaltet nur 100 % → 0 %, keine Zwischenstufe"** — falsch. Ich
+   hatte je Knoten nur den letzten Sollwert gelesen. Nur die Änderungen
+   gedruckt zeigt 2 Knoten auf 80 %, Rest standby/shed: die entworfene
+   anteilige Aufteilung.
+6. **Lesefehler an den Prüfständen:** `record.to` statt `message.dst` (der
+   Bus ist Rundruf — Adressat ist `message.dst`); nur die ersten zwei
+   `FUEL_STATUS`-Pakete angesehen (die sind leer, bevor MASTER RT-Daten hat);
+   `payload.ok` statt `payload.result.ok`; ein externer
+   `peripheral.call`-Zähler, den `Env:activate()` vor jedem Tick still
+   ersetzt hat (statt dessen die Stubs instrumentieren).
+7. **Baufehler der Harness**, die Zeit gekostet haben: fehlendes `textutils`;
+   `dofile` sah das virtuelle Dateisystem nicht; ein kyrillisches `М` in
+   `getМethods`; `tick_service` rief `service.tick(ts)` statt
+   `service:tick(dt, event)`; `print` von der Erfassung geschluckt;
+   `parallel` verworfen, sodass FUELs `after_cycle` nie lief — FUEL sah
+   dadurch aus, als hätte es keine Reaktoren.
+   **Eine Harness, die falsche Fehler erfindet, ist schlimmer als keine.**
+8. **Testerwartungen, die altes Verhalten festschrieben**, wurden mit
+   festgehaltener Begründung angepasst, nicht passend gebogen: 15000 → 25000 ms
+   in `rt_health_payload_test.lua`, das `getFluidFlowRate`-Rückfallversprechen
+   in `turbine_adapter_capability_probe_test.lua`, der `shutdown`-Zustand.
+
+## Arbeitsweise, die gilt
+
+- Lua-Tests: `lua5.2 -e "dofile('tests/cc_env_shim.lua')" tests/<datei>.lua`
+- Ablauf: beide Suiten → `python3 scripts/manifest_sync.py --write` → beide
+  Suiten erneut → committen und pushen (`origin/beta` **und** Branch).
+- **Konfig-Falle:** `core/utils.migrate_config()` ergänzt Vorgaben **und
+  schreibt sie fest**. Jede Änderung einer Vorgabe braucht eine
+  Schema-Migration (RT steht auf v8).
+- **Heißer Pfad bleibt namensbasiert** (`peripheral.call` /
+  `utils.safe_peripheral_call`). Genau das lässt den Regler Chunk-Nachladen
+  überleben; langlebige `peripheral.wrap`-Handles sind das zerbrechliche
+  Muster.
+- Reiner Entscheidungskern: alle `rt2_*` sind rein, unrein sind nur
+  `rt2_adapter.lua` (Peripherie) und `rt2_engine.lua` (Persistenz/Fassade).
+  Zustand je Turbine liegt in `rt2_orchestrator.lua`.
+- Echte Regelperiode: **100 ms** (`RECEIVE_TIMEOUT = 0.1` in
+  `nodes/rt/main.lua`).
+
+## Nächste Schritte
+
+1. **Freigabe einholen** für B1/B2 (Fähigkeiten-Cache) und ggf. B3
+   (Monitor-Handle). Ohne Freigabe nichts anfassen.
+2. Chunk-Modell in der Harness (Konzeptpunkt A) — zuerst, sonst ist nichts
+   nachweisbar.
+3. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
+4. Versionierung: Entscheidung zum Payload-Digest.
+5. Älter und noch offen: MASTER-Ausfall-Befunde A und B;
+   `matrix_snapshot_runtime.lua` Kapazitäts-Rückfall; die P2-Liste des
+   Audits; Aufräumen alter Remote-Branches.
+6. **Turbinenzahl je RT-Knoten ist unbekannt** — der Anlagentest nimmt 3 an
+   (Flotte 547 200 RF/t). Nachfragen und anpassen.
+7. **Der Betreiber hatte „noch ein weiteres Thema, aber indirekt damit
+   zusammenhängend" angekündigt und nie genannt. Danach fragen.**
+
+---
+
+# Aelterer Bestand (Stand 2026-09-25, weiterhin gueltig)
 
 ## Rollback-Marken
 
