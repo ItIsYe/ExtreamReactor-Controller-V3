@@ -11,8 +11,8 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- (1) run_fast_loop() dispatcht modem_message/Touch-Events an services UND
 --     wiederholt on_quiesce(), bis es true liefert, danach RUNTIME_STOPPED;
 -- (2) run_fast_loop() ohne quiesce_opts aendert nichts am Verhalten;
--- (3) run_slow_loop() tickt services periodisch per os.sleep(interval) und
---     ruft after_cycle() nach jedem Tick auf, ohne jemals Events zu lesen.
+-- (3) run_slow_loop() tickt services periodisch auf eigenem Timer und ruft
+--     after_cycle() nach jedem Tick auf, ohne je ein Event zu verarbeiten.
 
 local support_runtime = require('nodes.support.runtime')
 local update_handshake = require('core.update_handshake')
@@ -137,38 +137,55 @@ do
     'services:tick(nil, event) must be called with the raw event for a modem_message')
 end
 
--- 4. run_slow_loop(): tickt services periodisch (os.sleep-getrieben) und
---    ruft after_cycle() nach jedem Tick auf -- liest nie Events.
+-- 4. run_slow_loop(): tickt services periodisch auf eigenem Timer und ruft
+--    after_cycle() nach jedem Tick auf -- reicht nie ein Event weiter.
+--
+--    Bis v811 trieb os.sleep(interval) diese Schleife, und der Test stubbte
+--    os.sleep. Das wartete auf genau einen Timer und konnte die Schleife fuer
+--    immer stilllegen (tests/runtime_lost_timer_test.lua). Jetzt wecken sie
+--    Ereignisse -- deshalb laeuft hier eine Funknachricht mit, die bei den
+--    Services NICHT ankommen darf.
 do
-  local os_sleep = os.sleep
-  local sleeps = 0
-  os.sleep = function()
-    sleeps = sleeps + 1
-    if sleeps > 5 then error('terminate: test boundary') end
+  local os_start_timer, os_pull_event = os.startTimer, os.pullEvent
+  local timer_id = 0
+  os.startTimer = function() timer_id = timer_id + 1; return timer_id end
+  local pulls = 0
+  os.pullEvent = function()
+    pulls = pulls + 1
+    if pulls > 10 then error('terminate: test boundary') end
+    if pulls % 2 == 1 then return 'modem_message', 'back', 1, 1, {}, 1 end
+    return 'timer', timer_id
   end
 
-  local ticks, after_calls = 0, 0
-  local services = { tick = function() ticks = ticks + 1 end }
+  local ticks, after_calls, event_ticks = 0, 0, 0
+  local services = { tick = function(_self, _dt, event)
+    if event ~= nil then event_ticks = event_ticks + 1 end
+    ticks = ticks + 1
+  end }
 
   local ok, err = pcall(support_runtime.run_slow_loop, {
     interval = 5, services = services, after_cycle = function() after_calls = after_calls + 1 end,
   })
 
-  os.sleep = os_sleep
+  os.startTimer, os.pullEvent = os_start_timer, os_pull_event
 
   assert_true(not ok and tostring(err):find('terminate', 1, true) ~= nil)
-  assert_eq(ticks, 5, 'run_slow_loop must tick services once per os.sleep(interval) cycle')
+  assert_eq(ticks, 5, 'run_slow_loop must tick services once per timer cycle')
   assert_eq(after_calls, 5, 'run_slow_loop must call after_cycle once per tick cycle')
+  assert_eq(event_ticks, 0, 'run_slow_loop must never hand an event to services:tick()')
 end
 
 -- 5. run_slow_loop(): a failing services:tick() must not abort the loop
 --    (identical resilience to the fast loop's per-cycle pcall wrapping).
 do
-  local os_sleep = os.sleep
-  local sleeps = 0
-  os.sleep = function()
-    sleeps = sleeps + 1
-    if sleeps > 2 then error('terminate: test boundary') end
+  local os_start_timer, os_pull_event = os.startTimer, os.pullEvent
+  local timer_id = 0
+  os.startTimer = function() timer_id = timer_id + 1; return timer_id end
+  local pulls = 0
+  os.pullEvent = function()
+    pulls = pulls + 1
+    if pulls > 2 then error('terminate: test boundary') end
+    return 'timer', timer_id
   end
 
   local ticks = 0
@@ -179,7 +196,7 @@ do
 
   local ok, err = pcall(support_runtime.run_slow_loop, { interval = 5, services = services })
 
-  os.sleep = os_sleep
+  os.startTimer, os.pullEvent = os_start_timer, os_pull_event
 
   assert_true(not ok and tostring(err):find('terminate', 1, true) ~= nil)
   assert_eq(ticks, 2, 'a failing services:tick() must be caught per-cycle, not abort run_slow_loop')

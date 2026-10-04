@@ -312,6 +312,136 @@ M.is_terminate = is_terminate
 --   (modem_message/Touch/Taste/Resize) UND tickt periodisch alle
 --   opts.services -- identisch zum bisherigen run_event_loop(), nur ohne die
 --   "slow"-Services in derselben Liste.
+
+-- ── Warten auf den naechsten Takt -- ohne an EINEM Timer zu haengen ────────
+--
+-- Bis v811 warteten beide Schleifen auf genau EIN Timer-Ereignis: die
+-- schnelle brach ihre Warteschleife nur bei genau ihrem Timer ab, die
+-- langsame rief os.sleep() -- und CC:Tweakeds os.sleep() (bios.lua) wartet
+-- ebenfalls auf genau diesen einen Timer und ignoriert jeden anderen.
+--
+-- CC:Tweaked VERWIRFT aber Ereignisse, sobald 256 in der Warteschlange eines
+-- Rechners stehen (ComputerExecutor.QUEUE_LIMIT) -- Timer eingeschlossen,
+-- stillschweigend. Ging der eine Timer verloren, wartete die Schleife fuer
+-- immer: nichts stellte einen neuen, alle anderen Ereignisse liefen ein und
+-- wurden ignoriert.
+--
+-- Im Betrieb (2026-10) hing so die RT-Node nach dem Laden der Anlage-Chunks,
+-- und erst ein Neustart half. Dort prasseln mit Abstand die meisten
+-- Peripherie-Ereignisse ein. Die schnelle Schleife verlor ihren periodischen
+-- Takt -- nur dort tickt die Regelung; Ereignisse wecken nur Comms und
+-- Schirm, der Schirm zeigte also weiter lebende Drehzahlen. Die langsame
+-- verlor Discovery und Telemetrie, MASTER und FUEL bekamen keine Daten mehr.
+--
+-- Jetzt geht es weiter, wenn der eigene Timer eintrifft ODER wenn bei
+-- irgendeinem Ereignis das Intervall plus LOST_TIMER_GRACE_S verstrichen ist.
+-- Gemessen wird mit os.clock(): in CC:Tweaked zaehlt das Servertakte
+-- (OSAPI.clock = Takte * 0.05) -- dieselbe Zeitbasis wie os.startTimer(),
+-- monoton, ohne Spruenge der Weltuhr. Andere Ereignisse gibt es staendig:
+-- Funknachrichten der anderen Knoten und die Timer der jeweils anderen
+-- Schleife. Ein verlorener Timer kostet damit gut eine Sekunde statt eines
+-- Neustarts.
+--
+-- Bewusstes Rest-Risiko: geht der eigene Timer verloren UND kommt danach gar
+-- kein Ereignis mehr, wartet die Schleife weiter. Das hiesse, auch der Timer
+-- der anderen Schleife ist im selben Moment verloren und es herrscht
+-- Funkstille -- in einer Anlage mit vielen Knoten praktisch ausgeschlossen.
+--
+-- Sichtbar, weil es sonst niemand erfaehrt: M.loop_stats() zaehlt je
+-- Schleife, wie oft ohne eigenen Timer weitergemacht wurde (compensated),
+-- wie viele der aufgegebenen Timer doch noch kamen, nur zu spaet (late), und
+-- wie viele nie (lost). Test: tests/runtime_lost_timer_test.lua.
+
+-- Wie lange ueber das Intervall hinaus auf den EIGENEN Timer gewartet wird.
+-- Im Normalbetrieb kommt er puenktlich; mehr als eine Sekunde zu spaet heisst
+-- Stau oder Verlust, und in beiden Faellen ist der Takt faellig.
+local LOST_TIMER_GRACE_S = 1.0
+-- Ab wann ein aufgegebener Timer als VERLOREN zaehlt. Ein verworfenes
+-- Ereignis stellt CC:Tweaked nie nach; ein nur gestautes kommt binnen
+-- Sekunden.
+local LOST_TIMER_AFTER_S = 30
+-- Hoechstens eine Logzeile je Schleife in diesem Abstand.
+local LOST_TIMER_LOG_INTERVAL_S = 60
+
+local function new_loop_stats()
+  return { ticks = 0, compensated = 0, late = 0, lost = 0, last_tick_clock = nil, last_log_clock = nil }
+end
+
+local loop_stats = { fast = new_loop_stats(), slow = new_loop_stats() }
+
+local function clock_s()
+  local ok, value = pcall(os.clock)
+  if ok and type(value) == "number" then return value end
+  return nil
+end
+
+-- Je Schleife und als Summe -- fuer Schirm und Status der Rollen.
+function M.loop_stats()
+  local out = { lost = 0, late = 0, compensated = 0 }
+  for name, stats in pairs(loop_stats) do
+    out[name] = {
+      ticks = stats.ticks, compensated = stats.compensated,
+      late = stats.late, lost = stats.lost, last_tick_clock = stats.last_tick_clock,
+    }
+    out.lost = out.lost + stats.lost
+    out.late = out.late + stats.late
+    out.compensated = out.compensated + stats.compensated
+  end
+  return out
+end
+
+-- Wartet einen Takt (siehe oben). on_event bekommt jedes Ereignis ausser dem
+-- eigenen Timer; abandoned merkt sich aufgegebene eigene Timer.
+local function wait_cycle(stats, abandoned, interval_s, on_event)
+  local started = clock_s()
+  local deadline_s = (tonumber(interval_s) or 0) + LOST_TIMER_GRACE_S
+  local timer = os.startTimer(interval_s)
+  while true do
+    local event = { os.pullEvent() }
+    if event[1] == "timer" then
+      if event[2] == timer then return end
+      if abandoned[event[2]] then
+        -- Ein frueher aufgegebener eigener Timer: kam doch noch, nur spaet.
+        abandoned[event[2]] = nil
+        stats.late = stats.late + 1
+      end
+    end
+    if on_event then on_event(event) end
+    local now = clock_s()
+    if started and now and now - started >= deadline_s then
+      abandoned[timer] = now
+      stats.compensated = stats.compensated + 1
+      return
+    end
+  end
+end
+
+-- Aufgegebene Timer, die nach LOST_TIMER_AFTER_S noch fehlen, sind verloren.
+local function settle_abandoned(stats, abandoned, label)
+  local now = clock_s()
+  if not now then return end
+  for id, since in pairs(abandoned) do
+    if now - since >= LOST_TIMER_AFTER_S then
+      abandoned[id] = nil
+      stats.lost = stats.lost + 1
+      if not stats.last_log_clock or now - stats.last_log_clock >= LOST_TIMER_LOG_INTERVAL_S then
+        stats.last_log_clock = now
+        pcall(function()
+          require("core.utils").log("RUNTIME", string.format(
+            "%s Schleife: Timer verloren (insgesamt %d, verspaetet %d) -- Ereignis-Warteschlange"
+              .. " uebergelaufen? Der Takt lief ohne ihn weiter.", label, stats.lost, stats.late), "WARN")
+        end)
+      end
+    end
+  end
+end
+
+local function begin_cycle(stats, abandoned, label)
+  settle_abandoned(stats, abandoned, label)
+  stats.ticks = stats.ticks + 1
+  stats.last_tick_clock = clock_s()
+end
+
 function M.run_fast_loop(opts)
   local receive_timeout = opts.receive_timeout
   local services = opts.services
@@ -320,20 +450,20 @@ function M.run_fast_loop(opts)
   local quiesce_opts = opts.quiesce_opts
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
   local quiesce_seen = { seen = false } -- TEMP DIAGNOSTIC, see log_quiesce_seen_once() above
-  while true do
-    local timer = os.startTimer(receive_timeout)
-    while true do
-      local event = { os.pullEvent() }
-      if event[1] == "modem_message" then
-        comms:handle_event(event)
-        services:tick(nil, event)
-      elseif event[1] == "timer" and event[2] == timer then
-        break
-      elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key"
-          or event[1] == "monitor_resize" or event[1] == "term_resize" then
-        services:tick(nil, event)
-      end
+  local stats, abandoned = new_loop_stats(), {}
+  loop_stats.fast = stats
+  local function dispatch(event)
+    if event[1] == "modem_message" then
+      comms:handle_event(event)
+      services:tick(nil, event)
+    elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key"
+        or event[1] == "monitor_resize" or event[1] == "term_resize" then
+      services:tick(nil, event)
     end
+  end
+  while true do
+    wait_cycle(stats, abandoned, receive_timeout, dispatch)
+    begin_cycle(stats, abandoned, "Schnelle")
     services:tick()
     if type(after_cycle) == "function" then
       local ok2, err2 = pcall(after_cycle)
@@ -351,18 +481,25 @@ end
 
 -- run_slow_loop(opts): opts = { interval, services, after_cycle (optional,
 --   rollenspezifische Hintergrundarbeit, die tatsaechlich lange/blockierende
---   Peripherie-Calls machen darf, z.B. logistics_router:export). Kein
---   Event-Empfang, keine Quiesce-Pruefung (die lebt in run_fast_loop) --
---   rein periodisches Ticken auf eigenem Takt, damit ein langsamer Aufruf
---   hier UI/Touch/Ventil-Sicherheit in run_fast_loop nur so lange blockiert,
---   wie der Aufruf selbst dauert, statt zusaetzlich hinter allen anderen
---   Services in einer gemeinsamen Liste anstehen zu muessen.
+--   Peripherie-Calls machen darf, z.B. logistics_router:export). Keine
+--   Event-Verarbeitung (Ereignisse wecken sie nur, siehe wait_cycle), keine
+--   Quiesce-Pruefung (die lebt in run_fast_loop) -- rein periodisches Ticken
+--   auf eigenem Takt, damit ein langsamer Aufruf hier UI/Touch/Ventil-
+--   Sicherheit in run_fast_loop nur so lange blockiert, wie der Aufruf selbst
+--   dauert, statt zusaetzlich hinter allen anderen Services in einer
+--   gemeinsamen Liste anstehen zu muessen.
+--
+-- Hier stand os.sleep(interval). Das wartet auf genau einen Timer -- siehe
+-- wait_cycle oben, warum das die Schleife fuer immer stilllegen konnte.
 function M.run_slow_loop(opts)
   local interval = opts.interval
   local services = opts.services
   local after_cycle = opts.after_cycle
+  local stats, abandoned = new_loop_stats(), {}
+  loop_stats.slow = stats
   while true do
-    os.sleep(interval)
+    wait_cycle(stats, abandoned, interval, nil)
+    begin_cycle(stats, abandoned, "Langsame")
     local ok, err = pcall(function() services:tick() end)
     if not ok then
       pcall(function()

@@ -295,6 +295,8 @@ function M.update(monitor, ctx)
     -- ctx.monitor_scale wird von main.lua gesetzt (der aktuell wirksame,
     -- ggf. per Touch geaenderte Wert).
     monitor_scale = ctx.monitor_scale,
+    -- Verlorene/verspaetete Timer der Lauf-Schleifen, von main.lua gesetzt.
+    loop_stats = ctx.loop_stats,
   }
 
   if not M.monitor_router then

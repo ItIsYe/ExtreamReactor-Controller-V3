@@ -346,7 +346,16 @@ function M.render_diagnostics(mon, model)
   mux.data_row(mon, 2, 19, w - 3, { label = "CAPACITY", value = (model.capacity_ready and "READY "
     or (tostring(model.capacity_source or "") == "LEARNING" and "EINLERNEN " or "KEIN AUSSTOSS "))
     .. short(model.capacity_max, "RF/t"), status = capacity_key(model), icon = "storage" })
-  mux.data_row(mon, 2, 20, w - 3, { label = "RETRIES", value = tostring(retries), status = retries > 0 and "LIMITED" or "OK", icon = "network" })
+  -- Hier stand RETRIES -- doppelt, die Karte RETRY/TO oben zeigt denselben
+  -- Wert. Jetzt: verlorene und verspaetete Timer-Ereignisse der Lauf-
+  -- Schleifen (nodes/support/runtime.lua). Ein verlorener Timer hat die Node
+  -- frueher bis zum Neustart stillgelegt; heute laeuft sie weiter, und hier
+  -- steht, dass es passiert ist.
+  local loop = model.loop_stats or {}
+  local timers_lost, timers_late = num(loop.lost, 0), num(loop.late, 0)
+  mux.data_row(mon, 2, 20, w - 3, { label = "TIMER LOST / LATE",
+    value = tostring(timers_lost) .. " / " .. tostring(timers_late),
+    status = timers_lost > 0 and "WARNING" or (timers_late > 0 and "LIMITED" or "OK"), icon = "network" })
   mux.data_row(mon, 2, 21, w - 3, { label = "QUEUE DROP / DEDUP", value = tostring(queue_dropped) .. " / " .. tostring(dedupe_hits), status = queue_dropped > 0 and "WARNING" or "OK", icon = "network" })
   mux.data_row(mon, 2, 22, w - 3, { label = "LAST COMMAND", value = tostring(model.last_command or "none") .. " / " .. tostring(model.last_command_ts or "-"), status = "text", icon = "config" })
 

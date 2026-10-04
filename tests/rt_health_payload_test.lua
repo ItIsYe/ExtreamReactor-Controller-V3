@@ -93,4 +93,20 @@ assert_eq(payload.status, 'DEGRADED', 'degraded payload expected when bindings/c
 assert_eq(warned['reactors_missing_health'], 'missing:reactor', 'reactor warning expected')
 assert_eq(warned['turbines_missing_health'], 'missing:turbine', 'turbine warning expected')
 
+-- Verlorene Timer-Ereignisse (nodes/support/runtime.lua): der Grund
+-- TIMER_LOST steht im Payload, sobald seit dem Start einer verloren ging --
+-- die Node wird dadurch aber NICHT herabgestuft, sie regelt ja weiter.
+ctx.comms = { get_peers = function() return { { role = 'MASTER', down = false, age = 1.5 } } end }
+ctx.master_seen = os.epoch('utc')
+ctx.devices.registry_summary.kinds.reactor.bound = 1
+ctx.devices.registry_summary.kinds.turbine.bound = 1
+ctx.timers_lost = 0
+payload = health_payload.build_health_payload(ctx)
+assert_eq(#payload.reasons, 0, 'ohne verlorenen Timer kein Grund')
+ctx.timers_lost = 2
+payload = health_payload.build_health_payload(ctx)
+assert_eq(payload.status, 'OK', 'ein ausgeglichener Timer-Verlust stuft die Node nicht herab')
+assert_eq(#payload.reasons, 1, 'genau ein Grund')
+assert_eq(payload.reasons[1], 'TIMER_LOST', 'der Grund heisst TIMER_LOST')
+
 print('rt_health_payload_test.lua: ok')

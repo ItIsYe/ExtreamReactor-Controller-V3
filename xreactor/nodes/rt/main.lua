@@ -417,6 +417,8 @@ local function build_rt_health_payload()
     -- Startup-Sequenz, die ueberwacht werden muesste. Ein hartes false ist
     -- hier also keine fehlende Meldung, sondern der zutreffende Wert.
     startup_watchdog_tripped = false,
+    -- Verlorene Timer-Ereignisse seit dem Start (nodes/support/runtime.lua).
+    timers_lost = support_runtime.loop_stats().lost,
     rt_health = rt_health,
     configured_caps = runtime_config.configured_caps,
   })
@@ -510,6 +512,8 @@ local function update_monitor()
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
     manifest_id          = RT_BUILD_INFO.manifest_id,
     release_id           = RT_BUILD_INFO.release_id,
+    -- Timer-Zaehler der Lauf-Schleifen fuer die Diagnoseseite.
+    loop_stats           = support_runtime.loop_stats(),
   }
   -- Genau dieselbe Uebersetzung wie in build_status_payload(): der lokale
   -- Schirm und die Telemetrie an MASTER zeigen denselben Regler, also

@@ -90,6 +90,14 @@ function M.build_health_payload(ctx)
     reasons[ctx.health.reasons.CONTROL_DEGRADED] = true
     degrade_reasons[ctx.health.reasons.CONTROL_DEGRADED] = true
   end
+  -- Ein verlorenes Timer-Ereignis hat die Node frueher bis zum Neustart
+  -- stillgelegt (nodes/support/runtime.lua's wait_cycle). Heute laeuft sie
+  -- weiter -- der Grund bleibt bis zum Neustart stehen, damit sichtbar
+  -- bleibt, dass es passiert ist; MASTER protokolliert jede Aenderung der
+  -- Gruende. Bewusst KEIN Herabstufen: die Node regelt ja.
+  if (tonumber(ctx.timers_lost) or 0) > 0 then
+    reasons[ctx.health.reasons.TIMER_LOST or "TIMER_LOST"] = true
+  end
   local connected = M.is_master_connected(ctx)
   if not connected then
     reasons[ctx.health.reasons.COMMS_DOWN] = true

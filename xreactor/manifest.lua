@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 811,
-  manifest_id = "manifest-v811",
+  manifest_version = 812,
+  manifest_id = "manifest-v812",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "f4774a9c", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "0c69ac54", always = true },
   { path = "start.lua", size_bytes = 12152, hash = "7fa68905", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 3137, hash = "7fe91602", always = true },
@@ -59,7 +59,7 @@ return {
   -- always=true: core/mockup_ui.lua (auch bei LOG_COLLECTOR installiert)
   -- require()t shared.colors unbedingt beim Laden.
   { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always = true },
-  { path = "shared/health_codes.lua", size_bytes = 365, hash = "7783661a" },
+  { path = "shared/health_codes.lua", size_bytes = 529, hash = "8e6e379b" },
   { path = "shared/telemetry_schema.lua", size_bytes = 434, hash = "0f802851" },
   },
 
@@ -130,10 +130,10 @@ return {
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 31913, hash = "5ee5f270", required_for={"RT"} },
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"} },
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 12388, hash = "019f696f", required_for={"RT"} },
-    { path = "nodes/rt/health_payload.lua", size_bytes = 4938, hash = "158f62d3", required_for={"RT"} },
-    { path = "nodes/rt/main.lua", size_bytes = 41351, hash = "ee0a9934", required_for={"RT"} },
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 16155, hash = "55f61fc0", required_for={"RT"} },
-    { path = "nodes/rt/mockup_pages.lua", size_bytes = 18994, hash = "b99a2388", required_for={"RT"} },
+    { path = "nodes/rt/health_payload.lua", size_bytes = 5413, hash = "b2b9966d", required_for={"RT"} },
+    { path = "nodes/rt/main.lua", size_bytes = 41603, hash = "9c748c69", required_for={"RT"} },
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 16265, hash = "d00144cb", required_for={"RT"} },
+    { path = "nodes/rt/mockup_pages.lua", size_bytes = 19535, hash = "6b777c32", required_for={"RT"} },
     { path = "nodes/rt/rt2_adapter.lua", size_bytes = 9583, hash = "614763cb", required_for={"RT"} },
     { path = "nodes/rt/rt2_command_handler.lua", size_bytes = 8123, hash = "bdb1b251", required_for={"RT"} },
     { path = "nodes/rt/rt2_engine.lua", size_bytes = 21187, hash = "460aab5c", required_for={"RT"} },
@@ -224,7 +224,7 @@ return {
     { path = "nodes/support/command_handler.lua", size_bytes = 4134, hash = "dbb9d0c1", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER","FUEL","REPROCESSING"} },
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY","WATER","FUEL","REPROCESSING"} },
-    { path = "nodes/support/runtime.lua", size_bytes = 15475, hash = "8408d773", required_for={"WATER","FUEL","REPROCESSING","RT","ENERGY","MASTER","VALVE"} },
+    { path = "nodes/support/runtime.lua", size_bytes = 21435, hash = "c10537cb", required_for={"WATER","FUEL","REPROCESSING","RT","ENERGY","MASTER","VALVE"} },
     { path = "nodes/support/ui_pages.lua", size_bytes = 4666, hash = "75acfee4", required_for={"WATER","FUEL","REPROCESSING","ENERGY","RT"} },
     },
   },
