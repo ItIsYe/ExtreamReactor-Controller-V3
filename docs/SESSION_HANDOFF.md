@@ -98,37 +98,54 @@ Der Spulen-Check bleibt, der ist über `features.coils` abgesichert.
 
 ## Offene Befunde — geprüft, Konzept vorhanden, nichts umgesetzt
 
-### A) Chunk-Entladen: keine Selbstheilung (Hauptbefund)
+### A) Chunk-Entladen: Ursache weiter offen (Hauptbefund)
 
 Meldung: RT-Knoten erholen sich nicht, wenn Chunks nicht geladen waren,
 MASTER und FUEL ebenso; erst ein Neustart des RT-Knotens half. Entscheidendes
 Detail: „es waren noch lebende Werte aber nur rpm".
 
-Damit war die Stelle auffindbar:
+**Die erste Zuordnung hält nicht** (Folgesitzung 2026-10-04). Sie lautete:
+der Fähigkeiten-Cache in `nodes/rt/turbine_control.lua` wird einmal
+geschrieben (`:105`), ein fehlgeschlagenes `getMethods` wird zu „kann
+nichts" (`:57-58`), und `refresh_capability_cache`
+(`discovery_runtime.lua:35-49`) erneuert gebundene Einträge nie. Das stimmt
+alles — aber dieser Cache liegt **nicht im Regelpfad**:
 
-- `nodes/rt/turbine_control.lua:97-109` — `get_device_caps` schreibt
-  `ctx.capability_cache` **einmal** und prüft nie nach.
-- `nodes/rt/turbine_control.lua:56-59` — `build_capabilities` macht aus
-  einem **fehlgeschlagenen** `getMethods` ein `methods = {}`, also „kann
-  nichts".
+- `rt2_engine.tick` liest und schreibt über `adapters/turbine.lua` und
+  `adapters/reactor.lua` (`rt2_engine.lua:150`, `:162`), die Statusmeldung an
+  MASTER ebenso (`status_snapshot.lua:40`, `:75`). Beide Adapter heilen von
+  selbst.
+- `ctx.capability_cache` speist nur den Lese-Rückfall des lokalen Schirms
+  (`monitor_ui.lua:136-142`), das nie gelesene `module.caps` und den
+  Update-Quiesce.
 
-→ Eine Abfrage während Chunk-Laden oder Multiblock-Zusammenbau schreibt
-dauerhaft „Drehzahl ja, Durchfluss nein" fest. Genau das Bild, das der
-Betreiber gesehen hat.
+Nachweis: `tests/plant_chunk_reload_test.lua`, echte RT- und MASTER-Node,
+fünf Lagen — eine Turbine weg und mit verkürzter Methodenliste zurück; die
+ganze Anlage weg; weg und verkürzt zurück (**genau das Bild „nur RPM"**);
+angemeldet, aber jeder Aufruf wirft; Ausfall länger als die Schonfrist
+(SAFE). In allen fünf erholt sich die Node **ohne Neustart** und regelt eine
+Störung wieder aus. Gegengeprüft: merkt sich einer der beiden Adapter seine
+Methodenliste einmalig, scheitert der Test.
 
-- `nodes/rt/discovery_runtime.lua:35-49` — `refresh_capability_cache` füllt
-  nur fehlende Namen auf und verwirft nur **ungebundene**; eine gebundene
-  Turbine behält einen falschen Eintrag für immer.
-- `adapters/turbine.lua:176-195` — hier existiert die Regel bereits
-  („verkürzte Methodenliste **NICHT merken**"). Es ist also eine
-  **Asymmetrie zwischen zwei Caches**, kein unbekannter Fehler.
+Was der veraltete Cache wirklich bricht, ist der Update-Quiesce: für die
+betroffene Turbine wird er nie bestätigt, nach 60 s erzwingt
+`auto_update.lua:217-222` das Update, danach folgt ein Neustart — kein
+Dauerstillstand. **B1/B2 allein behebt das nicht:** auch das wrap-Handle in
+`ctx.peripherals.turbines` (`discovery_runtime.lua:54-55`) ist veraltet; im
+Versuch lief der Quiesce erst mit Cache **und** Handle erneuert. Naheliegend:
+den Quiesce namensbasiert über `adapters/turbine.lua` führen, wie die
+Regelung.
 
-Konzept: **B1** dieselbe Regel auf `ctx.capability_cache`; **B2**
-`getMethods`-Fehlschlag von „hat keine Methoden" trennen; **B3** das
-Monitor-Handle (zurückgestuft, weil der Schirm lebte): RT wickelt
-`devices.monitor` nur einmal in `init()` (~`:745`) und nutzt es in jedem
-UI-Tick (~`:483`); `discover()` löst es nie neu auf (`monitor_name = nil`,
-~`:305`) — anders als FUEL/WATER/REPROCESSOR.
+Dass MASTER und FUEL sich laut Meldung ebenfalls nicht erholten, kann ein
+Cache auf dem RT-Rechner grundsätzlich nicht erklären. **Offen ist, was im
+Spiel wirklich passiert.** Dafür braucht es das Fehlerbild: auf welchem
+Schirm nur Drehzahlen standen (RT, MASTER, FUEL), welchen Modus die RT-Node
+zeigte, und ob auch der Chunk des RT-Computers entladen war.
+
+**B3** (Monitor-Handle, ungeprüft): RT wickelt `devices.monitor` nur einmal
+in `init()` (~`:745`) und nutzt es in jedem UI-Tick (~`:483`); `discover()`
+löst es nie neu auf (`monitor_name = nil`, ~`:305`) — anders als
+FUEL/WATER/REPROCESSOR.
 
 ### B) Selbstheilung — Konzept in drei Ebenen (letzte Antwort der Sitzung)
 
@@ -138,7 +155,7 @@ UI-Tick (~`:483`); `discover()` löst es nie neu auf (`monitor_name = nil`,
    `getMethods`-Fehlschlag von „keine Methoden" trennen.
    `warn_once`/`shouted` zurücksetzbar machen, sonst ist die *nächste*
    Störung stumm. Vorbild: `adapters/turbine.lua:176-195`. Risiko niedrig.
-   **Diese Ebene behebt den Fall oben.**
+   **Diese Ebene behebt den Update-Quiesce, nicht das Feldbild** (siehe A).
 2. **Ein Selbstprüf-Dienst, der nach der Wirkung fragt**, nicht nach der
    Anwesenheit: „habe ich für jedes gebundene Gerät einen frischen Messwert,
    und habe ich in den letzten N Sekunden überhaupt etwas gestellt?"
@@ -169,14 +186,18 @@ belegt, die Wirkung fehlt. Ebenfalls auffällig:
 dabei aber **nie** das Handle oder den abgeleiteten Zustand, an dem es
 scheitert.
 
-**Reihenfolge: A (Chunk-Modell in der Harness) → Ebene 1 → Ebene 2 →
-Ebene 3.** Ohne A ist keine Ebene nachweisbar.
+**Reihenfolge: Fehlerbild klären → Ebene 1 → Ebene 2 → Ebene 3.** Das
+Chunk-Modell steht (`tests/plant_chunk_reload_test.lua`); jede Ebene wird
+dort nachgewiesen.
 
 ### C) Grenzen der Harness (Konzeptpunkt A)
 
-Sie kann **nicht** modellieren: veraltete `wrap`-Handles und „Peripherie da,
-aber jeder Aufruf wirft". Nötig sind drei Peripheriezustände — *da / weg /
-verkürzte Methodenliste* — plus Entwertung alter Handles.
+Modelliert sind: Peripherie *da / weg / verkürzte Methodenliste*,
+„angemeldet, aber jeder Aufruf wirft", und veraltete `wrap`-Handles beim
+Wieder-Anmelden (der Stub-`wrap` liefert den Methodentisch zum Zeitpunkt des
+Einbindens). **Nicht** modelliert: ob ER2 im Spiel wirklich verkürzte Listen
+meldet, Peripherie-Ereignisse (die Discovery läuft nur auf ihrem Takt), das
+Entladen des RT-Computers selbst, geteilte Kabelnetze, der lokale Monitor.
 
 ### D) Reaktor-Identität (dokumentiert, Folgearbeit offen)
 
@@ -261,10 +282,11 @@ Entscheidung steht aus.
 
 ## Nächste Schritte
 
-1. **Freigabe einholen** für B1/B2 (Fähigkeiten-Cache) und ggf. B3
-   (Monitor-Handle). Ohne Freigabe nichts anfassen.
-2. Chunk-Modell in der Harness (Konzeptpunkt A) — zuerst, sonst ist nichts
-   nachweisbar.
+1. **Fehlerbild vom Betreiber einholen** (Schirm, Modus, welcher Chunk) —
+   ohne das ist A nicht weiter eingrenzbar. B1/B2 behebt nur den
+   Update-Quiesce und nur zusammen mit dem wrap-Handle; Freigabe nötig.
+2. Neue Lagen in `tests/plant_chunk_reload_test.lua` ergänzen, sobald das
+   Fehlerbild bekannt ist.
 3. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
 4. Versionierung: Entscheidung zum Payload-Digest.
 5. Älter und noch offen: MASTER-Ausfall-Befunde A und B;
