@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-04 | beta | manifest-v811 | HEAD `f331e450`**
+**Stand: 2026-10-04 | beta | manifest-v812 | HEAD `72a7b285`**
 
 ---
 
@@ -13,21 +13,22 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 
 | | |
 |---|---|
-| Branch | `claude/code-review-bugs-gaps-ug5tff`, gepusht nach `origin/beta` **und** nach dem Branch |
-| HEAD | `f331e450` |
-| Fassung | `manifest-v811` / `beta-v811` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 390 Lua-Dateien + 44 Python, grün |
+| Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
+| HEAD | `72a7b285` |
+| Fassung | `manifest-v812` / `beta-v812` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 392 Lua + 44 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
-| Ablauf | direkt committen und pushen, **kein PR** |
+| Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
 
 ### ⚠️ Stehende Vorgabe des Betreibers, am Sitzungsende noch in Kraft
 
 > „achtung nichts umsetzen nur prüfen und iden konzept geben"
 
-Seit dieser Nachricht wurde **nichts** implementiert — nur geprüft und
-Konzepte geliefert. Eine neue Sitzung braucht eine ausdrückliche Freigabe,
-bevor sie Code anfasst. Der Betreiber kann derzeit **nicht im Spiel testen**
+Seither wird nur umgesetzt, was der Betreiber **einzeln freigibt**.
+Freigegeben und umgesetzt (Folgesitzung 2026-10-04): der Chunk-Test, der
+Schleifen-Fix (v812) und die CI-Remote-Prüfung. Alles andere braucht weiter
+eine ausdrückliche Freigabe, bevor Code angefasst wird. Der Betreiber kann derzeit **nicht im Spiel testen**
 („Bau weiter dran ich kan gead keine tests machen").
 
 ## Was in dieser Sitzung gemacht wurde (11 Commits, `670bb1c0` … `f331e450`)
@@ -98,49 +99,66 @@ Der Spulen-Check bleibt, der ist über `features.coils` abgesichert.
 
 ## Offene Befunde — geprüft, Konzept vorhanden, nichts umgesetzt
 
-### A) Chunk-Entladen: Ursache weiter offen (Hauptbefund)
+### A) Chunk-Entladen: Ursache gefunden, behoben in v812 (Hauptbefund)
 
-Meldung: RT-Knoten erholen sich nicht, wenn Chunks nicht geladen waren,
-MASTER und FUEL ebenso; erst ein Neustart des RT-Knotens half. Entscheidendes
-Detail: „es waren noch lebende Werte aber nur rpm".
+Meldung: RT-Knoten erholen sich nicht, wenn Chunks nicht geladen waren;
+erst ein Neustart des RT-Knotens half. Präzisierung des Betreibers:
+**hauptsächlich die RT-Node — nach deren Neustart liefen MASTER und FUEL von
+selbst wieder.** Dazu: „es waren noch lebende Werte aber nur rpm".
 
-**Die erste Zuordnung hält nicht** (Folgesitzung 2026-10-04). Sie lautete:
-der Fähigkeiten-Cache in `nodes/rt/turbine_control.lua` wird einmal
-geschrieben (`:105`), ein fehlgeschlagenes `getMethods` wird zu „kann
-nichts" (`:57-58`), und `refresh_capability_cache`
-(`discovery_runtime.lua:35-49`) erneuert gebundene Einträge nie. Das stimmt
-alles — aber dieser Cache liegt **nicht im Regelpfad**:
+**Ursache, am echten Code nachgewiesen: ein verlorenes Timer-Ereignis legt
+eine Lauf-Schleife für immer still.** Beide Schleifen in
+`nodes/support/runtime.lua` warteten auf genau EINEN Timer: die schnelle
+brach nur bei genau ihrem Timer aus der Warteschleife aus, die langsame rief
+`os.sleep()`, das in CC:Tweaked (`bios.lua:50-56`) ebenfalls nur auf diesen
+einen Timer wartet. CC:Tweaked verwirft Ereignisse, sobald 256 in der
+Warteschlange stehen (`ComputerExecutor.QUEUE_LIMIT`), Timer eingeschlossen
+— beides am CC:Tweaked-Quelltext (1.20 und 1.21) geprüft.
 
-- `rt2_engine.tick` liest und schreibt über `adapters/turbine.lua` und
-  `adapters/reactor.lua` (`rt2_engine.lua:150`, `:162`), die Statusmeldung an
-  MASTER ebenso (`status_snapshot.lua:40`, `:75`). Beide Adapter heilen von
-  selbst.
-- `ctx.capability_cache` speist nur den Lese-Rückfall des lokalen Schirms
-  (`monitor_ui.lua:136-142`), das nie gelesene `module.caps` und den
-  Update-Quiesce.
+| Schleife | trägt | nach einem verlorenen Timer (bis v811) |
+|---|---|---|
+| langsam | Discovery, Telemetrie | Status an MASTER bleibt aus → MASTER und FUEL ohne Daten |
+| schnell, periodischer Takt | **Regelung** | tot; Comms und Schirm laufen auf Ereignissen weiter → **lebende Drehzahlen am Schirm** |
 
-Nachweis: `tests/plant_chunk_reload_test.lua`, echte RT- und MASTER-Node,
-fünf Lagen — eine Turbine weg und mit verkürzter Methodenliste zurück; die
-ganze Anlage weg; weg und verkürzt zurück (**genau das Bild „nur RPM"**);
-angemeldet, aber jeder Aufruf wirft; Ausfall länger als die Schonfrist
-(SAFE). In allen fünf erholt sich die Node **ohne Neustart** und regelt eine
-Störung wieder aus. Gegengeprüft: merkt sich einer der beiden Adapter seine
-Methodenliste einmalig, scheitert der Test.
+Mit den echten Schleifen und dem originalen `os.sleep` nachgefahren: 19
+Takte, dann keiner mehr, obwohl ständig andere Timer und Funknachrichten
+eintreffen. Auf der RT-Node schlägt das zuerst zu, weil dort beim
+Chunk-Laden mit Abstand die meisten Peripherie-Ereignisse einprasseln.
+**Nicht gemessen** ist, ob die Warteschlange im Spiel wirklich überläuft.
 
-Was der veraltete Cache wirklich bricht, ist der Update-Quiesce: für die
-betroffene Turbine wird er nie bestätigt, nach 60 s erzwingt
-`auto_update.lua:217-222` das Update, danach folgt ein Neustart — kein
-Dauerstillstand. **B1/B2 allein behebt das nicht:** auch das wrap-Handle in
-`ctx.peripherals.turbines` (`discovery_runtime.lua:54-55`) ist veraltet; im
-Versuch lief der Quiesce erst mit Cache **und** Handle erneuert. Naheliegend:
-den Quiesce namensbasiert über `adapters/turbine.lua` führen, wie die
-Regelung.
+**Behoben in v812** (`wait_cycle`): weiter, wenn der eigene Timer kommt ODER
+wenn bei irgendeinem Ereignis Intervall + 1 s verstrichen sind (`os.clock`,
+in CC:Tweaked Servertakte — dieselbe Zeitbasis wie `os.startTimer`,
+monoton). Ein verlorener Timer kostet gut eine Sekunde. Gilt für RT, FUEL,
+WATER, REPROCESSOR und VALVE. Test: `tests/runtime_lost_timer_test.lua`.
 
-Dass MASTER und FUEL sich laut Meldung ebenfalls nicht erholten, kann ein
-Cache auf dem RT-Rechner grundsätzlich nicht erklären. **Offen ist, was im
-Spiel wirklich passiert.** Dafür braucht es das Fehlerbild: auf welchem
-Schirm nur Drehzahlen standen (RT, MASTER, FUEL), welchen Modus die RT-Node
-zeigte, und ob auch der Chunk des RT-Computers entladen war.
+**Im Betrieb prüfen:** nach dem nächsten Chunk-Laden die RT-Diagnoseseite
+ansehen, Zeile **„TIMER LOST / LATE"**. Eine Zahl über 0 bei LOST belegt die
+Ursache — die Node lief diesmal weiter. Im Status steht dann der Grund
+`TIMER_LOST` (ohne Herabstufen); MASTER protokolliert die Änderung („Node …
+reasons … -> TIMER_LOST"), zeigt Gründe aber auf keinem Schirm (bekannte
+Lücke, `master/ui_controller.lua:620`). Hängt die RT-Node trotzdem wieder
+und LOST bleibt 0, ist es eine andere Ursache.
+
+**Dasselbe Muster, noch nicht behoben:** `master/loop.lua:75`,
+`nodes/energy/matrix.lua:26`, `installer/auto_update.lua:459`,
+`nodes/log_collector/main.lua:1329` und `:1365`; dazu `run_event_loop` in
+`runtime.lua`, das niemand mehr aufruft.
+
+**Die erste Zuordnung (Fähigkeiten-Cache) hält nicht.** Der Cache in
+`nodes/rt/turbine_control.lua` wird zwar einmal geschrieben und nie erneuert
+(`:57-58`, `:105`, `discovery_runtime.lua:35-49`), liegt aber nicht im
+Regelpfad: `rt2_engine.tick` und der Status lesen über `adapters/turbine.lua`
+und `adapters/reactor.lua` (`rt2_engine.lua:150`, `:162`;
+`status_snapshot.lua:40`, `:75`), und die heilen selbst.
+`tests/plant_chunk_reload_test.lua` zeigt in fünf Chunk-Lagen (Turbine weg
+und verkürzt zurück; ganze Anlage weg; weg und verkürzt zurück = Bild „nur
+RPM"; jeder Aufruf wirft; Ausfall über die Schonfrist) die Erholung ohne
+Neustart. Was der veraltete Cache bricht, ist der **Update-Quiesce**: für
+die Turbine nie bestätigt, nach 60 s erzwingt `auto_update.lua:217-222` das
+Update. **B1/B2 allein reicht dafür nicht** — auch das wrap-Handle in
+`ctx.peripherals.turbines` (`discovery_runtime.lua:54-55`) ist veraltet;
+besser den Quiesce namensbasiert über `adapters/turbine.lua` führen.
 
 **B3** (Monitor-Handle, ungeprüft): RT wickelt `devices.monitor` nur einmal
 in `init()` (~`:745`) und nutzt es in jedem UI-Tick (~`:483`); `discover()`
@@ -175,20 +193,21 @@ FUEL/WATER/REPROCESSOR.
 Quer darüber: **Heilung muss sichtbar sein.** Zähler im Statuspayload
 (Selbstheilungen seit Boot, letzter Grund, letzter Zeitpunkt). Ein Knoten,
 der sich alle zehn Minuten heilt, ist nicht gesund, sieht aber ohne Zähler
-genau so aus wie einer, der läuft.
+genau so aus wie einer, der läuft. Ein erster Baustein steht seit v812:
+`runtime.loop_stats()` und die Zeile „TIMER LOST / LATE" (siehe A).
 
 Stolperstelle dabei gefunden: `startup_watchdog_s = 60` steht in
 `nodes/rt/config.lua:52` und wird vom Normalizer validiert
 (`config_normalizer.lua:196-199`), **ausgewertet wird er nirgends** —
-`main.lua:410` setzt `startup_watchdog_tripped = false` fest. Der Platz ist
+`main.lua:419` setzt `startup_watchdog_tripped = false` fest. Der Platz ist
 belegt, die Wirkung fehlt. Ebenfalls auffällig:
 `service_manager.lua:65` `schedule_retry` wiederholt mit Backoff, verwirft
 dabei aber **nie** das Handle oder den abgeleiteten Zustand, an dem es
 scheitert.
 
-**Reihenfolge: Fehlerbild klären → Ebene 1 → Ebene 2 → Ebene 3.** Das
-Chunk-Modell steht (`tests/plant_chunk_reload_test.lua`); jede Ebene wird
-dort nachgewiesen.
+**Reihenfolge: Betrieb beobachten (TIMER LOST, siehe A) → Ebene 1 →
+Ebene 2 → Ebene 3.** Das Chunk-Modell steht
+(`tests/plant_chunk_reload_test.lua`); jede Ebene wird dort nachgewiesen.
 
 ### C) Grenzen der Harness (Konzeptpunkt A)
 
@@ -198,6 +217,11 @@ Wieder-Anmelden (der Stub-`wrap` liefert den Methodentisch zum Zeitpunkt des
 Einbindens). **Nicht** modelliert: ob ER2 im Spiel wirklich verkürzte Listen
 meldet, Peripherie-Ereignisse (die Discovery läuft nur auf ihrem Takt), das
 Entladen des RT-Computers selbst, geteilte Kabelnetze, der lokale Monitor.
+
+Außerdem ersetzt die Harness die Lauf-Schleifen durch Rekorder
+(`cc_node_boot.capture_loops`) und tickt die Dienste direkt — Fehler **in**
+den Schleifen sieht sie nicht. Genau deshalb blieb der Timer-Befund dort
+unsichtbar; dafür gibt es `tests/runtime_lost_timer_test.lua`.
 
 ### D) Reaktor-Identität (dokumentiert, Folgearbeit offen)
 
@@ -282,16 +306,18 @@ Entscheidung steht aus.
 
 ## Nächste Schritte
 
-1. **Fehlerbild vom Betreiber einholen** (Schirm, Modus, welcher Chunk) —
-   ohne das ist A nicht weiter eingrenzbar. B1/B2 behebt nur den
-   Update-Quiesce und nur zusammen mit dem wrap-Handle; Freigabe nötig.
-2. Neue Lagen in `tests/plant_chunk_reload_test.lua` ergänzen, sobald das
-   Fehlerbild bekannt ist.
+1. **Im Betrieb beobachten:** nach dem nächsten Chunk-Laden die
+   RT-Diagnoseseite, Zeile „TIMER LOST / LATE" (siehe A). LOST über 0
+   belegt die Ursache. Hängt die Node trotzdem bei LOST 0: Fehlerbild
+   sammeln (Schirm, Modus, welcher Chunk).
+2. **Derselbe Fix für die übrigen Schleifen** (MASTER, ENERGY-Matrix,
+   Auto-Updater, Log-Collector) und der Update-Quiesce (B1/B2 plus
+   wrap-Handle) — jeweils Freigabe nötig.
 3. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
 4. Versionierung: Entscheidung zum Payload-Digest.
 5. Älter und noch offen: MASTER-Ausfall-Befunde A und B;
    `matrix_snapshot_runtime.lua` Kapazitäts-Rückfall; die P2-Liste des
-   Audits; Aufräumen alter Remote-Branches.
+   Audits.
 6. **Turbinenzahl je RT-Knoten ist unbekannt** — der Anlagentest nimmt 3 an
    (Flotte 547 200 RF/t). Nachfragen und anpassen.
 7. **Der Betreiber hatte „noch ein weiteres Thema, aber indirekt damit
@@ -303,14 +329,20 @@ Entscheidung steht aus.
 
 ## Rollback-Marken
 
-| Marke | Commit | Stand |
-|---|---|---|
-| `stable-beta-v761` | `f348d4ba` | **aktuell gueltig.** RT-Regler im Betrieb bestaetigt, FUEL liefert, Dampftank-Sollwert 70 % |
-| `stable-beta-v742` | `ac122a05` | vorherige Marke (RT bestaetigt mit 1 Reaktor / 25 Turbinen, FUEL noch defekt) |
+Die Marken-Branches (`stable-beta-*`) wurden am 2026-10-04 geloescht -- auf
+GitHub gibt es nur noch `beta` und `main`. Die Staende liegen weiter in der
+Historie von `beta` und lassen sich ueber die **volle Commit-ID**
+installieren: der Installer nimmt statt `beta` jede Ref aus
+`__xreactor_forced_ref` (`installer:109-114`). Tags sind keine Alternative,
+Tag-Pushes scheitern in dieser Umgebung reproduzierbar
+(`send-pack: unexpected disconnect`).
 
-Eine Marke ist ein **Branch**, kein Tag: Tag-Pushes scheitern in dieser
-Umgebung reproduzierbar (`send-pack: unexpected disconnect`), Branches
-nicht.
+| Stand | Commit | |
+|---|---|---|
+| v770 | `b09c11231b9b7c8f305d9274886a36a99f76b15a` | **juengster vom Betreiber bestaetigter Stand** (2026-09-28: vereinfachter Regler, Doppelsetup -- siehe RT_ENGINE_V2.md) |
+| v768 | `98e1eebc5f7f01676d0648ea383998011407b590` | stornierter Update-Quiesce laesst die Node nicht mehr stehen |
+| v761 | `f348d4ba72d7d5bc3aee006970dae6c5cb3569ff` | RT-Regler im Betrieb bestaetigt, FUEL liefert, Dampftank-Sollwert 70 % |
+| v742 | `ac122a05f5ece1ff7587aaf15669331bde6cacea` | RT bestaetigt mit 1 Reaktor / 25 Turbinen, FUEL noch defekt |
 
 ### Warum v761 die neue Marke ist
 

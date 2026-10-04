@@ -1379,8 +1379,9 @@ Nicht bestaetigt bleibt **mehr als 25 Turbinen** — nur gegen Tests belegt
 
 **Bestaetigt (Betreiber, 2026-09-28, Fassung v770): der vereinfachte
 Regler laeuft, auch im Doppelsetup, ohne erkennbare Probleme.** Das ist
-der erste Stand ohne Lernphase, ohne Kennlinien und ohne v1 — er ist als
-`stable-beta-v770` markiert.
+der erste Stand ohne Lernphase, ohne Kennlinien und ohne v1 — als
+Rueckfallpunkt festgehalten: Commit `b09c1123` (die Marken-Branches sind
+seit 2026-10-04 geloescht, siehe SESSION_HANDOFF.md).
 
 ## Offen
 
