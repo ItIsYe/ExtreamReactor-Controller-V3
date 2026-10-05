@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-04 | beta | manifest-v812 | HEAD `72a7b285`**
+**Stand: 2026-10-05 | beta | manifest-v813 | HEAD `a880e6a2`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `72a7b285` |
-| Fassung | `manifest-v812` / `beta-v812` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 392 Lua + 44 Python, grün |
+| HEAD | `a880e6a2` |
+| Fassung | `manifest-v813` / `beta-v813` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 393 Lua + 44 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -26,8 +26,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 > „achtung nichts umsetzen nur prüfen und iden konzept geben"
 
 Seither wird nur umgesetzt, was der Betreiber **einzeln freigibt**.
-Freigegeben und umgesetzt (Folgesitzung 2026-10-04): der Chunk-Test, der
-Schleifen-Fix (v812) und die CI-Remote-Prüfung. Alles andere braucht weiter
+Freigegeben und umgesetzt (Folgesitzungen 2026-10-04/05): der Chunk-Test,
+der Schleifen-Fix (v812), die CI-Remote-Prüfung und derselbe Fix für MASTERs
+Schleife (v813, ohne die Heartbeat-Logik anzufassen). Alles andere braucht weiter
 eine ausdrückliche Freigabe, bevor Code angefasst wird. Der Betreiber kann derzeit **nicht im Spiel testen**
 („Bau weiter dran ich kan gead keine tests machen").
 
@@ -150,10 +151,36 @@ reasons … -> TIMER_LOST"), zeigt Gründe aber auf keinem Schirm (bekannte
 Lücke, `master/ui_controller.lua:620`). Hängt die RT-Node trotzdem wieder
 und LOST bleibt 0, ist es eine andere Ursache.
 
-**Dasselbe Muster, noch nicht behoben:** `master/loop.lua:75`,
-`nodes/energy/matrix.lua:26`, `installer/auto_update.lua:459`,
-`nodes/log_collector/main.lua:1329` und `:1365`; dazu `run_event_loop` in
-`runtime.lua`, das niemand mehr aufruft.
+**MASTER: dasselbe Muster, behoben in v813.** Betreiberbeobachtung
+2026-10-05 mit v812: **„master schirm ändert sich nur beim antippen"**, alle
+RT-Knoten zeigten MASTER DOWN, obwohl MASTER lief, und alle Knoten reagierten
+nur noch verzögert auf Änderungen. `master/loop.lua` wartete auf genau einen
+0,5-s-Timer; nur in diesem Takt laufen Heartbeat, Status, Befehle an die
+Knoten und das Neuzeichnen. Funknachrichten nahm die Schleife weiter an, und
+eine Berührung löste einen Ereignis-Takt aus — daher das Bild. Jetzt derselbe
+Taktgeber wie in den Knoten (`runtime.make_cycle_waiter`, den auch die beiden
+Knoten-Schleifen nutzen). **Die Heartbeat-Logik selbst (Telemetrie-Dienst,
+Intervalle, Peer-Timeouts) ist bewusst unverändert** — Betreiberwunsch.
+Sichtbar wird ein Ausgleich auf MASTERs Terminal als Zeile „[MASTER]
+Takt-Timer ausgeblieben (N mal seit Start) …" (höchstens einmal je Minute)
+und als WARN im Log; Zähler in `loop_stats().master`. Test:
+`tests/master_loop_lost_timer_test.lua` (echte Schleife; der alte Stand
+bleibt nach einem verlorenen Timer bei 9 Takten stehen).
+
+Zum „langsam" nach Updates gehört außerdem: jedes Update startet alle Knoten
+neu, und RT lernt nach jedem Neustart neu
+(`rt2_orchestrator.new_output_state`: `learning = true`, nicht persistiert).
+Während des Lernens überstimmt RT MASTERs Vorgabe (Betreiberentscheidung
+2026-09-28). v812 selbst kostet messbar nichts (0,62 µs je Funknachricht).
+
+**Dasselbe Muster, noch nicht behoben:** `nodes/energy/matrix.lua:26`,
+`installer/auto_update.lua:459`, `nodes/log_collector/main.lua:1329` und
+`:1365`; dazu `run_event_loop` in `runtime.lua`, das niemand mehr aufruft.
+Folge beim Auto-Updater: verliert ein Knoten dessen Timer, aktualisiert er
+sich nicht mehr von selbst (ein REMOTE_UPDATE von MASTER wirkt weiter). Die
+Fassung steht beim Start auf dem Terminal (`[BOOT] XReactor <Rolle> |
+beta-v…`); zeigt ein Knoten Minuten nach einem Update noch die alte, hilft
+ein Neustart von Hand.
 
 **Die erste Zuordnung (Fähigkeiten-Cache) hält nicht.** Der Cache in
 `nodes/rt/turbine_control.lua` wird zwar einmal geschrieben und nie erneuert
@@ -300,7 +327,8 @@ Entscheidung steht aus.
 
 - Lua-Tests: `lua5.2 -e "dofile('tests/cc_env_shim.lua')" tests/<datei>.lua`
 - Ablauf: beide Suiten → `python3 scripts/manifest_sync.py --write` → beide
-  Suiten erneut → committen und pushen (`origin/beta` **und** Branch).
+  Suiten erneut → direkt auf `beta` committen und pushen (kein PR, keine
+  weiteren Branches).
 - **Konfig-Falle:** `core/utils.migrate_config()` ergänzt Vorgaben **und
   schreibt sie fest**. Jede Änderung einer Vorgabe braucht eine
   Schema-Migration (RT steht auf v8).
@@ -320,9 +348,9 @@ Entscheidung steht aus.
    RT-Diagnoseseite, Zeile „TIMER LOST / LATE" (siehe A). LOST über 0
    belegt die Ursache. Hängt die Node trotzdem bei LOST 0: Fehlerbild
    sammeln (Schirm, Modus, welcher Chunk).
-2. **Derselbe Fix für die übrigen Schleifen** (MASTER, ENERGY-Matrix,
-   Auto-Updater, Log-Collector) und der Update-Quiesce (B1/B2 plus
-   wrap-Handle) — jeweils Freigabe nötig.
+2. **Derselbe Fix für die übrigen Schleifen** (ENERGY-Matrix,
+   Auto-Updater, Log-Collector; MASTER ist seit v813 behoben) und der
+   Update-Quiesce (B1/B2 plus wrap-Handle) — jeweils Freigabe nötig.
 3. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
 4. Versionierung: Entscheidung zum Payload-Digest.
 5. Älter und noch offen: MASTER-Ausfall-Befunde A und B;
