@@ -126,6 +126,16 @@ eintreffen. Auf der RT-Node schlägt das zuerst zu, weil dort beim
 Chunk-Laden mit Abstand die meisten Peripherie-Ereignisse einprasseln.
 **Nicht gemessen** ist, ob die Warteschlange im Spiel wirklich überläuft.
 
+Betreiberbeobachtung (2026-10-05, aus der Zeit vor v812): **„der Regler war
+eingefroren, aber die Live-RPM-Werte wurden weiter gelesen und angezeigt".**
+Genau das Bild der schnellen Schleife ohne Timer: der Schirmdienst zeichnet
+auch auf eingehende Funknachrichten neu (`services/ui_service.lua`,
+`due`-Prüfung gilt auch für `modem_message`) und liest dabei die Turbinen
+frisch, die Regelung tickt nur im periodischen Takt. Das einzige andere
+Bild dieser Art im Code ist ein hängender Update-Quiesce — der stellt aber
+Durchfluss 0, Spule ein, Stäbe 100 und endet nach 60 s im erzwungenen
+Update.
+
 **Behoben in v812** (`wait_cycle`): weiter, wenn der eigene Timer kommt ODER
 wenn bei irgendeinem Ereignis Intervall + 1 s verstrichen sind (`os.clock`,
 in CC:Tweaked Servertakte — dieselbe Zeitbasis wie `os.startTimer`,
