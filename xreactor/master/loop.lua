@@ -4,8 +4,12 @@
 local M = {}
 
 local update_handshake = require("core.update_handshake")
+local support_runtime = require("nodes.support.runtime")
 
 local REDSTONE_SIDES = { "top", "bottom", "left", "right", "front", "back" }
+
+-- Hoechstens eine Terminal-Meldung je Minute, wenn der Takt-Timer ausblieb.
+local TIMER_NOTICE_INTERVAL_S = 60
 
 local function make_redstone_handler(runtime, log)
   local remote_update = require("core.remote_update")
@@ -60,20 +64,40 @@ function M.run(runtime, constants)
   -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
   -- unbegrenzt weiterzulaufen.
   local quiesce_handshake = _G.__xreactor_update_handshake
+  -- Takt alle 0,5 s; nur dort laufen Heartbeat, Status, Befehle an die
+  -- Knoten und das Neuzeichnen der Schirme. Bis v812 wartete die Schleife
+  -- dafuer auf genau EIN Timer-Ereignis. CC:Tweaked verwirft aber
+  -- Ereignisse, sobald 256 in der Warteschlange stehen -- Timer
+  -- eingeschlossen --, und MASTER empfaengt die Nachrichten ALLER Knoten. Ging
+  -- der eine Timer verloren, stand der Takt bis zum Neustart still: der
+  -- Schirm aenderte sich nur noch beim Antippen, alle RT-Knoten zeigten
+  -- MASTER DOWN (Betrieb, 2026-10-05). Jetzt derselbe Taktgeber wie in den
+  -- Knoten-Schleifen (nodes/support/runtime.lua, wait_cycle): ein verlorener
+  -- Timer kostet gut eine Sekunde. Test: tests/master_loop_lost_timer_test.lua.
+  local wait_for_cycle = support_runtime.make_cycle_waiter("master", "MASTER")
+  local timer_notice_clock = nil
+  local function dispatch(event)
+    local ev = event[1]
+    if ev == "modem_message" then
+      runtime.refs.comms:handle_event(event)
+    elseif ev == "monitor_touch" or ev == "mouse_click" or ev == "key" or ev == "char" then
+      runtime.refs.services:tick(nil, event)
+    elseif ev == "redstone" then
+      check_redstone()
+    end
+  end
   log("Entering event loop", "INFO")
   while true do
-    local timer = os.startTimer(0.5)
-    while true do
-      local event = { os.pullEvent() }
-      local ev = event[1]
-      if ev == "modem_message" then
-        runtime.refs.comms:handle_event(event)
-      elseif ev == "monitor_touch" or ev == "mouse_click" or ev == "key" or ev == "char" then
-        runtime.refs.services:tick(nil, event)
-      elseif ev == "redstone" then
-        check_redstone()
-      elseif ev == "timer" and event[2] == timer then
-        break
+    if wait_for_cycle(0.5, dispatch) then
+      -- MASTER hat keinen Diagnose-Schirm wie die RT-Node: Meldung aufs
+      -- eigene Terminal (dort zeichnet MASTER sonst nichts) und ins Log.
+      local now = os.clock()
+      if not timer_notice_clock or now - timer_notice_clock >= TIMER_NOTICE_INTERVAL_S then
+        timer_notice_clock = now
+        local notice = ("Takt-Timer ausgeblieben (%d mal seit Start) -- weitergelaufen statt stehenzubleiben")
+          :format(support_runtime.loop_stats().master.compensated)
+        pcall(print, "[MASTER] " .. notice)
+        log(notice, "WARN")
       end
     end
     if runtime.refs.services then

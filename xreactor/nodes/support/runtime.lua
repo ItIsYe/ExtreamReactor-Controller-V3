@@ -391,7 +391,8 @@ function M.loop_stats()
 end
 
 -- Wartet einen Takt (siehe oben). on_event bekommt jedes Ereignis ausser dem
--- eigenen Timer; abandoned merkt sich aufgegebene eigene Timer.
+-- eigenen Timer; abandoned merkt sich aufgegebene eigene Timer. true, wenn
+-- ohne den eigenen Timer weitergemacht wurde.
 local function wait_cycle(stats, abandoned, interval_s, on_event)
   local started = clock_s()
   local deadline_s = (tonumber(interval_s) or 0) + LOST_TIMER_GRACE_S
@@ -399,7 +400,7 @@ local function wait_cycle(stats, abandoned, interval_s, on_event)
   while true do
     local event = { os.pullEvent() }
     if event[1] == "timer" then
-      if event[2] == timer then return end
+      if event[2] == timer then return false end
       if abandoned[event[2]] then
         -- Ein frueher aufgegebener eigener Timer: kam doch noch, nur spaet.
         abandoned[event[2]] = nil
@@ -411,7 +412,7 @@ local function wait_cycle(stats, abandoned, interval_s, on_event)
     if started and now and now - started >= deadline_s then
       abandoned[timer] = now
       stats.compensated = stats.compensated + 1
-      return
+      return true
     end
   end
 end
@@ -442,6 +443,21 @@ local function begin_cycle(stats, abandoned, label)
   stats.last_tick_clock = clock_s()
 end
 
+-- Taktgeber fuer eine Schleife, die ihren Takt selbst wartet -- dieselbe
+-- Mechanik wie die beiden Schleifen unten. MASTERs eigene Schleife
+-- (master/loop.lua) nutzt ihn: sie hatte denselben Fehler. Liefert
+-- wait(interval_s, on_event); die Zaehler stehen in M.loop_stats()[name],
+-- und wait() gibt true zurueck, wenn ohne eigenen Timer weitergemacht wurde.
+function M.make_cycle_waiter(name, label)
+  local stats, abandoned = new_loop_stats(), {}
+  loop_stats[name] = stats
+  return function(interval_s, on_event)
+    local compensated = wait_cycle(stats, abandoned, interval_s, on_event)
+    begin_cycle(stats, abandoned, label or name)
+    return compensated
+  end
+end
+
 function M.run_fast_loop(opts)
   local receive_timeout = opts.receive_timeout
   local services = opts.services
@@ -450,8 +466,7 @@ function M.run_fast_loop(opts)
   local quiesce_opts = opts.quiesce_opts
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
   local quiesce_seen = { seen = false } -- TEMP DIAGNOSTIC, see log_quiesce_seen_once() above
-  local stats, abandoned = new_loop_stats(), {}
-  loop_stats.fast = stats
+  local wait_for_cycle = M.make_cycle_waiter("fast", "Schnelle")
   local function dispatch(event)
     if event[1] == "modem_message" then
       comms:handle_event(event)
@@ -462,8 +477,7 @@ function M.run_fast_loop(opts)
     end
   end
   while true do
-    wait_cycle(stats, abandoned, receive_timeout, dispatch)
-    begin_cycle(stats, abandoned, "Schnelle")
+    wait_for_cycle(receive_timeout, dispatch)
     services:tick()
     if type(after_cycle) == "function" then
       local ok2, err2 = pcall(after_cycle)
@@ -495,11 +509,9 @@ function M.run_slow_loop(opts)
   local interval = opts.interval
   local services = opts.services
   local after_cycle = opts.after_cycle
-  local stats, abandoned = new_loop_stats(), {}
-  loop_stats.slow = stats
+  local wait_for_cycle = M.make_cycle_waiter("slow", "Langsame")
   while true do
-    wait_cycle(stats, abandoned, interval, nil)
-    begin_cycle(stats, abandoned, "Langsame")
+    wait_for_cycle(interval, nil)
     local ok, err = pcall(function() services:tick() end)
     if not ok then
       pcall(function()
