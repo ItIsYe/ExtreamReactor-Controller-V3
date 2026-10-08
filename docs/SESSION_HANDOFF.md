@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-05 | beta | manifest-v813 | HEAD `a880e6a2`**
+**Stand: 2026-10-08 | beta | manifest-v814 | HEAD `69054880`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `a880e6a2` |
-| Fassung | `manifest-v813` / `beta-v813` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 393 Lua + 44 Python, grün |
+| HEAD | `69054880` |
+| Fassung | `manifest-v814` / `beta-v814`, Prüfsumme `48d03939` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 402 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -28,7 +28,10 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 Seither wird nur umgesetzt, was der Betreiber **einzeln freigibt**.
 Freigegeben und umgesetzt (Folgesitzungen 2026-10-04/05): der Chunk-Test,
 der Schleifen-Fix (v812), die CI-Remote-Prüfung und derselbe Fix für MASTERs
-Schleife (v813, ohne die Heartbeat-Logik anzufassen). Alles andere braucht weiter
+Schleife (v813, ohne die Heartbeat-Logik anzufassen). Am 2026-10-08:
+**„Ok der Code der noch offen zu fixen ist machen"** — umgesetzt in v814
+(siehe A und F), dazu drei Entscheidungen (F). Die Selbstheilung (B) gehört
+nicht dazu, sie ist ein eigenes Vorhaben. Alles andere braucht weiter
 eine ausdrückliche Freigabe, bevor Code angefasst wird. Der Betreiber kann derzeit **nicht im Spiel testen**
 („Bau weiter dran ich kan gead keine tests machen").
 
@@ -137,7 +140,7 @@ Bild dieser Art im Code ist ein hängender Update-Quiesce — der stellt aber
 Durchfluss 0, Spule ein, Stäbe 100 und endet nach 60 s im erzwungenen
 Update.
 
-**Behoben in v812** (`wait_cycle`): weiter, wenn der eigene Timer kommt ODER
+**Behoben in v812** (`wait_cycle`, seit v814 `make_timer_guard`): weiter, wenn der eigene Timer kommt ODER
 wenn bei irgendeinem Ereignis Intervall + 1 s verstrichen sind (`os.clock`,
 in CC:Tweaked Servertakte — dieselbe Zeitbasis wie `os.startTimer`,
 monoton). Ein verlorener Timer kostet gut eine Sekunde. Gilt für RT, FUEL,
@@ -173,14 +176,26 @@ neu, und RT lernt nach jedem Neustart neu
 Während des Lernens überstimmt RT MASTERs Vorgabe (Betreiberentscheidung
 2026-09-28). v812 selbst kostet messbar nichts (0,62 µs je Funknachricht).
 
-**Dasselbe Muster, noch nicht behoben:** `nodes/energy/matrix.lua:26`,
-`installer/auto_update.lua:459`, `nodes/log_collector/main.lua:1329` und
-`:1365`; dazu `run_event_loop` in `runtime.lua`, das niemand mehr aufruft.
-Folge beim Auto-Updater: verliert ein Knoten dessen Timer, aktualisiert er
-sich nicht mehr von selbst (ein REMOTE_UPDATE von MASTER wirkt weiter). Die
-Fassung steht beim Start auf dem Terminal (`[BOOT] XReactor <Rolle> |
-beta-v…`); zeigt ein Knoten Minuten nach einem Update noch die alte, hilft
-ein Neustart von Hand.
+**Dasselbe Muster überall sonst: behoben in v814.** Der Kern ist jetzt
+`runtime.make_timer_guard` (ein Timer, dessen Ablauf die Schleife auch ohne
+sein Ereignis erkennt); `make_cycle_waiter` baut darauf auf.
+
+| Stelle | Folge bis v813 | Test |
+|---|---|---|
+| ENERGY Matrix-Thread (`os.sleep`) | Speicherwerte an MASTER eingefroren | `energy_lost_timer_test.lua` |
+| ENERGY Heartbeat-Thread (zwei Timer) | Dienste-Timer weg: Telemetrie/Discovery/Schirm/Quiesce standen; Heartbeat-Timer weg: Heartbeat nur noch aus Funkverkehr | dto. |
+| Auto-Updater (`make_loop`) | keine Update-Prüfung mehr bis zum Neustart | `auto_update_lost_timer_test.lua` |
+| jedes `os.sleep()` (Installer, Quiesce-Warten, Wiederholungen) | Haenger mitten im Update, Knoten mit gestoppter Laufzeit | `sleep_guard_test.lua` |
+| Log-Collector Hauptschleife | Ping/Flush standen, Knoten hielten ihn für offline | `log_collector_lost_timer_test.lua` |
+| Crash-Schirme (`runtime.lua`, MASTER-Rückfall, Log-Collector) | kein automatischer Neustart | — |
+| `run_event_loop` (ungenutzt) | — | bestehende Tests |
+
+`core/sleep_guard.lua` setzt `start.lua` als Allererstes für den ganzen
+Rechner ein: `os.sleep(n)` kehrt zurück, wenn der eigene Timer kommt ODER
+bei irgendeinem Ereignis n + 1 s vergangen sind. Bewusst ohne Filter auf
+„timer": nach einem Quiesce laufen kaum noch Timer, Funkverkehr aber
+schon. Die Heartbeat-**Logik** (wann gesendet wird) ist unverändert, nur
+das Warten auf den Timer.
 
 **Die erste Zuordnung (Fähigkeiten-Cache) hält nicht.** Der Cache in
 `nodes/rt/turbine_control.lua` wird zwar einmal geschrieben und nie erneuert
@@ -193,14 +208,22 @@ und verkürzt zurück; ganze Anlage weg; weg und verkürzt zurück = Bild „nur
 RPM"; jeder Aufruf wirft; Ausfall über die Schonfrist) die Erholung ohne
 Neustart. Was der veraltete Cache bricht, ist der **Update-Quiesce**: für
 die Turbine nie bestätigt, nach 60 s erzwingt `auto_update.lua:217-222` das
-Update. **B1/B2 allein reicht dafür nicht** — auch das wrap-Handle in
-`ctx.peripherals.turbines` (`discovery_runtime.lua:54-55`) ist veraltet;
-besser den Quiesce namensbasiert über `adapters/turbine.lua` führen.
+Update. **Behoben in v814:** der Quiesce läuft namensbasiert über
+`adapters/turbine.lua` (neu: `method_set`) und `adapters/reactor.lua`,
+je Turbine wie vorher drei Stellbefehle und drei Rückmessungen (bei 50
+Turbinen je Knoten zählt jeder Aufruf). Test:
+`tests/rt_update_quiesce_after_chunk_reload_test.lua` (echte RT+MASTER,
+Anlage weg → verkürzt zurück → voll zurück; der alte Stand bestätigt nie).
+Der Harness-Reaktor kennt kein `getControlRodsLevels`; ohne VOLLSTÄNDIGE
+Stabrückmessung bestätigt der Adapter „voll eingefahren" absichtlich nicht
+— der Test ergänzt die Methode wie bei Extreme Reactors. Cache und
+wrap-Handles bleiben für den Lese-Rückfall des lokalen Schirms bestehen.
 
-**B3** (Monitor-Handle, ungeprüft): RT wickelt `devices.monitor` nur einmal
-in `init()` (~`:745`) und nutzt es in jedem UI-Tick (~`:483`); `discover()`
-löst es nie neu auf (`monitor_name = nil`, ~`:305`) — anders als
-FUEL/WATER/REPROCESSOR.
+**B3** (Monitor-Handle): bestätigt und **behoben in v814**. RT löste den
+Monitor nur einmal in `init()` auf; fehlte er beim Start, blieb der Schirm
+bis zum Neustart auf dem Terminal. Jetzt `resolve_monitor()` bei jeder
+Discovery, mit der eingestellten Skala. Test:
+`tests/rt_monitor_late_attach_test.lua`.
 
 ### B) Selbstheilung — Konzept in drei Ebenen (letzte Antwort der Sitzung)
 
@@ -237,7 +260,10 @@ Stolperstelle dabei gefunden: `startup_watchdog_s = 60` steht in
 `nodes/rt/config.lua:52` und wird vom Normalizer validiert
 (`config_normalizer.lua:196-199`), **ausgewertet wird er nirgends** —
 `main.lua:419` setzt `startup_watchdog_tripped = false` fest. Der Platz ist
-belegt, die Wirkung fehlt. Ebenfalls auffällig:
+belegt, die Wirkung fehlt. **Geklärt 2026-10-08:** ein Rest des
+v1-Reglers — die Startsequenz mit Timeout ist mit `6f762364` (2026-06-22,
+SCADA-Umbau) entfallen. Bewusst nicht nachgebaut: das wäre neues
+Verhalten (Ebene 2), keine Reparatur. Ebenfalls auffällig:
 `service_manager.lua:65` `schedule_retry` wiederholt mit Backoff, verwirft
 dabei aber **nie** das Handle oder den abgeleiteten Zustand, an dem es
 scheitert.
@@ -280,8 +306,53 @@ Manifest** — Commits, die nur daran rühren, heben die Fassung nicht.
 `installer/auto_update.lua:374` aktualisiert bei
 `remote_version > local_version`. `commit_sha = "beta"` ist ein gewollter
 Platzhalter, `scripts/package_release.py:48` setzt für feste Releases eine
-echte SHA. Offenes Konzept: **Payload-Digest statt reinem Zähler**,
-Entscheidung steht aus.
+echte SHA.
+
+**Prüfsummen, entschieden 2026-10-08, umgesetzt in v814** (Betreiber: „für
+Dateien Prüfsumme, um festzustellen, wie alt die sind und ob die überhaupt
+noch relevant sind bzw. noch genommen werden dürfen"):
+
+- `payload_digest` in `manifest.lua` und `release.lua`: CRC32 über Pfad,
+  Größe und Hash aller Einträge außer `release.lua` (die trägt ihn).
+  `manifest_sync.py --write` pflegt ihn, `--check` prüft ihn. Er steht in
+  der Startzeile: `[BOOT] XReactor RT | beta-v814 (Pruefsumme …)`.
+- Der Installer schreibt `/xreactor/install_hashes.lua` (Größe und CRC32
+  je installierter Datei, ~5 kB) — das Manifest selbst bleibt aus
+  Platzgründen nicht auf dem Knoten.
+- `core/install_integrity.lua` prüft die installierten Dateien dagegen
+  (gleiche Lesart und CRC32 wie die Installationsprüfung, sonst gäbe es
+  Endlos-Reparaturen). Der Auto-Updater prüft beim ersten Check nach dem
+  Start und dann alle 6 h; weicht etwas ab (verändert, abgeschnitten,
+  fehlt), installiert er neu — **höchstens einmal je Fassung in 6 h**,
+  gemerkt in `/xreactor_config/install_repair.lua`.
+- **Der Zähler entscheidet weiter über Updates.** Absicht: kurz nach einem
+  Push liefert GitHubs CDN manchen Knoten noch die alte `release.lua`; mit
+  „Prüfsumme ungleich → aktualisieren" würde ein Knoten zurückfallen und
+  wieder vor. Der monotone Zähler verhindert das. Die Prüfsumme sagt, ob
+  die Dateien auf dem Knoten genau die der Fassung sind.
+- Tests: `install_integrity_test.lua` (u. a. CRC32 jeder Repo-Datei gleich
+  der des Manifests), `auto_update_integrity_repair_test.lua`,
+  `manifest_payload_digest_test.py`.
+
+### F) Entscheidungen des Betreibers am 2026-10-08
+
+1. **„RT immer neu einlernen nach Neustart."** Nichts persistieren; das
+   träge Gefühl nach Updates (RT überstimmt MASTER, solange sie lernt)
+   bleibt bewusst.
+2. **„Wie viele Turbinen da sind, muss immer durch einen Scan ermittelt
+   werden, es gibt keine feste Zahl. Aktuell sind es pro RT-Node 50, das
+   kann aber auch unterschiedlich sein."** Im Code gibt es keine
+   Obergrenze (`nodes/rt/config.lua`: nachgemessen bis 100). **Gefundener
+   Fehler, behoben in v814:** die Touch-Skalierung (`on_scale_change`)
+   schrieb die ganze Config samt dem von der Discovery eingetragenen
+   Gerätestand nach `rt.lua` — beim nächsten Start galt er als feste Liste
+   (`binding.lua`: „explicit"), neue oder nach einem Modem-Reconnect
+   umbenannte Turbinen wurden still nicht gebunden. Jetzt wird nur
+   geschrieben, was beim Start dort stand; **Config-Schema v9 leert solche
+   Listen einmal** und meldet das auf dem RT-Schirm (eine nach v9 von Hand
+   gesetzte Liste bleibt). Test: `tests/rt_turbine_count_from_scan_test.lua`
+   (50 Turbinen, Skala ändern, Neustart mit 52 → alle 52 gebunden).
+3. **Prüfsummen für Dateien** — siehe E.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
@@ -329,6 +400,11 @@ Entscheidung steht aus.
 - Ablauf: beide Suiten → `python3 scripts/manifest_sync.py --write` → beide
   Suiten erneut → direkt auf `beta` committen und pushen (kein PR, keine
   weiteren Branches).
+- `manifest_sync.py --write` hebt die Fassung **bei jedem Lauf** mit
+  geänderten Dateien. Ändert man danach noch etwas, vor dem zweiten Lauf
+  `manifest_version`/`manifest_id` (und `release_id`) in `manifest.lua`
+  und `release.lua` auf den alten Stand zurücksetzen — sonst springt die
+  Fassung um zwei.
 - **Konfig-Falle:** `core/utils.migrate_config()` ergänzt Vorgaben **und
   schreibt sie fest**. Jede Änderung einer Vorgabe braucht eine
   Schema-Migration (RT steht auf v8).
@@ -344,21 +420,25 @@ Entscheidung steht aus.
 
 ## Nächste Schritte
 
-1. **Im Betrieb beobachten:** nach dem nächsten Chunk-Laden die
-   RT-Diagnoseseite, Zeile „TIMER LOST / LATE" (siehe A). LOST über 0
-   belegt die Ursache. Hängt die Node trotzdem bei LOST 0: Fehlerbild
-   sammeln (Schirm, Modus, welcher Chunk).
-2. **Derselbe Fix für die übrigen Schleifen** (ENERGY-Matrix,
-   Auto-Updater, Log-Collector; MASTER ist seit v813 behoben) und der
-   Update-Quiesce (B1/B2 plus wrap-Handle) — jeweils Freigabe nötig.
-3. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
-4. Versionierung: Entscheidung zum Payload-Digest.
-5. Älter und noch offen: MASTER-Ausfall-Befunde A und B;
-   `matrix_snapshot_runtime.lua` Kapazitäts-Rückfall; die P2-Liste des
-   Audits.
-6. **Turbinenzahl je RT-Knoten ist unbekannt** — der Anlagentest nimmt 3 an
-   (Flotte 547 200 RF/t). Nachfragen und anpassen.
-7. **Der Betreiber hatte „noch ein weiteres Thema, aber indirekt damit
+1. **Im Betrieb beobachten:**
+   - MASTER, Seite **Updates**: alle Knoten auf v814?
+   - Startzeile jedes Knotens: `beta-v814 (Pruefsumme 48d03939)`.
+   - RT-Diagnoseseite nach dem nächsten Chunk-Laden: „TIMER LOST / LATE".
+   - MASTERs Terminal: „[MASTER] Takt-Timer ausgeblieben …" belegt den
+     Ausgleich.
+   - RT-Schirm einmalig nach v814: „feste Geraeteliste entfernt" zeigt einen
+     Knoten, der von der Touch-Skalierung betroffen war.
+   - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
+     „Dateipruefung ok: N Dateien passen zu manifest-v814 / Pruefsumme …".
+2. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
+3. Optional: das Ergebnis der Dateiprüfung auf MASTERs Updates-Seite zeigen
+   (bräuchte ein Feld im Heartbeat — Heartbeat-Inhalt, daher nur mit
+   Freigabe).
+4. Älter und noch offen: MASTER-Ausfall-Befunde A und B (Inhalt nicht mehr
+   dokumentiert — erst nachlesen); `matrix_snapshot_runtime.lua`
+   Kapazitäts-Rückfall; die P2-Liste des Audits.
+5. `beta` → `main`, sobald alles läuft (Betreiber).
+6. **Der Betreiber hatte „noch ein weiteres Thema, aber indirekt damit
    zusammenhängend" angekündigt und nie genannt. Danach fragen.**
 
 ---
