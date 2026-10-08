@@ -19,6 +19,17 @@ local ROLE_ENTRY = {
   LOG_COLLECTOR = INSTALL_ROOT .. "/nodes/log_collector/mockup_main.lua",
 }
 
+-- os.sleep() fuer den ganzen Rechner gegen verlorene Timer haerten, bevor
+-- irgendetwas anderes laeuft (siehe core/sleep_guard.lua) -- auch fuer
+-- Installer und Auto-Update. Fehlt die Datei oder scheitert sie, bleibt
+-- das normale os.sleep(); der Start darf daran nie haengen.
+do
+  local ok_guard, sleep_guard = pcall(dofile, INSTALL_ROOT .. "/core/sleep_guard.lua")
+  if ok_guard and type(sleep_guard) == "table" and type(sleep_guard.install) == "function" then
+    pcall(sleep_guard.install)
+  end
+end
+
 local function p(msg) pcall(print, tostring(msg)) end
 
 -- installer/journal.lua schreibt bei jedem Installationslauf ein Journal
@@ -211,6 +222,10 @@ if fs.exists(RELEASE_PATH) then
     local src = f.readAll(); f.close()
     local v = src:match('release_id%s*=%s*"([^"]+)"')
     if v then rel_v = v end
+    -- Inhalts-Pruefsumme der Fassung: zwei Knoten mit derselben Zeile
+    -- laufen mit genau denselben Dateien (siehe core/install_integrity.lua).
+    local digest = src:match('payload_digest%s*=%s*"([0-9a-f]+)"')
+    if digest then rel_v = rel_v .. " (Pruefsumme " .. digest .. ")" end
   end
 end
 p("[BOOT] XReactor " .. role .. " | " .. rel_v)

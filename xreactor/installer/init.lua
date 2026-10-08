@@ -277,6 +277,14 @@ for _, entry in pairs(expected) do
 end
 -- manifest.lua steht in keiner Dateiliste, wird aber installiert.
 planned_bytes = planned_bytes + (tonumber(manifest_bytes) or 0)
+-- Ebenso die Pruefsummenliste (install_hashes.lua, siehe unten). Kommt
+-- installer/manifest.lua kurz nach einem Push noch in der alten Fassung vom
+-- CDN (ohne render_install_hashes), entfaellt die Liste -- der Knoten meldet
+-- dann "keine Pruefsummenliste" und repariert nichts, statt dass die ganze
+-- Installation an dieser Stelle scheitert.
+local install_hashes = type(manifest_mod.render_install_hashes) == "function"
+  and manifest_mod.render_install_hashes(manifest, expected, role.label) or nil
+planned_bytes = planned_bytes + (install_hashes and #install_hashes or 0)
 local ok_space, space_err = stage_mod.check_capacity(planned_bytes, INSTALL_ROOT)
 if not ok_space then error(space_err, 0) end
 
@@ -359,6 +367,18 @@ end
 for _, item in ipairs(file_list) do
   if not fs.exists(INSTALL_ROOT .. "/" .. item.path) then
     error("Verifikation fehlgeschlagen, Datei fehlt nach Installation: " .. item.path, 0)
+  end
+end
+
+-- Pruefsummenliste fuer den Knoten (core/install_integrity.lua prueft die
+-- installierten Dateien spaeter dagegen: veraendert, abgeschnitten oder
+-- fehlend heisst "darf nicht mehr genommen werden" -- der Auto-Updater
+-- installiert dann neu). Vor release.lua: eine abgeschlossene Installation
+-- hat sie immer.
+if install_hashes then
+  local ok_hashes, err_hashes = stage_mod.write(INSTALL_ROOT .. "/install_hashes.lua", install_hashes)
+  if not ok_hashes then
+    error("install_hashes.lua konnte nicht geschrieben werden: " .. tostring(err_hashes), 0)
   end
 end
 

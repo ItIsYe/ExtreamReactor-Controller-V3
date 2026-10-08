@@ -74,6 +74,15 @@ local function log(message)
   write_status(message)
 end
 
+-- Server ticks in seconds (CC:Tweaked's os.clock(), same time base as
+-- os.startTimer(), monotonic); nil when unavailable. Used for the
+-- lost-timer guard in make_loop() and the integrity-check cadence.
+local function clock_s()
+  local ok, value = pcall(os.clock)
+  if ok and type(value) == "number" then return value end
+  return nil
+end
+
 local function load_handshake_lib()
   local ok, lib = pcall(dofile, "/xreactor/core/update_handshake.lua")
   if not ok or type(lib) ~= "table" then return nil, tostring(lib) end
@@ -351,6 +360,73 @@ local function perform_update(handshake, consume_remote)
   return false, last_error
 end
 
+-- Integrity check of the installed files (operator decision 2026-10-08:
+-- checksums decide whether files may still be used). core/install_integrity
+-- .lua compares every installed file against /xreactor/install_hashes.lua,
+-- which the installer writes on every install. Runs on the first periodic
+-- check after boot and then every INTEGRITY_INTERVAL_S -- it reads every
+-- file and computes its CRC32, too expensive for every 120 s cycle. A
+-- mismatch (file changed, truncated or missing) means the node is not
+-- running the release it believes it runs: reinstall, at most once per
+-- installed release within REPAIR_COOLDOWN_S (see decide_repair()), so a
+-- deviation a reinstall does not fix cannot loop quiesce/install/reboot.
+local INTEGRITY_PATH = "/xreactor/core/install_integrity.lua"
+local INTEGRITY_INTERVAL_S = 6 * 3600
+local REPAIR_STATE_PATH = "/xreactor_config/install_repair.lua"
+local REPAIR_COOLDOWN_S = 6 * 3600
+local last_integrity_clock = nil
+
+local function read_repair_state()
+  if not fs.exists(REPAIR_STATE_PATH) then return nil end
+  local handle = fs.open(REPAIR_STATE_PATH, "r")
+  if not handle then return nil end
+  local source = handle.readAll()
+  handle.close()
+  local loader = load(source, "=install_repair", "t", {})
+  if not loader then return nil end
+  local ok, state = pcall(loader)
+  return ok and type(state) == "table" and state or nil
+end
+
+local function write_repair_state(state)
+  pcall(function()
+    local handle = fs.open(REPAIR_STATE_PATH, "w")
+    if not handle then return end
+    handle.write(string.format("return { key = %q, at_ms = %d }\n",
+      tostring(state.key), math.floor(tonumber(state.at_ms) or 0)))
+    handle.close()
+  end)
+end
+
+local function check_installed_files(handshake)
+  local now = clock_s()
+  if last_integrity_clock and now and now - last_integrity_clock < INTEGRITY_INTERVAL_S then return end
+  last_integrity_clock = now
+  local ok_mod, integrity = pcall(dofile, INTEGRITY_PATH)
+  if not ok_mod or type(integrity) ~= "table" or type(integrity.check) ~= "function" then
+    log("Dateipruefung nicht verfuegbar: " .. tostring(integrity))
+    return
+  end
+  local ok_check, result = pcall(integrity.check)
+  if not ok_check or type(result) ~= "table" then
+    log("Dateipruefung fehlgeschlagen: " .. tostring(result))
+    return
+  end
+  rawset(_G, "__xreactor_install_integrity", result)
+  log(integrity.describe(result))
+  if result.ok ~= false then return end
+  local now_ms = os.epoch and os.epoch("utc") or 0
+  local allowed, new_state = integrity.decide_repair(result, read_repair_state(), now_ms, REPAIR_COOLDOWN_S)
+  if not allowed then
+    log("Reparatur fuer diese Fassung schon versucht -- naechster Versuch fruehestens nach "
+      .. math.floor(REPAIR_COOLDOWN_S / 3600) .. " h")
+    return
+  end
+  write_repair_state(new_state)
+  log("Reparatur-Installation startet @ " .. SOURCE_REF)
+  perform_update(handshake, false)
+end
+
 -- Jeder Zweig loggt sichtbar, auch der Normalfall "nichts zu tun" -- ohne
 -- das war von aussen (Terminal/Log-Export) nicht unterscheidbar, ob der
 -- periodische Check ueberhaupt laeuft/durchkommt, oder ob der Loop
@@ -376,6 +452,7 @@ local function do_periodic_check(handshake)
     perform_update(handshake, false)
   else
     log("Update-Check ok: lokal v" .. local_version .. " aktuell (remote v" .. remote_version .. ")")
+    check_installed_files(handshake)
   end
   return true
 end
@@ -440,6 +517,17 @@ end
 local BACKOFF_MULTIPLIER = 2
 local BACKOFF_MAX_S = 1800
 
+-- CC:Tweaked drops events once 256 are queued (ComputerExecutor.QUEUE_LIMIT),
+-- timers included. Until v813 this loop waited for exactly ONE timer: once
+-- it was dropped, the node never checked for updates again until a reboot
+-- (a REMOTE_UPDATE from MASTER still worked). Now any event arriving
+-- LOST_TIMER_GRACE_S after the planned delay runs the check anyway --
+-- measured with os.clock(), server ticks in CC:Tweaked (same time base as
+-- os.startTimer()), monotonic. Same mechanism as
+-- nodes/support/runtime.lua's make_timer_guard, mirrored rather than
+-- required (this file is deliberately self-contained).
+local LOST_TIMER_GRACE_S = 1.0
+
 function M.make_loop(interval_s, handshake)
   interval_s = tonumber(interval_s) or 120
   local jitter = node_jitter_s()
@@ -451,12 +539,20 @@ function M.make_loop(interval_s, handshake)
       -- Handles requests queued before this coroutine began waiting.
       safe_call(handshake, "remote_update", do_remote_request)
 
+      local started = clock_s()
       local timer = os.startTimer(next_delay)
       while true do
         local event, id = os.pullEvent()
+        local own_timer = event == "timer" and id == timer
         if event == UPDATE_EVENT then
           safe_call(handshake, "remote_update", do_remote_request)
-        elseif event == "timer" and id == timer then
+        end
+        local now = not own_timer and clock_s() or nil
+        local overdue = started ~= nil and now ~= nil and now - started >= next_delay + LOST_TIMER_GRACE_S
+        if overdue then
+          log("Timer ausgeblieben -- Update-Pruefung laeuft trotzdem")
+        end
+        if own_timer or overdue then
           local check_ok = true
           safe_call(handshake, "periodic_update", function(hs)
             check_ok = do_periodic_check(hs) ~= false

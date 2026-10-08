@@ -158,6 +158,54 @@ def all_entries(base_files, dev_files, roles):
     return entries
 
 
+# Pruefsumme ueber den INHALT einer Fassung (Betreiberentscheidung
+# 2026-10-08: "fuer Dateien Pruefsumme, um festzustellen, wie alt sie sind
+# und ob sie noch genommen werden duerfen"). CRC32 ueber Pfad, Groesse und
+# Hash jedes Manifest-Eintrags, sortiert nach Pfad. release.lua bleibt
+# draussen: sie TRAEGT die Pruefsumme, ihr eigener Hash haengt also davon ab
+# (dieselbe Selbstbezueglichkeit wie beim Versionszaehler unten).
+# Steht in manifest.lua UND release.lua; der Installer schreibt sie mit den
+# Einzel-Pruefsummen auf jeden Knoten (install_hashes.lua), und
+# core/install_integrity.lua prueft die installierten Dateien dagegen.
+PAYLOAD_DIGEST_EXCLUDED = {"release.lua"}
+PAYLOAD_DIGEST_RE = re.compile(r'(payload_digest\s*=\s*")([0-9a-f]*)(",)')
+MANIFEST_ID_LINE_RE = re.compile(r'^(\s*)manifest_id\s*=\s*"[^"]*",[ \t]*$', re.M)
+
+
+def compute_payload_digest(entries) -> str:
+    lines = sorted(
+        f'{e["path"]}\t{e["size_bytes"]}\t{e["hash"]}'
+        for e in entries
+        if e["path"] not in PAYLOAD_DIGEST_EXCLUDED
+    )
+    return crc32_hex(("\n".join(lines) + "\n").encode("utf-8"))
+
+
+def read_payload_digest(path: pathlib.Path):
+    if not path.exists():
+        return None
+    match = PAYLOAD_DIGEST_RE.search(path.read_text(encoding="utf-8"))
+    return match.group(2) if match else None
+
+
+def write_payload_digest(path: pathlib.Path, digest: str) -> bool:
+    """Setzt payload_digest; fehlt das Feld, kommt es direkt unter manifest_id.
+    True, wenn sich die Datei geaendert hat."""
+    text = path.read_text(encoding="utf-8")
+    if PAYLOAD_DIGEST_RE.search(text):
+        new_text = PAYLOAD_DIGEST_RE.sub(rf'\g<1>{digest}\3', text, count=1)
+    else:
+        match = MANIFEST_ID_LINE_RE.search(text)
+        if not match:
+            raise RuntimeError(f"no manifest_id line in {path.name} to anchor payload_digest")
+        insert = f'\n{match.group(1)}payload_digest = "{digest}",'
+        new_text = text[:match.end()] + insert + text[match.end():]
+    if new_text == text:
+        return False
+    path.write_text(new_text, encoding="utf-8")
+    return True
+
+
 MANIFEST_VERSION_RE = re.compile(r'(manifest_version\s*=\s*)(\d+)(,)')
 MANIFEST_ID_RE = re.compile(r'(manifest_id\s*=\s*")manifest-v(\d+)(",)')
 RELEASE_PATH = REPO_ROOT / "xreactor" / "release.lua"
@@ -226,10 +274,19 @@ def main():
 
         if changed_paths:
             bump_version(len(entries))
-            release_entry = next((e for e in entries if e["path"] == "release.lua"), None)
-            if release_entry:
-                update_entry(release_entry)
-                write_manifest_inplace(MANIFEST_PATH, [release_entry])
+
+        # Inhalts-Pruefsumme in manifest.lua und release.lua nachziehen. Sie
+        # aendert sich nur, wenn sich ein Eintrag (ausser release.lua)
+        # aendert -- also genau dann, wenn auch die Fassung gehoben wurde.
+        digest = compute_payload_digest(entries)
+        write_payload_digest(MANIFEST_PATH, digest)
+        if RELEASE_PATH.exists():
+            write_payload_digest(RELEASE_PATH, digest)
+
+        release_entry = next((e for e in entries if e["path"] == "release.lua"), None)
+        if release_entry:
+            update_entry(release_entry)
+            write_manifest_inplace(MANIFEST_PATH, [release_entry])
 
     errors = []
     checked = 0
@@ -238,6 +295,16 @@ def main():
     checked += validate_entries(dev_files, errors, seen)
     for role_entries in roles.values():
         checked += validate_entries(role_entries, errors, seen)
+
+    # Die Inhalts-Pruefsumme muss zu den Eintraegen passen -- in manifest.lua
+    # und in release.lua (die Knoten lesen sie aus release.lua).
+    digest = compute_payload_digest(all_entries(base_files, dev_files, roles))
+    for label, path in (("manifest.lua", MANIFEST_PATH), ("release.lua", RELEASE_PATH)):
+        stored = read_payload_digest(path)
+        if stored is None:
+            errors.append(f"payload_digest missing in {label} (expected {digest})")
+        elif stored != digest:
+            errors.append(f"payload_digest mismatch in {label}: stored={stored} actual={digest}")
 
     manifest_id = str(top.get("manifest_id", '"unknown"')).strip('"')
     if errors:

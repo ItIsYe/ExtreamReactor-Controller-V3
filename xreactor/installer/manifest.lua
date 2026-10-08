@@ -112,6 +112,40 @@ local function crc32(content)
 end
 M.crc32 = crc32
 
+-- Die Pruefsummenliste fuer den Knoten: je installierter Datei Groesse und
+-- CRC32 aus dem Manifest, dazu Fassung und Inhalts-Pruefsumme
+-- (payload_digest). installer/init.lua schreibt sie nach
+-- /xreactor/install_hashes.lua; core/install_integrity.lua prueft die
+-- installierten Dateien spaeter dagegen. Das Manifest selbst bleibt aus
+-- Platzgruenden nicht auf dem Knoten (siehe SKIP oben) -- diese Liste ist
+-- der kleine Teil davon, den der Knoten fuer die Pruefung braucht.
+-- Ein Eintrag ohne Groesse/Hash (siehe MANIFEST_METADATA_OPTIONAL_PATHS in
+-- den Tests) bekommt dort nur das, was das Manifest hergibt.
+function M.render_install_hashes(manifest, expected, role_label)
+  local paths = {}
+  for rel in pairs(expected or {}) do paths[#paths + 1] = rel end
+  table.sort(paths)
+  local out = {
+    "return {\n",
+    string.format("  manifest_id = %q,\n", tostring(manifest.manifest_id or "")),
+    string.format("  manifest_version = %d,\n", tonumber(manifest.manifest_version) or 0),
+    string.format("  payload_digest = %q,\n", tostring(manifest.payload_digest or "")),
+    string.format("  role = %q,\n", tostring(role_label or "")),
+    "  files = {\n",
+  }
+  for _, rel in ipairs(paths) do
+    local entry = expected[rel] or {}
+    local fields = {}
+    if tonumber(entry.size_bytes) then fields[#fields + 1] = "size = " .. tostring(math.floor(tonumber(entry.size_bytes))) end
+    if type(entry.hash) == "string" and entry.hash ~= "" then
+      fields[#fields + 1] = string.format("hash = %q", entry.hash:lower())
+    end
+    out[#out + 1] = string.format("    [%q] = { %s },\n", rel, table.concat(fields, ", "))
+  end
+  out[#out + 1] = "  },\n}\n"
+  return table.concat(out)
+end
+
 -- Dritter Rueckgabewert: die Groesse des Manifests in Bytes. Es traegt
 -- sich selbst nicht in seiner Dateiliste ein (sein eigener Hash waere
 -- selbstbezueglich), wird aber mitinstalliert -- ohne diese Zahl fehlten

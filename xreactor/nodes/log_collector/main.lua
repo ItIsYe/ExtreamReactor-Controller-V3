@@ -40,6 +40,16 @@ local DISK_REFRESH_S   = 30
 local LOG_PING_INTERVAL_S = 20
 local DRAW_INTERVAL_S  = 5
 local ACTIVE_DRAW_MIN_INTERVAL_S = 1
+-- Takt der Hauptschleife (Ping, Flush, Schirm, Quiesce-Pruefung) und wie
+-- lange darueber hinaus auf seinen Timer gewartet wird. CC:Tweaked verwirft
+-- Ereignisse, sobald 256 in der Warteschlange stehen -- Timer
+-- eingeschlossen. Bis v813 wartete die Schleife auf genau diesen einen
+-- Timer: ging er verloren, standen Ping und Flush bis zum Neustart (die
+-- Knoten hielten den Collector dann fuer offline). Dieselbe Mechanik wie
+-- nodes/support/runtime.lua's make_timer_guard, hier nachgebaut, weil
+-- dieses Modul eigenstaendig bleibt.
+local LOOP_TICK_S = 1
+local LOST_TIMER_GRACE_S = 1.0
 local SELF_ROLE        = "LOG_COLLECTOR"
 local MONITOR_CFG_FILE = "/xreactor_config/log_monitor.txt"
 -- DISKS_PER_ROLE gruppiert die sortierten Mounts in Bloecken zu je 4 (statt
@@ -151,6 +161,16 @@ local function now_s()
     if ok and type(value) == "number" then return math.floor(value) end
   end
   return 0
+end
+
+-- Servertakte in Sekunden (os.clock): dieselbe Zeitbasis wie
+-- os.startTimer(), monoton -- fuer das Erkennen eines ausgebliebenen Timers.
+local function clock_s()
+  if os and type(os.clock) == "function" then
+    local ok, value = pcall(os.clock)
+    if ok and type(value) == "number" then return value end
+  end
+  return nil
 end
 
 local function now_ms()
@@ -1281,16 +1301,59 @@ local function run()
 
   draw()
 
-  local timer = os.startTimer and os.startTimer(1)
+  local timer = os.startTimer and os.startTimer(LOOP_TICK_S)
+  local timer_started = clock_s()
   local quiesced = false
+  local tick_ran = false
+  local function rearm()
+    timer = os.startTimer and os.startTimer(LOOP_TICK_S)
+    timer_started = clock_s()
+  end
   while true do
     local event = { os.pullEvent() }
     local name = event[1]
+    tick_ran = false
 
     -- Jeder Event-Zweig einzeln pcall-isoliert: ein Fehler wird geloggt, der
     -- Loop laeuft beim naechsten Event weiter statt den ganzen Node zum
     -- Crash-Screen zu fuehren.
     local branch_ok, branch_err = pcall(function()
+      local own_timer = name == "timer" and event[2] == timer
+      local now_clock = (timer ~= nil and not own_timer) and clock_s() or nil
+      local overdue = timer_started ~= nil and now_clock ~= nil
+        and now_clock - timer_started >= LOOP_TICK_S + LOST_TIMER_GRACE_S
+      if overdue then
+        stats.timer_compensated = (stats.timer_compensated or 0) + 1
+        diag(string.format("Takt-Timer ausgeblieben -- weitergemacht (%d)", stats.timer_compensated))
+      end
+      if own_timer or overdue then
+        tick_ran = true
+        refresh_disks(false)
+        refresh_modems(false)
+        if now_s() >= stats.next_ping then
+          stats.next_ping = now_s() + LOG_PING_INTERVAL_S
+          broadcast_ping()
+        end
+        check_log_freshness()
+        flush_due()
+        if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
+        -- LOG_COLLECTOR hat keine physischen Aktoren zu quiescen -- der
+        -- Handler bestaetigt sofort einen sicheren Zustand und verlaesst
+        -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
+        -- unbegrenzt weiterzulaufen.
+        local quiesce_handshake = _G.__xreactor_update_handshake
+        if quiesce_handshake then
+          local ok_uh, update_handshake = pcall(dofile, "/xreactor/core/update_handshake.lua")
+          if ok_uh and update_handshake.is_quiesce_requested(quiesce_handshake) then
+            update_handshake.mark_safe_outputs_applied(quiesce_handshake)
+            update_handshake.mark_runtime_stopped(quiesce_handshake)
+            self_log("Quiesce angefordert -- Event-Loop wird kontrolliert beendet", "WARN")
+            quiesced = true
+          end
+        end
+        if not quiesced then rearm() end
+        if own_timer then return end
+      end
       if name == "modem_message" then
         local channel = event[3]
         local message = event[5]
@@ -1326,33 +1389,6 @@ local function run()
         refresh_disks(true)
         refresh_modems(true)
         draw()
-      elseif name == "timer" and event[2] == timer then
-        refresh_disks(false)
-        refresh_modems(false)
-        if now_s() >= stats.next_ping then
-          stats.next_ping = now_s() + LOG_PING_INTERVAL_S
-          broadcast_ping()
-        end
-        check_log_freshness()
-        flush_due()
-        if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
-        -- LOG_COLLECTOR hat keine physischen Aktoren zu quiescen -- der
-        -- Handler bestaetigt sofort einen sicheren Zustand und verlaesst
-        -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
-        -- unbegrenzt weiterzulaufen.
-        local quiesce_handshake = _G.__xreactor_update_handshake
-        if quiesce_handshake then
-          local ok_uh, update_handshake = pcall(dofile, "/xreactor/core/update_handshake.lua")
-          if ok_uh and update_handshake.is_quiesce_requested(quiesce_handshake) then
-            update_handshake.mark_safe_outputs_applied(quiesce_handshake)
-            update_handshake.mark_runtime_stopped(quiesce_handshake)
-            self_log("Quiesce angefordert -- Event-Loop wird kontrolliert beendet", "WARN")
-            quiesced = true
-          end
-        end
-        if not quiesced then
-          timer = os.startTimer and os.startTimer(1)
-        end
       end
     end)
     if quiesced then return end
@@ -1361,10 +1397,8 @@ local function run()
       diag(stats.last_error)
       pcall(self_log, stats.last_error, "ERROR")
       -- Timer evtl. durch den Fehler nicht neu gestartet — sicherstellen,
-      -- dass der naechste "timer"-Zweig weiterhin ausgeloest wird.
-      if name == "timer" and event[2] == timer and os.startTimer then
-        timer = os.startTimer(1)
-      end
+      -- dass der naechste Takt weiterhin ausgeloest wird.
+      if tick_ran and os.startTimer then rearm() end
     end
   end
 end
@@ -1404,11 +1438,16 @@ end
 -- (5 Minuten) verlaengert.
 local wait_s = is_loop and CRASH_LOOP_WAIT_S or 30
 local ok_wait = pcall(function()
+  local started = clock_s()
   local timer_id = os.startTimer(wait_s)
   while true do
     local ev = { os.pullEvent() }
     if ev[1] == "key" then return end
     if ev[1] == "timer" and ev[2] == timer_id then return end
+    -- Kam der Timer nicht (verworfenes Ereignis, siehe LOST_TIMER_GRACE_S),
+    -- beendet die Uhr das Warten -- sonst stuende der Crash-Schirm ewig.
+    local now = clock_s()
+    if started and now and now - started >= wait_s + LOST_TIMER_GRACE_S then return end
   end
 end)
 if os and os.reboot then os.reboot() end

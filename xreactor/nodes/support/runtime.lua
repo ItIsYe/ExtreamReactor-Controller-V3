@@ -145,11 +145,16 @@ local function crash_screen(err)
   end)
   local wait_s = is_loop and CRASH_LOOP_WAIT_S or CRASH_NORMAL_WAIT_S
   pcall(function()
+    local started = os.clock()
     local timer_id = os.startTimer(wait_s)
     while true do
       local ev = { os.pullEvent() }
       if ev[1] == "key" then return end
       if ev[1] == "timer" and ev[2] == timer_id then return end
+      -- Kam der Timer nicht (verworfenes Ereignis, siehe make_timer_guard
+      -- unten), beendet die Uhr das Warten -- sonst stuende der
+      -- Crash-Schirm ewig statt neu zu starten.
+      if os.clock() - started >= wait_s + 1 then return end
     end
   end)
   if os.reboot then os.reboot() end
@@ -245,24 +250,26 @@ local function run_quiesce_check(handshake_lib, quiesce_opts, quiesce_seen)
   return false
 end
 
+-- Wird von keiner Rolle mehr aufgerufen (alle nutzen run_fast_loop/
+-- run_slow_loop unten); bleibt als rueckwaertskompatible Einstiegsstelle und
+-- wartet deshalb ebenfalls ueber make_cycle_waiter -- ein verlorener Timer
+-- legte auch sie fuer immer still.
 function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce_opts)
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
   local quiesce_seen = { seen = false } -- TEMP DIAGNOSTIC, see log_quiesce_seen_once() above
+  local wait_for_cycle = M.make_cycle_waiter("event", "Ereignis")
+  local function dispatch(event)
+    if event[1] == "modem_message" then
+      comms:handle_event(event)
+      services:tick(nil, event)
+    elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key"
+        or event[1] == "monitor_resize" or event[1] == "term_resize" then
+      services:tick(nil, event)
+    end
+  end
   local ok, err = xpcall(function()
     while true do
-      local timer = os.startTimer(receive_timeout)
-      while true do
-        local event = { os.pullEvent() }
-        if event[1] == "modem_message" then
-          comms:handle_event(event)
-          services:tick(nil, event)
-        elseif event[1] == "timer" and event[2] == timer then
-          break
-        elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key"
-            or event[1] == "monitor_resize" or event[1] == "term_resize" then
-          services:tick(nil, event)
-        end
-      end
+      wait_for_cycle(receive_timeout, dispatch)
       if type(after_cycle) == "function" then
         local ok2, err2 = pcall(after_cycle)
         if not ok2 then
@@ -390,33 +397,6 @@ function M.loop_stats()
   return out
 end
 
--- Wartet einen Takt (siehe oben). on_event bekommt jedes Ereignis ausser dem
--- eigenen Timer; abandoned merkt sich aufgegebene eigene Timer. true, wenn
--- ohne den eigenen Timer weitergemacht wurde.
-local function wait_cycle(stats, abandoned, interval_s, on_event)
-  local started = clock_s()
-  local deadline_s = (tonumber(interval_s) or 0) + LOST_TIMER_GRACE_S
-  local timer = os.startTimer(interval_s)
-  while true do
-    local event = { os.pullEvent() }
-    if event[1] == "timer" then
-      if event[2] == timer then return false end
-      if abandoned[event[2]] then
-        -- Ein frueher aufgegebener eigener Timer: kam doch noch, nur spaet.
-        abandoned[event[2]] = nil
-        stats.late = stats.late + 1
-      end
-    end
-    if on_event then on_event(event) end
-    local now = clock_s()
-    if started and now and now - started >= deadline_s then
-      abandoned[timer] = now
-      stats.compensated = stats.compensated + 1
-      return true
-    end
-  end
-end
-
 -- Aufgegebene Timer, die nach LOST_TIMER_AFTER_S noch fehlen, sind verloren.
 local function settle_abandoned(stats, abandoned, label)
   local now = clock_s()
@@ -443,18 +423,69 @@ local function begin_cycle(stats, abandoned, label)
   stats.last_tick_clock = clock_s()
 end
 
--- Taktgeber fuer eine Schleife, die ihren Takt selbst wartet -- dieselbe
--- Mechanik wie die beiden Schleifen unten. MASTERs eigene Schleife
--- (master/loop.lua) nutzt ihn: sie hatte denselben Fehler. Liefert
--- wait(interval_s, on_event); die Zaehler stehen in M.loop_stats()[name],
--- und wait() gibt true zurueck, wenn ohne eigenen Timer weitergemacht wurde.
-function M.make_cycle_waiter(name, label)
+-- Ein Timer, dessen Ablauf die Schleife selbst erkennt -- auch wenn sein
+-- Ereignis verloren geht (siehe oben). Fuer Schleifen mit mehreren Timern
+-- (nodes/energy/heartbeat.lua) direkt, sonst ueber make_cycle_waiter unten.
+--   start(interval_s)  stellt den Timer.
+--   due(event)         fuer JEDES Ereignis aufrufen: true, wenn der Timer
+--                      abgelaufen ist -- sein Ereignis kam, oder Intervall +
+--                      LOST_TIMER_GRACE_S sind verstrichen (zweiter
+--                      Rueckgabewert dann true: ausgeglichen). Danach ist er
+--                      verbraucht, bis start() ihn neu stellt.
+--   is_own(event)      ist das sein Timer-Ereignis?
+-- Die Zaehler stehen in M.loop_stats()[name].
+function M.make_timer_guard(name, label)
   local stats, abandoned = new_loop_stats(), {}
   loop_stats[name] = stats
+  label = label or name
+  local timer, started, deadline_s
+  local guard = {}
+  function guard.start(interval_s)
+    started = clock_s()
+    deadline_s = (tonumber(interval_s) or 0) + LOST_TIMER_GRACE_S
+    timer = os.startTimer(interval_s)
+    return timer
+  end
+  function guard.is_own(event)
+    return timer ~= nil and event[1] == "timer" and event[2] == timer
+  end
+  function guard.due(event)
+    if event[1] == "timer" and abandoned[event[2]] then
+      -- Ein frueher aufgegebener eigener Timer: kam doch noch, nur spaet.
+      abandoned[event[2]] = nil
+      stats.late = stats.late + 1
+    end
+    if timer == nil then return false end
+    local compensated = false
+    if not guard.is_own(event) then
+      local now = clock_s()
+      if not (started and now and now - started >= deadline_s) then return false end
+      abandoned[timer] = now
+      stats.compensated = stats.compensated + 1
+      compensated = true
+    end
+    timer = nil
+    begin_cycle(stats, abandoned, label)
+    return true, compensated
+  end
+  return guard
+end
+
+-- Taktgeber fuer eine Schleife, die ihren Takt selbst wartet: die beiden
+-- Schleifen unten, MASTERs eigene (master/loop.lua) und der Matrix-Thread
+-- der ENERGY-Node. Liefert wait(interval_s, on_event): on_event bekommt
+-- jedes Ereignis ausser dem eigenen Timer; true zurueck, wenn ohne eigenen
+-- Timer weitergemacht wurde.
+function M.make_cycle_waiter(name, label)
+  local guard = M.make_timer_guard(name, label)
   return function(interval_s, on_event)
-    local compensated = wait_cycle(stats, abandoned, interval_s, on_event)
-    begin_cycle(stats, abandoned, label or name)
-    return compensated
+    guard.start(interval_s)
+    while true do
+      local event = { os.pullEvent() }
+      if on_event and not guard.is_own(event) then on_event(event) end
+      local due, compensated = guard.due(event)
+      if due then return compensated end
+    end
   end
 end
 
@@ -496,7 +527,7 @@ end
 -- run_slow_loop(opts): opts = { interval, services, after_cycle (optional,
 --   rollenspezifische Hintergrundarbeit, die tatsaechlich lange/blockierende
 --   Peripherie-Calls machen darf, z.B. logistics_router:export). Keine
---   Event-Verarbeitung (Ereignisse wecken sie nur, siehe wait_cycle), keine
+--   Event-Verarbeitung (Ereignisse wecken sie nur, siehe make_timer_guard), keine
 --   Quiesce-Pruefung (die lebt in run_fast_loop) -- rein periodisches Ticken
 --   auf eigenem Takt, damit ein langsamer Aufruf hier UI/Touch/Ventil-
 --   Sicherheit in run_fast_loop nur so lange blockiert, wie der Aufruf selbst
@@ -504,7 +535,7 @@ end
 --   gemeinsamen Liste anstehen zu muessen.
 --
 -- Hier stand os.sleep(interval). Das wartet auf genau einen Timer -- siehe
--- wait_cycle oben, warum das die Schleife fuer immer stilllegen konnte.
+-- make_timer_guard oben, warum das die Schleife fuer immer stilllegen konnte.
 function M.run_slow_loop(opts)
   local interval = opts.interval
   local services = opts.services

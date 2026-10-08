@@ -40,13 +40,13 @@ package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?
 --   * das Entladen des RT-Computers selbst, geteilte Kabelnetze, den
 --     lokalen Monitor
 --
--- BEKANNT, ABER BEWUSST NICHT GEPRUEFT: nach einer verkuerzten Phase bleiben
+-- BEKANNT, ABER HIER NICHT GEPRUEFT: nach einer verkuerzten Phase bleiben
 -- turbine_control.lua's Faehigkeiten-Cache UND das wrap-Handle in
--- ctx.peripherals.turbines veraltet. Betroffen sind nur die Bestaetigung des
--- Update-Quiesce (nach 60 s erzwingt installer/auto_update.lua das Update)
--- und der Lese-Rueckfall des lokalen Schirms. Diesen Zustand hier
--- festzuschreiben hiesse, einen Fehler zu zementieren -- seine Behebung
--- bekommt ihren eigenen Test.
+-- ctx.peripherals.turbines veraltet. Bis v813 hing daran die Bestaetigung
+-- des Update-Quiesce (nach 60 s erzwang installer/auto_update.lua das
+-- Update); seit v814 laeuft der Quiesce namensbasiert ueber die Adapter --
+-- nachgewiesen in tests/rt_update_quiesce_after_chunk_reload_test.lua.
+-- Uebrig ist der Lese-Rueckfall des lokalen Schirms.
 
 local boot = require('support.cc_node_boot')
 local plant = require('support.plant_nodes')

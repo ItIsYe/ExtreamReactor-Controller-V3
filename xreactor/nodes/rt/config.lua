@@ -5,7 +5,7 @@
 -- ueberschrieben, falls der Nutzer bewusst einen anderen Wert gesetzt
 -- hat), und die Migration wird als abgeschlossen persistiert, damit sie
 -- nur einmal laeuft.
-local CURRENT_VERSION = 8
+local CURRENT_VERSION = 9
 
 -- Auto-generated per computer via os.getComputerID(), same pattern as
 -- installer/valve_naming.lua's "VALVE-<id>" and utils.normalize_node_id()'s

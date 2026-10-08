@@ -103,6 +103,13 @@ config_normalizer.migrate_legacy_paths(config, add_config_warning)
 if config_normalizer.migrate_schema_version(config, DEFAULT_CONFIG, add_config_warning) then
   pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
 end
+-- Hat die Migration eine feste Geraeteliste geleert (v9), gehoert das auf
+-- den Schirm, nicht nur ins Log: ab jetzt zaehlt wieder der Scan.
+for _, warning in ipairs(config_warnings) do
+  if warning:find(config_normalizer.DEVICE_LIST_RESET_NOTE, 1, true) then
+    pcall(print, "[RT] " .. warning)
+  end
+end
 config_normalizer.validate_config(config, DEFAULT_CONFIG, add_config_warning, utils)
 config_normalizer.apply_runtime_defaults(config, DEFAULT_CONFIG, {
   target_rpm = CONFIG.TARGET_RPM, min_flow = CONFIG.MIN_FLOW,
@@ -326,9 +333,35 @@ local function build_discovery_context()
   }
 end
 
+-- Den lokalen Monitor (neu) aufloesen. Bis v813 geschah das nur einmal in
+-- init(): war der Monitor beim Start nicht geladen (etwa sein Chunk), blieb
+-- der Schirm bis zum Neustart auf dem Terminal; kam er unter anderem Namen
+-- zurueck, zeichnete die Node ins Leere. Jetzt bei jeder Discovery, wie
+-- FUEL/WATER/REPROCESSOR es tun -- adapters/monitor.lua's find() ist fuer
+-- einen Aufruf je Discovery gebaut (Caches je Name, Abgleich mit
+-- peripheral.getNames()). Gewechselt wird nur, wenn sich das Geraet
+-- wirklich aendert; die Skala ist die eingestellte (per Touch aenderbar).
+local function resolve_monitor()
+  local scale = tonumber(ctx and ctx.monitor_scale) or tonumber(config.monitor_scale) or 0.5
+  local entry = adapters.monitor.find(nil, "first", scale, CONFIG.LOG_PREFIX)
+  local mon, name = entry and entry.mon or nil, entry and entry.name or nil
+  if not mon and term and type(term.current) == "function" then
+    mon, name = term.current(), "term"
+  end
+  if mon == devices.monitor then return false end
+  local previous = devices.monitor_name
+  devices.monitor = mon
+  devices.monitor_name = name
+  if previous ~= nil then
+    log("INFO", "Monitor neu aufgeloest: " .. tostring(previous) .. " -> " .. tostring(name))
+  end
+  return true
+end
+
 local function discover()
   discovery_runtime.discover(build_discovery_context())
   devices.last_scan_ts = os.epoch("utc")
+  pcall(resolve_monitor)
   -- CC:Tweaked peripheral names are not guaranteed stable across a wired-
   -- modem reconnect -- if one shifts, reactor_names.lua's name-keyed alias
   -- silently stops matching and this reactor falls back to its technical
@@ -744,12 +777,8 @@ local function init()
   services:init()
   slow_services:init()
 
-  -- Monitor initialisieren
-  local mon_entry = adapters.monitor.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
-  devices.monitor = mon_entry and mon_entry.mon or nil
-  if not devices.monitor and term and type(term.current) == "function" then
-    devices.monitor = term.current()
-  end
+  -- Monitor initialisieren (danach bei jeder Discovery, siehe resolve_monitor)
+  resolve_monitor()
   monitor_ui.init(devices.monitor, config.monitor, config.monitor_scale)
 
   -- Monitor scale adjustable by touch on the diagnostics page: applies
@@ -761,7 +790,17 @@ local function init()
     ctx.monitor_scale = new_scale
     config.monitor_scale = new_scale
     monitor_ui.set_scale(devices.monitor, new_scale)
-    pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
+    -- Die Discovery schreibt die GEFUNDENEN Geraete nach config.reactors/
+    -- config.turbines (discovery_runtime.refresh_bindings). Bis v813 landete
+    -- dieser Stand hier mit auf der Platte -- beim naechsten Start galt er
+    -- als feste Liste: neue oder nach einem Modem-Reconnect umbenannte
+    -- Turbinen wurden nicht mehr gebunden. Auf die Platte gehoert nur, was
+    -- beim Start dort stand. Betreibervorgabe (2026-10-08): die Zahl der
+    -- Turbinen ergibt sich immer aus dem Scan.
+    local to_write = utils.deep_copy(config)
+    to_write.reactors = utils.deep_copy(runtime_config.configured_reactors)
+    to_write.turbines = utils.deep_copy(runtime_config.configured_turbines)
+    pcall(utils.write_config, CONFIG.CONFIG_PATH, to_write)
     log("INFO", ("Monitor scale changed to %.1f"):format(new_scale))
   end
 

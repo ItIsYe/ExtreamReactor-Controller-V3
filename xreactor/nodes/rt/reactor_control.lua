@@ -230,24 +230,30 @@ function M.apply_update_quiesce(ctx)
     item.rods = rods
     item.rods_safe = type(rods) == "number" and rods >= 99.5
 
-    local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name] or nil
-    if not reactor and ctx.utils and type(ctx.utils.safe_wrap) == "function" then
-      reactor = select(1, ctx.utils.safe_wrap(name))
-    end
-    item.present = reactor ~= nil
+    -- Aktiv-Zustand NAMENSBASIERT, wie die Staebe darueber. Bis v813 lief
+    -- er ueber das wrap-Handle aus ctx.peripherals.reactors, das die
+    -- Discovery einmal schreibt: kam der Reaktor nach dem Chunk-Laden
+    -- zuerst mit verkuerzter Methodenliste zurueck, fehlten dem Handle die
+    -- Funktionen, und der Quiesce wurde nie bestaetigt (siehe
+    -- turbine_control.lua). Die Methodenliste wird hier je Versuch frisch
+    -- gefragt -- Reaktoren sind wenige.
+    local methods = ctx.utils.safe_get_methods(name)
+    local set = {}
+    for _, method in ipairs(methods or {}) do set[method] = true end
+    item.present = methods ~= nil
     item.active_safe = true
-    if reactor and type(reactor.setActive) == "function" then
-      local ok_set, set_result = pcall(reactor.setActive, false)
-      item.active_write = ok_set and set_result ~= false
-      if type(reactor.getActive) == "function" then
-        local ok_read, active = pcall(reactor.getActive)
-        item.active_readback = ok_read and type(active) == "boolean"
+    if set.setActive then
+      local write_ok, write_err = ctx.adapters.reactor.set_active(name, false, ctx.CONFIG.LOG_PREFIX)
+      item.active_write = write_err == nil and write_ok ~= nil and write_ok ~= false
+      if set.getActive then
+        local active, read_err = ctx.utils.safe_peripheral_call(name, "getActive")
+        item.active_readback = read_err == nil and type(active) == "boolean"
         item.active = active
-        item.active_safe = ok_read and active == false
+        item.active_safe = item.active_readback and active == false
       else
         item.active_safe = item.active_write
       end
-    elseif not reactor then
+    elseif not item.present then
       item.active_safe = false
     end
 

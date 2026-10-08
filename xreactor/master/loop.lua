@@ -72,7 +72,7 @@ function M.run(runtime, constants)
   -- der eine Timer verloren, stand der Takt bis zum Neustart still: der
   -- Schirm aenderte sich nur noch beim Antippen, alle RT-Knoten zeigten
   -- MASTER DOWN (Betrieb, 2026-10-05). Jetzt derselbe Taktgeber wie in den
-  -- Knoten-Schleifen (nodes/support/runtime.lua, wait_cycle): ein verlorener
+  -- Knoten-Schleifen (nodes/support/runtime.lua, make_timer_guard): ein verlorener
   -- Timer kostet gut eine Sekunde. Test: tests/master_loop_lost_timer_test.lua.
   local wait_for_cycle = support_runtime.make_cycle_waiter("master", "MASTER")
   local timer_notice_clock = nil

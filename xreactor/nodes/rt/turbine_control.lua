@@ -19,7 +19,7 @@
 --
 -- ctx-Felder die dieses Modul liest/schreibt:
 --   ctx.turbine_ctrl_store   -- { [name] = ctrl-Objekt } (interner State)
---   ctx.peripherals          -- { turbines = { [name] = peripheral } }
+--   ctx.adapters             -- { turbine = adapters/turbine.lua } (Update-Quiesce)
 --   ctx.capability_cache     -- { reactors = {}, turbines = {} }
 --   ctx.warned               -- { [key] = true } einmalige Warn-Flags
 --   ctx.config               -- turbines, reactors, ...
@@ -165,87 +165,85 @@ function M.read_turbine_flow(ctx, turbine, caps)
   return nil, "FLOW_UNAVAILABLE"
 end
 
--- ── Actuator-Write (nur noch fuer den Update-Quiesce) ───────────────────────
--- Reihenfolge wie in adapters/turbine.lua's SET_FLOW_METHODS:
--- setFluidFlowRateMax ZUERST.
+-- ── Update-Quiesce: der einzige Schreibpfad hier ────────────────────────────
+-- Flow 0, Turbine aus, Coil eingehaengt -- und jeweils zurueckgelesen. Er
+-- gehoert dem Updater, nicht dem Regler.
 --
--- Hier stand setFluidFlowRate vorn -- genau umgekehrt. In Extreme Reactors
--- ist setFluidFlowRateMax der Setzer des Sollwerts (setMaxIntakeRate), und
--- der Rueckmesswert, gegen den apply_update_quiesce() den Erfolg prueft,
--- wird mit getFluidFlowRateMax gelesen. Auf echter Hardware griff der
--- richtige Zweig nur deshalb, weil es setFluidFlowRate dort nicht gibt --
--- die Reihenfolge war also eine Falle, die auf jedem Peripheral-Stub
--- zuschlaegt, der beide Namen annimmt (eine peripheral.wrap()-Tabelle mit
--- __index liefert fuer JEDEN Namen eine Funktion).
+-- NAMENSBASIERT ueber adapters/turbine.lua, denselben Weg, den der Regler
+-- nimmt (rt2_adapter.lua). Bis v813 liefen Schreiben und Rueckmessung hier
+-- ueber das wrap-Handle aus ctx.peripherals.turbines und den
+-- Faehigkeiten-Cache ctx.capability_cache. Beide schreibt die Discovery
+-- einmal und erneuert sie nicht, solange der Name gebunden bleibt. Kam eine
+-- Turbine nach dem Laden der Anlage-Chunks zuerst mit verkuerzter
+-- Methodenliste zurueck (Multiblock im Zusammenbau), blieben beide auf
+-- diesem Stand: der Durchfluss liess sich nicht mehr zuruecklesen, der
+-- Quiesce wurde nie bestaetigt, und installer/auto_update.lua erzwang das
+-- Update nach 60 s ohne Bestaetigung. Der Adapter merkt sich eine
+-- unvollstaendige Methodenliste nicht und verwirft die einer
+-- verschwundenen Peripherie.
 --
--- Was daran haengt: schlaegt der Schreibweg fehl oder schreibt er auf eine
--- andere Groesse, bleibt flow_safe falsch, item.ok bleibt falsch, der
--- Quiesce wird NIE bestaetigt -- und rt_update_quiescing bleibt gesetzt,
--- also regelt die Node bis zum Neustart nicht mehr (siehe
--- nodes/rt/main.lua's control_tick).
---
--- caps wird nicht mehr beschrieben: der Faehigkeits-Cache gehoert der
--- Discovery, und ein Schreibweg, der ihn nach dem Vorhandensein einer
--- Wrapper-Funktion umschreibt, verfaelscht ihn fuer alle anderen Leser.
-local function setTurbineFlow(ctx, turbine, caps, rate)
-  local clamped = M.clamp_turbine_flow(ctx, rate)
-  if caps.setFluidFlowRateMax or type(turbine.setFluidFlowRateMax) == "function" then
-    turbine.setFluidFlowRateMax(clamped)
-    return true, "setFluidFlowRateMax"
-  elseif caps.setFluidFlowRate or type(turbine.setFluidFlowRate) == "function" then
-    turbine.setFluidFlowRate(clamped)
-    return true, "setFluidFlowRate"
-  end
-  return false, "NO_FLOW_API"
+-- Je Turbine hoechstens drei Stellbefehle und drei Rueckmessungen, wie
+-- vorher -- bei 50 Turbinen je Knoten zaehlt jeder Peripherie-Aufruf.
+-- Gestellt und zurueckgelesen wird nur, was die Turbine laut ihrer
+-- Methodenliste kann; der Durchfluss muss immer zuruecklesbar sein.
+local FLOW_READBACK_METHOD = "getFluidFlowRateMax"
+
+local function write_ok(ok, err)
+  return err == nil and ok ~= nil and ok ~= false
+end
+
+local function read_back(ctx, name, method)
+  local value, err = ctx.utils.safe_peripheral_call(name, method)
+  if err ~= nil then return nil end
+  return value
 end
 
 function M.apply_update_quiesce(ctx)
   local result = { ok = true, turbines = {} }
+  local adapter = ctx.adapters and ctx.adapters.turbine
+  local prefix = ctx.CONFIG and ctx.CONFIG.LOG_PREFIX or "RT"
   for _, name in ipairs(ctx.config.turbines or {}) do
     local item = { name = name }
-    local turbine = ctx.peripherals and ctx.peripherals.turbines and ctx.peripherals.turbines[name] or nil
-    if not turbine and ctx.utils and type(ctx.utils.safe_wrap) == "function" then
-      turbine = select(1, ctx.utils.safe_wrap(name))
-    end
-    item.present = turbine ~= nil
-    if not turbine then
+    local methods = adapter and adapter.method_set(name, prefix) or nil
+    item.present = methods ~= nil
+    if not methods then
       item.ok = false
       result.ok = false
       result.turbines[#result.turbines + 1] = item
       goto continue
     end
 
-    local caps = M.get_device_caps(ctx, "turbines", name)
-    local ok_flow, flow_applied = pcall(setTurbineFlow, ctx, turbine, caps, 0)
-    item.flow_write = ok_flow and flow_applied == true
-    local flow, flow_source = M.read_turbine_flow(ctx, turbine, caps)
-    item.flow = flow
-    item.flow_source = flow_source
-    item.flow_safe = type(flow) == "number" and math.abs(flow) <= 0.01
+    item.flow_write = write_ok(adapter.set_flow(name, 0, prefix))
+    if methods[FLOW_READBACK_METHOD] then
+      local flow = read_back(ctx, name, FLOW_READBACK_METHOD)
+      if type(flow) == "number" then
+        item.flow = flow
+        item.flow_source = FLOW_READBACK_METHOD
+      end
+    end
+    item.flow_safe = type(item.flow) == "number" and math.abs(item.flow) <= 0.01
 
     item.active_safe = true
-    if type(turbine.setActive) == "function" then
-      local ok_set, set_result = pcall(turbine.setActive, false)
-      item.active_write = ok_set and set_result ~= false
-      if type(turbine.getActive) == "function" then
-        local ok_read, active = pcall(turbine.getActive)
-        item.active_readback = ok_read and type(active) == "boolean"
+    if methods.setActive then
+      item.active_write = write_ok(adapter.set_active(name, false, prefix))
+      if methods.getActive then
+        local active = read_back(ctx, name, "getActive")
+        item.active_readback = type(active) == "boolean"
         item.active = active
-        item.active_safe = ok_read and active == false
+        item.active_safe = active == false
       else
         item.active_safe = item.active_write
       end
     end
 
     item.inductor_safe = true
-    if type(turbine.setInductorEngaged) == "function" then
-      local ok_set, set_result = pcall(turbine.setInductorEngaged, true)
-      item.inductor_write = ok_set and set_result ~= false
-      if type(turbine.getInductorEngaged) == "function" then
-        local ok_read, engaged = pcall(turbine.getInductorEngaged)
-        item.inductor_readback = ok_read and type(engaged) == "boolean"
+    if methods.setInductorEngaged then
+      item.inductor_write = write_ok(adapter.set_coils(name, true, prefix))
+      if methods.getInductorEngaged then
+        local engaged = read_back(ctx, name, "getInductorEngaged")
+        item.inductor_readback = type(engaged) == "boolean"
         item.inductor_engaged = engaged
-        item.inductor_safe = ok_read and engaged == true
+        item.inductor_safe = engaged == true
       else
         item.inductor_safe = item.inductor_write
       end

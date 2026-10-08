@@ -311,10 +311,13 @@ function M.run()
     print("MASTER CRASH: " .. tostring(err))
   end
   pcall(function()
+    local started = os.clock()
     local timer_id = os.startTimer(20)
     while true do
       local ev = { os.pullEvent() }
       if ev[1] == "key" or (ev[1] == "timer" and ev[2] == timer_id) then return end
+      -- Kam der Timer nicht (verworfenes Ereignis), beendet die Uhr das Warten.
+      if os.clock() - started >= 21 then return end
     end
   end)
   if os.reboot then os.reboot() end

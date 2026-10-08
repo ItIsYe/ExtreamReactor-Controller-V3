@@ -100,8 +100,10 @@ with tempfile.TemporaryDirectory() as tmp:
     # version_test.py) zusaetzlich einen Versions-Bump aus -- das aendert
     # neben der manipulierten Zeile auch manifest_version/manifest_id UND
     # release.lua's eigenen Manifest-Eintrag (release.lua wird durch den
-    # Bump selbst neu geschrieben). Erwartet also genau diese 4 Zeilen,
-    # nicht mehr nur die eine manipulierte.
+    # Bump selbst neu geschrieben). Seit v814 aendert sich mit dem Inhalt
+    # auch die Inhalts-Pruefsumme der Fassung (payload_digest, siehe
+    # scripts/manifest_sync.py) -- das ist ihr Zweck. Erwartet also genau
+    # diese 5 Zeilen, nicht mehr nur die eine manipulierte.
     original_lines = original_text.splitlines()
     new_lines = new_text.splitlines()
     if len(original_lines) != len(new_lines):
@@ -115,7 +117,7 @@ with tempfile.TemporaryDirectory() as tmp:
         if a != b
     ]
     changed_prefixes = tuple(a.strip() for _, a, _ in changed)
-    expected_prefix_starts = ("manifest_version", "manifest_id", '{ path = "release.lua"')
+    expected_prefix_starts = ("manifest_version", "manifest_id", "payload_digest", '{ path = "release.lua"')
     unexpected = [
         (i, a, b) for i, a, b in changed
         if target_rel not in a and not a.strip().startswith(expected_prefix_starts)
@@ -124,10 +126,10 @@ with tempfile.TemporaryDirectory() as tmp:
         raise SystemExit(
             f"BUG: unexpected changed line(s) beyond the tampered entry and version bump: {unexpected}"
         )
-    if len(changed) != 4:
+    if len(changed) != 5:
         raise SystemExit(
-            f"BUG: expected exactly 4 changed lines (tampered entry, manifest_version, "
-            f"manifest_id, release.lua's own entry), got {len(changed)}: {changed}"
+            f"BUG: expected exactly 5 changed lines (tampered entry, manifest_version, "
+            f"manifest_id, payload_digest, release.lua's own entry), got {len(changed)}: {changed}"
         )
 
 print("manifest_sync_write_preserves_flags_and_comments_test.py: ok")

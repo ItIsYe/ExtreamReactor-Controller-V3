@@ -91,7 +91,7 @@ function M.build_health_payload(ctx)
     degrade_reasons[ctx.health.reasons.CONTROL_DEGRADED] = true
   end
   -- Ein verlorenes Timer-Ereignis hat die Node frueher bis zum Neustart
-  -- stillgelegt (nodes/support/runtime.lua's wait_cycle). Heute laeuft sie
+  -- stillgelegt (nodes/support/runtime.lua's make_timer_guard). Heute laeuft sie
   -- weiter -- der Grund bleibt bis zum Neustart stehen, damit sichtbar
   -- bleibt, dass es passiert ist; MASTER protokolliert jede Aenderung der
   -- Gruende. Bewusst KEIN Herabstufen: die Node regelt ja.

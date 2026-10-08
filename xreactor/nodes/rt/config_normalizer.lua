@@ -68,6 +68,18 @@ local LEGACY_TRIP_SAMPLE_KEYS = {
   "coolant_trip_samples",
   "coolant_invalid_grace_samples",
 }
+-- v9: feste Geraetelisten (reactors/turbines) werden EINMAL geleert -- die
+-- Ausnahme von der Regel oben, bewusst. Geschrieben hat solche Listen bis
+-- v813 nur ein Fehler: die Touch-Skalierung des Schirms (nodes/rt/main.lua's
+-- on_scale_change) persistierte die ganze Config samt dem GEFUNDENEN
+-- Geraetestand. Beim naechsten Start galt der als feste Liste: neue oder
+-- nach einem Modem-Reconnect umbenannte Turbinen wurden nicht mehr
+-- gebunden, ohne sichtbare Meldung. Von Hand traegt niemand 50 Turbinen je
+-- Knoten ein, und der Betreiber hat entschieden (2026-10-08): die Zahl der
+-- Turbinen ergibt sich immer aus dem Scan. Eine NACH v9 von Hand gesetzte
+-- Liste bleibt stehen (die Migration laeuft nur einmal).
+local RT_CONFIG_VERSION_DEVICE_LIST_RESET = 9
+M.DEVICE_LIST_RESET_NOTE = "feste Geraeteliste entfernt"
 
 function M.migrate_schema_version(config_values, defaults, add_warning)
   if type(config_values) ~= "table" then
@@ -132,6 +144,18 @@ function M.migrate_schema_version(config_values, defaults, add_warning)
             RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION))
           changed = true
         end
+      end
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_DEVICE_LIST_RESET then
+    for _, key in ipairs({ "reactors", "turbines" }) do
+      local list = config_values[key]
+      if type(list) == "table" and #list > 0 then
+        add_warning(string.format(
+          "%s: %s (%d Eintraege) -- die Geraete werden wieder per Scan gefunden (config schema v%d)",
+          key, M.DEVICE_LIST_RESET_NOTE, #list, RT_CONFIG_VERSION_DEVICE_LIST_RESET))
+        config_values[key] = {}
+        changed = true
       end
     end
   end

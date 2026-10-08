@@ -26,30 +26,42 @@ local function assert_true(value, message)
   if not value then error(message or 'assert_true failed') end
 end
 
+-- Der Matrix-Thread wartet seit v814 ueber nodes/support/runtime.lua's
+-- Taktgeber (os.startTimer + os.pullEvent) statt ueber os.sleep(). Jeder
+-- simulierte Takt ist hier genau ein Ereignis: der eigene Timer.
+local function stub_cycles(limit)
+  local real_start, real_pull = os.startTimer, os.pullEvent
+  local state = { cycles = 0 }
+  local timer_id = 0
+  os.startTimer = function() timer_id = timer_id + 1; return timer_id end
+  os.pullEvent = function()
+    state.cycles = state.cycles + 1
+    if state.cycles > limit then error('STOP_TEST_LOOP') end
+    return 'timer', timer_id
+  end
+  state.restore = function() os.startTimer, os.pullEvent = real_start, real_pull end
+  return state
+end
+
 -- 1. matrix.lua tickt nur das ihm uebergebene ctx.services (jetzt eine
 --    dedizierte Gruppe in main.lua) und ruft NACH JEDEM Tick nur noch
 --    ctx.send_heartbeat_if_due() auf (nicht mehr ein ungegatetes
 --    send_heartbeat) -- egal wie oft/wie "langsam" der Tick simuliert wird.
 do
-  local sleep_count = 0
-  local real_sleep = os.sleep
-  os.sleep = function(_s)
-    sleep_count = sleep_count + 1
-    if sleep_count > 3 then error('STOP_TEST_LOOP') end
-  end
+  local cycles = stub_cycles(3)
 
   local tick_calls = 0
   local heartbeat_due_calls = {}
   local ctx = {
     services = { tick = function() tick_calls = tick_calls + 1 end },
-    now_ms = function() return 1000 * sleep_count end,
+    now_ms = function() return 1000 * cycles.cycles end,
     receive_timeout_s = 0.1,
     send_heartbeat_if_due = function(ts) table.insert(heartbeat_due_calls, ts) end,
     log = function() end,
   }
 
   local ok, err = pcall(matrix_mod.run, ctx)
-  os.sleep = real_sleep
+  cycles.restore()
 
   assert_true(not ok, 'test loop should terminate via the sentinel error')
   assert_true(tostring(err):find('STOP_TEST_LOOP', 1, true) ~= nil, 'unexpected error: ' .. tostring(err))
@@ -60,12 +72,7 @@ end
 -- 2. matrix.lua survives a slow/failing tick (pcall-wrapped) and still
 --    calls the heartbeat catch-up check afterward.
 do
-  local sleep_count = 0
-  local real_sleep = os.sleep
-  os.sleep = function(_s)
-    sleep_count = sleep_count + 1
-    if sleep_count > 1 then error('STOP_TEST_LOOP') end
-  end
+  local cycles = stub_cycles(1)
   local heartbeat_due_calls = 0
   local ctx = {
     services = { tick = function() error('simulated slow/broken peripheral call') end },
@@ -75,7 +82,7 @@ do
     log = function() end,
   }
   local ok = pcall(matrix_mod.run, ctx)
-  os.sleep = real_sleep
+  cycles.restore()
   assert_true(not ok, 'sentinel should still terminate the loop')
   assert_eq(heartbeat_due_calls, 1, 'a failing services:tick() must not prevent the heartbeat catch-up check')
 end

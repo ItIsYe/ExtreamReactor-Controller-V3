@@ -241,6 +241,23 @@ local function capabilities(name, log_prefix)
   return entry
 end
 
+-- Die Methodenmenge ({ [methode] = true }) einer Turbine, oder nil, wenn sie
+-- nicht lesbar ist (Peripherie weg). Aus demselben Cache wie die
+-- Stellbefehle -- eine unvollstaendige Liste wird dort nicht gemerkt,
+-- sondern beim naechsten Mal neu gefragt. Fuer den Update-Quiesce
+-- (nodes/rt/turbine_control.lua), der nur stellen und zuruecklesen darf,
+-- was die Turbine wirklich kann.
+function turbine.method_set(name, log_prefix)
+  if not name then return nil end
+  if not peripheral.isPresent(name) then
+    -- Weg: nicht auf alten Faehigkeiten sitzen bleiben (wie inspect()).
+    capability_cache[name] = nil
+    return nil
+  end
+  local caps = capabilities(name, log_prefix)
+  return caps and caps.set or nil
+end
+
 -- Sichtbar fuer Tests und fuer den Fall, dass eine Turbine ausgetauscht
 -- wird: beim naechsten inspect() wird neu ermittelt.
 function turbine.forget_capabilities(name)
