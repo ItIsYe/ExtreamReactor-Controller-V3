@@ -62,9 +62,14 @@ local CONFIG = {
     -- teach flow), never typed by hand -- the FUEL router page lists every
     -- currently-broadcasting RT reactor by its real name; tapping one
     -- takes over its reactor_id/label here.
-    --   reactor_id    = ID of the reactor as reported by its RT node's status
-    --                   (fuel level comes via network relay from Master, see
-    --                   master/fuel_relay.lua, not a local peripheral read.)
+    --   reactor_id    = GLOBAL ID of the reactor, "<RT node id>:<short ID>"
+    --                   (core/reactor_identity.lua) -- the short ID alone is
+    --                   only unique on one RT computer. Routes that still
+    --                   carry a short ID are switched over automatically
+    --                   when their label names exactly one reactor (see
+    --                   nodes/fuel/route_identity.lua). Fuel level comes via
+    --                   network relay from Master (master/fuel_relay.lua),
+    --                   not a local peripheral read.
     --   label         = the reactor's real display name, as reported by RT.
     --   path          = ordered list of VALVE-Node ids to open for this
     --                   reactor's delivery (see redstone_tree note below —
@@ -94,13 +99,13 @@ local CONFIG = {
     -- Example (export_chest + two reactors, RT-reported fuel level):
     -- export_chest = "mekanism:ultimate_logistical_transporter_0",
     -- reactors = {
-    -- { reactor_id    = "node-52-reactor-0",
+    -- { reactor_id    = "node-52:REACTOR-1a2b3c4d",
     --   label         = "Reaktor A",
     --   path          = { "VALVE-1" },
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
-    -- { reactor_id    = "node-52-reactor-1",
+    -- { reactor_id    = "node-52:REACTOR-5e6f7a8b",
     --   label         = "Reaktor B",
     --   path          = { "VALVE-2" },
     --   request_below = 0.25,

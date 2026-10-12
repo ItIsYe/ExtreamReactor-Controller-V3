@@ -43,6 +43,7 @@ local redstone_router_lib = require("nodes.fuel.redstone_router")
 local router_ui_lib = require("nodes.fuel.router_ui")
 local hop_timing_lib = require("nodes.fuel.hop_timing")
 local reactor_targets = require("nodes.fuel.reactor_targets")
+local route_identity = require("nodes.fuel.route_identity")
 local fuel_ui_pages = require("nodes.fuel.ui_pages")
 
 -- main.lua ist nur Orchestrierung (Wiring von Config/Services/Event-Loop)
@@ -162,8 +163,9 @@ local function add_config_warning(message) table.insert(config_warnings, message
 -- ladbarer Datei bleiben logistics.export_chest/.reactors leer und
 -- routing_load_status haelt den Fehler fest.
 local routing_load_status = { ok = true, source = "config" }
+local FUEL_ROUTES_PATH = "/xreactor_config/fuel_routes.lua"
 do
-  local routes_path = "/xreactor_config/fuel_routes.lua"
+  local routes_path = FUEL_ROUTES_PATH
   if fs.exists(routes_path) then
     local ok_load, content = pcall(dofile, routes_path)
     if not ok_load or type(content) ~= "table" then
@@ -271,7 +273,7 @@ local function get_router_ui()
       config = config,
       redstone_router = get_rs_router(),
       logistics_router = get_router(),
-      config_path = "/xreactor_config/fuel_routes.lua",
+      config_path = FUEL_ROUTES_PATH,
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       routing_load_status = routing_load_status,
       get_reactors = function()
@@ -565,6 +567,52 @@ local function init()
     if channel ~= constants.channels.VALVE then return end
     if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
       router_ui_instance:handle_teach_pulse(message.src)
+    end
+  end })
+  -- Routen mit kurzer Reaktor-Kennung auf die globale umstellen (siehe
+  -- nodes/fuel/route_identity.lua). Alle 30 s, im Hintergrund: der
+  -- Fuellstand kommt erst nach dem Start ueber Funk an, vorher ist nichts
+  -- zuzuordnen. Gewartet wird, solange der Betreiber im Router etwas
+  -- bearbeitet oder eine Lieferung laeuft. Was sich nicht eindeutig
+  -- zuordnen laesst, bleibt und wird einmal gemeldet.
+  local ROUTE_ID_CHECK_MS = 30 * 1000
+  local last_route_id_check_ms = 0
+  local route_id_state = {}
+  slow_services:add({ name = "route_id_upgrade", tick = function()
+    local now = os.epoch and os.epoch("utc") or 0
+    if now - last_route_id_check_ms < ROUTE_ID_CHECK_MS then return end
+    last_route_id_check_ms = now
+    local changed, problems, reason, changes = route_identity.apply(config.logistics, fuel_status_cache, {
+      state = route_id_state,
+      now = now,
+      busy = function()
+        if router_ui_instance and router_ui_instance:is_editing() then return true end
+        return router ~= nil and router:is_delivering()
+      end,
+      copy = router_ui_lib.copy_route,
+      save = function(snapshot) return router_ui_lib.save_routes(snapshot, FUEL_ROUTES_PATH) end,
+      on_applied = function(applied)
+        if router then
+          for _, change in ipairs(applied or {}) do router:rekey_reactor(change.from, change.to) end
+          router:refresh_peripherals()
+        end
+        if router_ui_instance then router_ui_instance:reload_from_config() end
+      end,
+    })
+    for _, change in ipairs(changes or {}) do
+      utils.log("FUEL", string.format("FUEL-Route '%s': Reaktor-Kennung %s -> %s (global, gespeichert)",
+        tostring(change.label or "?"), change.from, change.to), "INFO")
+    end
+    if reason and reason:find("^save_failed") then
+      warn_once("route_id_upgrade_save", "FUEL-Routen: Umstellung auf globale Kennung nicht gespeichert ("
+        .. reason .. ") -- naechster Versuch in 10 min")
+    end
+    for _, problem in ipairs(problems or {}) do
+      warn_once("route_id:" .. tostring(problem.id) .. ":" .. tostring(problem.label) .. ":" .. tostring(problem.status),
+        route_identity.describe_problem(problem))
+    end
+    if changed > 0 then
+      utils.log("FUEL", string.format("%d FUEL-Route(n) auf globale Reaktor-Kennung umgestellt", changed), "INFO")
     end
   end })
   local discovery_stability_cache = discovery_stability.new({})

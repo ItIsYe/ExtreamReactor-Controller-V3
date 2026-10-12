@@ -72,7 +72,11 @@ end
 
 local function copy_reactor(entry)
   return {
-    reactor_id = entry.reactor_id,
+    -- reactor_port ist der alte Name desselben Felds (config_normalizer.lua
+    -- und logistics_router.lua lesen ihn noch). Ohne Uebernahme verlor ein
+    -- solcher Eintrag beim Kopieren seine Kennung, und SPEICHERN lehnte die
+    -- ganze Liste ab ("hat keine reactor_id").
+    reactor_id = entry.reactor_id or entry.reactor_port,
     label = entry.label,
     path = deep_copy_path(entry.path),
     request_below = entry.request_below or 0.25,
@@ -218,6 +222,20 @@ local function validate_state(state)
   return true
 end
 
+-- Fuer Schreiber ausserhalb der Seite (route_identity.lua ueber
+-- nodes/fuel/main.lua): derselbe Eintragsaufbau, dieselbe Pruefung und
+-- derselbe atomare Schreibweg wie beim SPEICHERN.
+M.copy_route = copy_reactor
+
+function M.save_routes(snapshot, path)
+  local ok_valid, verr = validate_state(snapshot)
+  if not ok_valid then return false, "Validierung: " .. tostring(verr) end
+  local ok, err_code, err_msg = save_state_atomic(snapshot, path or DEFAULT_REACTORS_CONFIG_PATH,
+    function(content) return validate_state(content) end)
+  if not ok then return false, tostring(err_code) .. ": " .. tostring(err_msg) end
+  return true
+end
+
 -- ---- constructor -------------------------------------------------------------
 
 function M.new(opts)
@@ -303,6 +321,30 @@ function M.new(opts)
   return self
 end
 
+-- Arbeitskopie aus der Laufzeit-Konfiguration neu laden (verwirft nicht
+-- gespeicherte Aenderungen). Fuer den Knopf ZURUECKSETZEN und nach der
+-- Umstellung auf globale Reaktor-Kennungen (route_identity.lua), damit die
+-- Seite die gespeicherten Kennungen zeigt.
+function M:reload_from_config()
+  local u = self._ui
+  local cfg = self.config
+  local lg = cfg and (cfg.logistics or cfg) or nil
+  u.reactors = {}
+  for _, entry in ipairs((lg and lg.reactors) or {}) do
+    u.reactors[#u.reactors + 1] = copy_reactor(entry)
+  end
+  u.export_chest = lg and lg.export_chest or nil
+  u.dirty = false
+end
+
+-- Bearbeitet der Betreiber gerade etwas? Dann darf niemand anders die
+-- Routen-Datei schreiben -- seine ungespeicherte Arbeitskopie ginge sonst
+-- beim naechsten SPEICHERN ueber die neue Datei hinweg.
+function M:is_editing()
+  local u = self._ui
+  return u.dirty == true or u.mode ~= "list"
+end
+
 function M:_find_reactor(reactor_id)
   for _, r in ipairs(self._ui.reactors) do
     if r.reactor_id == reactor_id then return r end
@@ -377,14 +419,7 @@ function M:_handle_list_touch(x, y)
   end
   if hit(u.save_btn, x, y) then self:_do_save(); return true end
   if hit(u.reset_btn, x, y) then
-    local cfg = self.config
-    local lg = cfg and (cfg.logistics or cfg) or nil
-    u.reactors = {}
-    for _, entry in ipairs((lg and lg.reactors) or {}) do
-      u.reactors[#u.reactors + 1] = copy_reactor(entry)
-    end
-    u.export_chest = lg and lg.export_chest or nil
-    u.dirty = false
+    self:reload_from_config()
     u.save.state = "IDLE"
     u.save.error = nil
     return true

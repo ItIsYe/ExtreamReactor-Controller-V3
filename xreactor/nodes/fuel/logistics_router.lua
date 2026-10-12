@@ -49,7 +49,7 @@
 --       -- with a fallback on overhearing RT's status broadcasts). reactor_id
 --       -- and label are learned from the owning RT node's own broadcasts
 --       -- (see router_ui.lua's reactor-teach flow), never typed by hand.
---       reactor_id        = "node-52-reactor-0",
+--       reactor_id        = "node-52:REACTOR-1a2b3c4d",  -- global ID, see route_identity.lua
 --       label             = "Reactor A",
 --       path              = { "VALVE-1", "VALVE-3" },  -- see redstone_tree note below
 --       request_below     = 0.25,  -- request when fuel_level < 25% of capacity
@@ -1209,6 +1209,32 @@ function M:tick()
 end
 
 -- ---- status ----------------------------------------------------------------
+
+-- Laeuft gerade eine Lieferung (angefordert oder Ventile in Bewegung)?
+-- Waehrend einer Lieferung haengen Abklingzeit und Ventil-Transaktion an der
+-- Reaktor-Kennung der Route -- sie darf sich dann nicht aendern
+-- (route_identity.lua wartet).
+function M:is_delivering()
+  local s = self._state
+  if s.current_request ~= nil then return true end
+  local rs = s.rs_router or self.external_rs_router
+  if rs and type(rs.get_active_transaction) == "function" then
+    local ok, tx = pcall(rs.get_active_transaction, rs)
+    if ok and tx ~= nil then return true end
+  end
+  return false
+end
+
+-- Eine Route bekommt eine neue Reaktor-Kennung (route_identity.lua: kurze
+-- -> globale). Die Abklingzeit seit der letzten Lieferung haengt an der
+-- Kennung und zieht mit um -- sonst gaelte der Reaktor sofort wieder als
+-- "lange nicht beliefert".
+function M:rekey_reactor(from, to)
+  if from == nil or to == nil or from == to then return end
+  local ts = self._state.last_export_ts
+  if ts[from] ~= nil and ts[to] == nil then ts[to] = ts[from] end
+  ts[from] = nil
+end
 
 function M:get_summary()
   local s = self._state
