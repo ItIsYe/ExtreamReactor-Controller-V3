@@ -9,8 +9,7 @@
 -- nicht zur Regelung gehoeren und trotzdem gebraucht werden:
 --
 --   * Capability-Discovery (welche Methoden hat dieses Geraet?) -- genutzt
---     von Discovery, Statusaufnahme und dem lokalen Schirm.
---   * Lesen von Drehzahl und Durchfluss fuer die Statusaufnahme.
+--     von der Discovery (discovery_runtime.lua).
 --   * Der Sicherheitszustand fuer den Update-Quiesce (Flow 0, Turbine aus,
 --     Coil eingehaengt) -- der einzige Schreibpfad, der hier noch existiert,
 --     und er gehoert dem Updater, nicht dem Regler.
@@ -28,7 +27,12 @@
 --   ctx.binding              -- binding-Modul
 --   ctx.runtime_config       -- { configured_reactors, configured_turbines }
 --   ctx.log                  -- function(level, msg)
---   ctx.safe_wrapped_call    -- function(obj, method, ...) -> ok, result
+--
+-- Drehzahl und Durchfluss werden hier nicht mehr gelesen. Bis v814 standen
+-- hier read_turbine_rpm()/read_turbine_flow() fuer den zweiten Leseweg des
+-- lokalen Schirms (wrap-Handle + Faehigkeiten-Cache); der ist entfallen,
+-- gelesen wird nur noch ueber adapters/turbine.lua (siehe
+-- monitor_ui.build_turbine_status).
 
 local M = {}
 
@@ -135,34 +139,6 @@ function M.init_turbine_ctrl(ctx)
   for _, name in ipairs(turbines) do
     get_turbine_ctrl(ctx, name)
   end
-end
-
--- ── Peripherie-Zugriff ───────────────────────────────────────────────────────
-
-function M.read_turbine_rpm(ctx, turbine, caps)
-  if not turbine then return nil, "NO_TURBINE" end
-  if caps and caps.getRotorSpeed and turbine.getRotorSpeed then
-    local ok, value = ctx.safe_wrapped_call(turbine, "getRotorSpeed")
-    if ok and type(value) == "number" then return value, "getRotorSpeed" end
-  end
-  if caps and caps.getRotorRPM and turbine.getRotorRPM then
-    local ok, value = ctx.safe_wrapped_call(turbine, "getRotorRPM")
-    if ok and type(value) == "number" then return value, "getRotorRPM" end
-  end
-  return nil, "RPM_UNAVAILABLE"
-end
-
-function M.read_turbine_flow(ctx, turbine, caps)
-  if not turbine then return nil, "NO_TURBINE" end
-  if caps and caps.getFluidFlowRateMax and turbine.getFluidFlowRateMax then
-    local ok, value = ctx.safe_wrapped_call(turbine, "getFluidFlowRateMax")
-    if ok and type(value) == "number" then return value, "getFluidFlowRateMax" end
-  end
-  if caps and caps.getFluidFlowRate and turbine.getFluidFlowRate then
-    local ok, value = ctx.safe_wrapped_call(turbine, "getFluidFlowRate")
-    if ok and type(value) == "number" then return value, "getFluidFlowRate" end
-  end
-  return nil, "FLOW_UNAVAILABLE"
 end
 
 -- ── Update-Quiesce: der einzige Schreibpfad hier ────────────────────────────

@@ -121,26 +121,37 @@ end
 -- Same consolidation as M.build_reactor_status() above, for turbines.
 --
 -- flow_reasons (optional, nach Peripheriename): was der Regler je Turbine
--- zuletzt entschieden hat. Diese Funktion liest die Hardware ueber einen
--- EIGENEN Weg, unabhaengig von der Regelkette -- steht die Regelung still,
--- laufen Drehzahl und Durchfluss hier trotzdem weiter. Der Grund kommt
--- deshalb vom Aufrufer, wie capacity_override auch.
-function M.build_turbine_status(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix, flow_reasons)
+-- zuletzt entschieden hat. Der Grund kommt vom Aufrufer, wie
+-- capacity_override auch -- die Oberflaeche entscheidet nichts selbst.
+--
+-- EIN Leseweg: adapters/turbine.lua's inspect(), derselbe, den der Regler
+-- liest (rt2_adapter.lua). Bis v814 gab es hier einen zweiten: lieferte
+-- inspect() keine Drehzahl oder keinen Durchfluss, las diese Funktion per
+-- peripheral.wrap() und dem Faehigkeiten-Cache ctx.capability_cache noch
+-- einmal nach. Das war in beide Richtungen falsch:
+--
+--   * Der Cache wird von der Discovery einmal je Name geschrieben und nie
+--     erneuert. Kam eine Turbine nach dem Chunk-Laden zuerst mit
+--     verkuerzter Methodenliste zurueck, blieb der Rueckfall fuer immer
+--     stumm -- obwohl der Adapter laengst wieder las.
+--   * Ging er doch, zeigte der Schirm einen Wert, den der Regler NICHT
+--     hatte (beim Durchfluss sogar eine andere Groesse: getFluidFlowRate
+--     ist der Verbrauch, nicht der Sollwert). So sah die Oberflaeche beim
+--     Livetest auf node-101 normal aus, waehrend der Regler blind war
+--     (tests/rt2_unreadable_turbine_write_test.lua).
+--
+-- Jetzt zeigt der Schirm, was der Regler sieht: "nicht lesbar" bleibt
+-- unbekannt (nil -> "-"), nie der String "n/a" (der wuerde das
+-- Zahlenformat der Turbinenseite sprengen).
+function M.build_turbine_status(devices, turbine_adapter, log_prefix, flow_reasons)
   local list, total_output = {}, 0
   local min_rpm, max_rpm, sum_rpm, rpm_count = nil, nil, 0, 0
+  local can_inspect = turbine_adapter and type(turbine_adapter.inspect) == "function"
   for _, entry in ipairs(devices.turbines or {}) do
-    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
-      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
+    local info = can_inspect and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
     if type(info) ~= "table" then info = {} end
-    local rpm, flow = info.rpm, info.flow
-    if (type(rpm) ~= "number" or type(flow) ~= "number") and entry and entry.name
-        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
-      local turbine = peripheral.wrap(entry.name)
-      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
-      if type(rpm) ~= "number" and read_turbine_rpm then rpm = read_turbine_rpm(turbine, caps) end
-      if type(flow) ~= "number" and read_turbine_flow then flow = read_turbine_flow(turbine, caps) end
-    end
-    if type(rpm) == "number" then
+    local rpm, flow = num(info.rpm, nil), num(info.flow, nil)
+    if rpm then
       rpm_count = rpm_count + 1
       sum_rpm = sum_rpm + rpm
       if not min_rpm or rpm < min_rpm then min_rpm = rpm end
@@ -166,8 +177,7 @@ function M.update_status_snapshot(ctx)
   local summary = ctx.devices.registry_summary or ctx.registry:get_summary() or {}
   local reactors, min_temp, max_temp, avg_temp = M.build_reactor_status(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
   local turbines, actual_output, min_rpm, max_rpm, avg_rpm = M.build_turbine_status(
-    ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps,
-    ctx.log_prefix, ctx.turbine_flow_reasons)
+    ctx.devices, ctx.turbine_adapter, ctx.log_prefix, ctx.turbine_flow_reasons)
   -- ctx.capacity_override: der Lernzustand des Reglers, vom Aufrufer
   -- gegeben. Als es hier noch einen zweiten Lernzustand gab, stand auf dem
   -- RT-Schirm "KAPAZITAET WIRD GELERNT / CAPACITY 0.0", waehrend im

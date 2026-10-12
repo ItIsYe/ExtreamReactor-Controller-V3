@@ -328,8 +328,15 @@ function M.new(opts)
           for k,v in pairs(m) do copy[k]=v end
           copy.last_seen_age = age
           copy.status = stale and 'OFFLINE' or normalize_status(copy.status or node.status or 'OK')
-          copy.percent = pick_number(copy.percent, copy.fill, copy.level, copy.aggregate_percent, 0)
-          if copy.percent > 0 and copy.percent <= 1 then copy.percent = copy.percent * 100 end
+          if copy.capacity_known == false then
+            -- ENERGY kennt die Kapazitaet dieser Matrix (noch) nicht
+            -- (nodes/energy/matrix_snapshot_runtime.lua): Fuellstand
+            -- unbekannt -- weder 0 % noch, wie bis v814, 100 %.
+            copy.percent = nil
+          else
+            copy.percent = pick_number(copy.percent, copy.fill, copy.level, copy.aggregate_percent, 0)
+            if copy.percent > 0 and copy.percent <= 1 then copy.percent = copy.percent * 100 end
+          end
           copy.input = pick_number(copy.input, copy.inflow, copy.rate_in, 0)
           copy.output = pick_number(copy.output, copy.outflow, copy.rate_out, 0)
           copy.id = first_nonempty(copy.id, copy.label, copy.name, node.id .. "-matrix")
@@ -537,10 +544,15 @@ function M.new(opts)
         stale = stale,
       }
 
+      -- Dateipruefung des Knotens aus seinem letzten STATUS-Paket
+      -- (shared/build_info.lua: meta.build.integrity), nicht aus dem
+      -- Heartbeat.
+      local node_build = type(node.meta) == "table" and type(node.meta.build) == "table" and node.meta.build or nil
       update_nodes[#update_nodes + 1] = {
         id = id,
         role = role,
         manifest_version = node.manifest_version,
+        integrity = node_build and type(node_build.integrity) == "table" and node_build.integrity or nil,
         offline = offline,
         stale = stale,
       }

@@ -4,6 +4,10 @@ _G.os = _G.os or {}
 os.epoch = function() return 25000 end
 
 local health = require('core.health')
+-- Die Rolle aus den Konstanten ("ENERGY-NODE"). Mit dem frueher hier
+-- stehenden 'ENERGY_NODE' lief die ENERGY-Regel in core/alert_rules.lua
+-- gar nicht, und die MATRIX_MISSING-Pruefung bestand immer.
+local constants = require('shared.constants')
 local alert_rules = require('core.alert_rules').new({
   alert_raise_after_s = 0,
   alert_clear_after_s = 0,
@@ -17,7 +21,7 @@ local alerts = select(1, alert_rules:evaluate({
   nodes = {
     {
       id = 'ENERGY-1',
-      role = 'ENERGY_NODE',
+      role = constants.roles.ENERGY_NODE,
       status = health.status.DOWN,
       offline = true,
       health = {

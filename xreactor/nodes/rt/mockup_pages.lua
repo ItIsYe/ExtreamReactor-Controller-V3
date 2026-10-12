@@ -233,7 +233,7 @@ function M.render_turbines(mon, model)
     -- Der Grund der letzten Reglerentscheidung. Ohne ihn zeigt diese
     -- Tabelle nur, was die Hardware tut -- und das laeuft auch dann
     -- weiter, wenn niemand mehr stellt (die Liste entsteht aus einem
-    -- eigenen Leseweg, siehe monitor_ui.build_turbine_status).
+    -- eigenen Leseaufruf, siehe monitor_ui.build_turbine_status).
     local reason = tostring(t.flow_reason or "-")
     local line
     if w >= 50 then

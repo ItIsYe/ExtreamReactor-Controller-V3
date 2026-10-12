@@ -182,13 +182,15 @@ function M.new(opts)
       for idx = pagination.start_index, pagination.end_index do
         local entry = matrices[idx]
         if entry then
-          local pct = entry.percent or 0
+          -- nil = Kapazitaet unbekannt (matrix_snapshot_runtime.lua): "n/a"
+          -- statt einer erfundenen Zahl; nur der Balken braucht eine.
+          local pct = entry.percent
           local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
           local label = entry.alias or entry.label or entry.name or ("MATRIX " .. tostring(idx))
           local x = 2 + col * (card_w + gap)
           mux.card(mon, x, start_y, card_w, math.max(8, h - start_y - 1), { title = tostring(label) .. "   ONLINE", status = key, icon = "storage" })
           mux.metric_card(mon, x + 2, start_y + 2, card_w - 4, 4, { label = "FILL", value = format_percent(pct), status = key, icon = "energy" })
-          mux.outlined_progress(mon, x + 2, start_y + 7, card_w - 4, pct, key, format_percent(pct))
+          mux.outlined_progress(mon, x + 2, start_y + 7, card_w - 4, pct or 0, key, format_percent(pct))
           mux.data_row(mon, x + 2, start_y + 9, card_w - 4, { label = format_energy(entry.stored) .. " / " .. format_energy(entry.capacity), value = "RF", status = "text", icon = "storage" })
           mux.data_row(mon, x + 2, start_y + 11, card_w - 4, { label = "INPUT", value = format_energy(entry.input) .. " RF/t", status = "LIMITED", icon = "input" })
           mux.data_row(mon, x + 2, start_y + 12, card_w - 4, { label = "OUTPUT", value = format_energy(entry.output) .. " RF/t", status = "OK", icon = "output" })
@@ -200,12 +202,12 @@ function M.new(opts)
       for idx = pagination.start_index, pagination.end_index do
         local entry = matrices[idx]
         if entry then
-          local pct = entry.percent or 0
+          local pct = entry.percent
           local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
           local label = entry.alias or entry.label or entry.name or ("MATRIX " .. tostring(idx))
           mux.card(mon, 2, y, w - 3, 8, { title = tostring(label) .. "   ONLINE", status = key, icon = "storage" })
           mux.metric_card(mon, 4, y + 1, w - 7, 4, { label = "FILL", value = format_percent(pct), status = key, icon = "energy" })
-          mux.outlined_progress(mon, 4, y + 5, w - 7, pct, key, format_percent(pct))
+          mux.outlined_progress(mon, 4, y + 5, w - 7, pct or 0, key, format_percent(pct))
           y = y + 9
         end
       end

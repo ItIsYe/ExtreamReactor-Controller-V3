@@ -478,9 +478,6 @@ local function build_status_payload(status_level)
     config               = config,
     -- Felder fuer status_snapshot.build_turbine_snapshots / build_reactor_snapshots
     get_available_steam  = function() return reactor_control.get_available_steam(ctx) end,
-    get_device_caps      = function(k,n) return turbine_control.get_device_caps(ctx,k,n) end,
-    read_turbine_rpm     = function(t,c) return turbine_control.read_turbine_rpm(ctx,t,c) end,
-    read_turbine_flow    = function(t,c) return turbine_control.read_turbine_flow(ctx,t,c) end,
     last_status_snapshot = last_status_snapshot,
     monitor_ui           = monitor_ui,
     status_snapshot      = status_snapshot_lib,
@@ -527,12 +524,11 @@ local function update_monitor()
     configured_turbines = runtime_config.configured_turbines,
     binding = binding,
     build_health_payload = build_rt_health_payload,
-    read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
-    read_turbine_flow = function(t, c) return turbine_control.read_turbine_flow(ctx, t, c) end,
+    -- Turbinen und Reaktoren liest der Schirm nur ueber die Adapter, wie
+    -- der Regler (siehe monitor_ui.build_turbine_status).
     reactor_adapter = adapters.reactor,
     turbine_adapter = adapters.turbine,
     log_prefix = CONFIG.LOG_PREFIX,
-    get_device_caps = function(k, n) return turbine_control.get_device_caps(ctx, k, n) end,
     get_available_steam = function() return reactor_control.get_available_steam(ctx) end,
     last_status_snapshot = last_status_snapshot,
     constants            = constants,
@@ -565,12 +561,12 @@ local function update_monitor()
   -- Was der Regler je Turbine ZULETZT ENTSCHIEDEN hat, nach Peripheriename.
   --
   -- Die Turbinenliste des Schirms entsteht in monitor_ui.build_turbine_status()
-  -- aus einem EIGENEN Leseweg (peripheral.wrap), voellig unabhaengig von der
-  -- Regelkette. Das ist praktisch -- die Anzeige lebt auch dann, wenn ein
-  -- Adapter klemmt -- hat aber einen Preis: steht die Regelung still, laufen
-  -- Drehzahl und Durchfluss auf dem Schirm munter weiter, und von aussen ist
-  -- nicht zu sehen, dass niemand mehr stellt. Genau so wurde auf node-102
-  -- eine festhaengende Node stundenlang fuer gesund gehalten.
+  -- aus einem eigenen LESEAUFRUF, unabhaengig von der Regelkette -- seit
+  -- v815 ueber denselben Adapter wie der Regler (bis v814 zusaetzlich ueber
+  -- peripheral.wrap und den Faehigkeiten-Cache). Steht die Regelung still,
+  -- laufen Drehzahl und Durchfluss auf dem Schirm trotzdem weiter, und von
+  -- aussen ist nicht zu sehen, dass niemand mehr stellt. Genau so wurde auf
+  -- node-102 eine festhaengende Node stundenlang fuer gesund gehalten.
   --
   -- Der Grund der letzten Entscheidung schliesst diese Luecke: er sagt, was
   -- der Regler WILL, nicht was die Hardware gerade tut.

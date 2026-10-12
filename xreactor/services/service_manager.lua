@@ -52,7 +52,7 @@ local function ensure_state(self, service)
   if state then
     return state
   end
-  state = { retries = 0, next_retry = 0, initialized = false }
+  state = { retries = 0, next_retry = 0, initialized = false, total_failures = 0, discards = 0 }
   self.service_state[service] = state
   return state
 end
@@ -62,21 +62,67 @@ local function clear_retry(state)
   state.next_retry = 0
 end
 
+-- Abgeleiteten Zustand verwerfen, wenn ein Dienst wiederholt scheitert.
+--
+-- Bis v814 wiederholte schedule_retry() einen scheiternden tick() nur, mit
+-- Backoff -- verworfen wurde dabei nie etwas. Scheiterte ein Dienst an
+-- einem Zustand, den er sich selbst abgeleitet hatte (ein Cache, ein
+-- gemerktes Handle), scheiterte er daran bis zum Neustart, alle paar
+-- Sekunden aufs Neue.
+--
+-- Der Manager selbst haelt keine Handles; er weiss nicht, was ein Dienst
+-- sich merkt. Deshalb fragt er den Dienst: wer
+--   service:discard_derived_state(stage, err, failures_in_row)
+-- anbietet, bekommt nach jeweils `discard_after_failures` (Vorgabe 3)
+-- Fehlschlaegen von tick() in Folge die Gelegenheit, ihn zu verwerfen. Der
+-- naechste Versuch beginnt dann frisch. Dienste ohne die Methode verhalten
+-- sich wie bisher. init() wird bewusst NICHT neu gestartet: comms_service
+-- baut darin Netzwerk und Comms-Objekt neu, auf die andere Teile der Node
+-- Verweise halten -- das waere kein Verwerfen, sondern ein Abriss.
+local function maybe_discard_derived_state(self, service, index, state, stage, err)
+  if stage ~= "tick" then return end
+  if type(service) ~= "table" or type(service.discard_derived_state) ~= "function" then return end
+  local every = tonumber(self.discard_after_failures) or 0
+  if every <= 0 or (state.retries % every) ~= 0 then return end
+  local ok, discard_err = pcall(service.discard_derived_state, service, stage, err, state.retries)
+  if not ok then
+    rethrow_terminate(discard_err)
+    utils.log(
+      self.log_prefix,
+      string.format("Service %s: verwerfen des abgeleiteten Zustands fehlgeschlagen: %s",
+        service_name(service, index), tostring(discard_err)),
+      "WARN"
+    )
+    return
+  end
+  state.discards = (state.discards or 0) + 1
+  utils.log(
+    self.log_prefix,
+    string.format("Service %s: %d Fehler in Folge -- abgeleiteten Zustand verworfen (%d. Mal)",
+      service_name(service, index), state.retries, state.discards),
+    "WARN"
+  )
+end
+
 local function schedule_retry(self, service, index, state, stage, err)
   state.retries = (state.retries or 0) + 1
+  state.total_failures = (state.total_failures or 0) + 1
   local delay_ms = backoff_delay_ms(self, state.retries)
   state.next_retry = now_ms() + delay_ms
+  -- Reihenfolge der Argumente: bis v814 standen Stufe und Name vertauscht
+  -- ("Service tick failed (DISCOVERY)").
   utils.log(
     self.log_prefix,
     string.format(
       "Service %s failed (%s); retry in %.2fs: %s",
-      tostring(stage),
       service_name(service, index),
+      tostring(stage),
       delay_ms / 1000,
       tostring(err)
     ),
     "ERROR"
   )
+  maybe_discard_derived_state(self, service, index, state, stage, err)
 end
 
 function manager.new(opts)
@@ -90,6 +136,8 @@ function manager.new(opts)
     service_state = {},
     service_tick_warn_ms = opts.service_tick_warn_ms or 1200,
     manager_tick_warn_ms = opts.manager_tick_warn_ms or 1800,
+    -- Siehe maybe_discard_derived_state(); 0 schaltet es ab.
+    discard_after_failures = opts.discard_after_failures or 3,
     inter_service_hook = opts.inter_service_hook
   }
   return setmetatable(self, { __index = manager })

@@ -111,7 +111,7 @@ local function render(mon, model)
   ui.text(mon, summary.x, summary.y + 7, widgets.fit("Resources: " .. tostring(model.resource_summary or "-"), summary.w), colors.get("muted"), colors.get("background"))
   if (model.matrix_count or 0) == 1 and model.matrices and model.matrices[1] then
     local m = model.matrices[1]
-    ui.text(mon, summary.x, summary.y + 8, widgets.fit(string.format("Single Matrix %s %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w), colors.get("LIMITED"), colors.get("background"))
+    ui.text(mon, summary.x, summary.y + 8, widgets.fit(string.format("Single Matrix %s %s | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent and string.format("%.1f%%", m.percent) or "n/a", m.input or 0, m.output or 0), summary.w), colors.get("LIMITED"), colors.get("background"))
   end
 
   local content_y = 2 + summary_h + 1
@@ -131,7 +131,8 @@ local function render(mon, model)
     local m = ordered_matrices[i]
     widgets.compact_status_row(mon, matrix.x, my, {
       tostring(m.id or m.label or "M"),
-      string.format("%.1f", m.percent or 0),
+      -- nil: Kapazitaet der Matrix unbekannt (siehe ui_controller.lua).
+      m.percent and string.format("%.1f", m.percent) or "n/a",
       string.format("%.1f", m.input or 0),
       string.format("%.1f", m.output or 0),
       tostring(m.status or "OK")
