@@ -64,6 +64,9 @@ function comms_service.new(opts)
     on_heartbeat = opts.on_heartbeat,
     on_alert = opts.on_alert,
     on_error = opts.on_error,
+    -- Optional: von welchen Nachrichten diese Rolle den INHALT braucht
+    -- (core/comms.lua, comms.init / receive_peer_only). Ohne: alle.
+    payload_filter = opts.payload_filter,
     network = nil,
     comms = nil,
     rx_diag_seen = {},
@@ -154,7 +157,8 @@ function comms_service:init()
     label = self.label,
     proto_ver = constants.proto_ver,
     log_prefix = self.log_prefix,
-    config = self.config.comms or {}
+    config = self.config.comms or {},
+    payload_filter = self.payload_filter
   })
 
   self.comms.on(constants.message_types.STATUS, function(message)

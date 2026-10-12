@@ -128,11 +128,14 @@ function protocol.error(sender_id, role, message)
   return base_message(constants.message_types.ERROR, sender_id, role, { message = message })
 end
 
-function protocol.sanitize_message(message)
+-- Der Umschlag einer Nachricht OHNE Nutzlast: Absender, Ziel, Typ, Rolle,
+-- Name, Zeit, Protokoll. Fuer Empfaenger, die von einer Nachricht nur wissen
+-- muessen, dass ihr Absender lebt (core/comms.lua, payload_filter) -- die
+-- Nutzlast wird dabei nicht kopiert (eine RT-Statusmeldung traegt hunderte
+-- Felder). Felder identisch zu sanitize_message(), nur payload fehlt.
+function protocol.sanitize_envelope(message)
   if type(message) ~= "table" then return nil end
   local sender = normalize_remote_id(message.sender_id or message.src)
-  local payload = nil
-  if message.payload ~= nil then payload = sanitize_value(message.payload, 0) end
   return {
     type = message.type,
     message_id = message.message_id,
@@ -147,8 +150,14 @@ function protocol.sanitize_message(message)
     proto_ver = normalize_proto(message.proto_ver),
     ack_for = message.ack_for,
     phase = message.phase,
-    payload = payload,
   }
+end
+
+function protocol.sanitize_message(message)
+  local envelope = protocol.sanitize_envelope(message)
+  if not envelope then return nil end
+  if message.payload ~= nil then envelope.payload = sanitize_value(message.payload, 0) end
+  return envelope
 end
 
 function protocol.validateMessage(message)

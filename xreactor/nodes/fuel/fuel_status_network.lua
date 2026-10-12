@@ -215,6 +215,39 @@ end
 -- hier fest constants.channels.STATUS -- eine Anlage mit abweichend
 -- konfigurierten Kanaelen haette die RT-Broadcasts stillschweigend nie
 -- mitgehoert und ausschliesslich am (langsameren) Master-Relais gehangen.
+-- Welche Funkmeldungen FUEL INHALTLICH braucht (core/comms.lua,
+-- payload_filter). FUEL hoert -- wie jede Node -- jede Meldung jeder
+-- anderen Node mit. Bis v819 kopierte und verarbeitete comms jede davon
+-- vollstaendig, auch die grossen RT-Statusmeldungen, die gar nicht fuer FUEL
+-- sind. Auf einer grossen Anlage (rund 40 Nodes, alle auf EINEM Lua-Thread
+-- des Servers) reichte die Rechenzeit dann nicht mehr: die Ereignis-
+-- Warteschlange (256) lief ueber, CC:Tweaked verwarf Meldungen still, und
+-- auf der Seite VENTILE blieben immer dieselben VALVE-Nodes "nie gehoert".
+--
+-- Inhalt noetig (voller Weg) fuer:
+--   * alles von MASTER (Alarme, Kommandos, Fuellstand-Relais)
+--   * alles mit Ziel (dst) -- Kommandos, Quittungen, gezielte Meldungen
+--   * jeden Typ ausser Heartbeat/Status/Hello/Alarm (Fehler, Quittungen, ...)
+-- Nur der Absender zaehlt (wer lebt -- Ventil-Erreichbarkeit, MASTER-
+-- Verbindung) bei Heartbeat/Status/Hello/Alarm der uebrigen Nodes. Die
+-- RT-Fuellstaende liest der Mithoerer unten direkt vom Kanal, nicht ueber
+-- comms; FUELs eigener comms-Handler (nodes/fuel/main.lua, on_message)
+-- wertet ohnehin nur MASTER und PROTO_MISMATCH-Fehler aus.
+function M.make_payload_filter(constants)
+  local types = constants.message_types
+  local roles = constants.roles
+  local peer_only = {
+    [types.HEARTBEAT] = true, [types.STATUS] = true,
+    [types.HELLO] = true, [types.ALERT] = true,
+  }
+  return function(raw)
+    if raw.role == roles.MASTER then return true end
+    if raw.dst ~= nil then return true end
+    if not peer_only[raw.type] then return true end
+    return false
+  end
+end
+
 function M.make_overhear_service(cache, constants, status_channel)
   local channel = tonumber(status_channel) or constants.channels.STATUS
   return {
@@ -227,6 +260,12 @@ function M.make_overhear_service(cache, constants, status_channel)
       if event[3] ~= channel then return end
       local raw = event[5]
       if type(raw) ~= "table" then return end
+      -- Nur RT-Statusmeldungen interessieren -- das VOR dem Pruefen und
+      -- Kopieren entscheiden. Bis v819 wurde jede Statusmeldung jeder Node
+      -- (29 Ventile, ENERGY, MASTER, ...) erst komplett kopiert und dann
+      -- verworfen. sanitize_message() reicht type und role unveraendert
+      -- durch; die Pruefung unten bleibt fuer die RT-Meldungen bestehen.
+      if raw.type ~= constants.message_types.STATUS or raw.role ~= constants.roles.RT_NODE then return end
 
       -- This listener runs outside comms_service. Validate the original
       -- envelope before sanitizing it: sanitize_message supplies defaults and

@@ -132,7 +132,12 @@ function M.collect_valve_page(ctx, now)
   if not (rs and type(rs.get_valve_status) == "function") then return nil end
   local ok, status = pcall(rs.get_valve_status, rs)
   if not ok then return nil end
-  return valve_page.collect(status, now or os.epoch("utc"))
+  local loop = nil
+  if type(ctx.loop_stats) == "function" then
+    local ok_loop, value = pcall(ctx.loop_stats)
+    if ok_loop then loop = value end
+  end
+  return valve_page.collect(status, now or os.epoch("utc"), loop)
 end
 
 -- All FUEL pages share the same page-navigation controls. The old

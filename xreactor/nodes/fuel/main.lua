@@ -427,8 +427,10 @@ local function fuel_ui_ctx()
     master_peer_state = master_peer_state, registry = registry, config = config,
     master_alerts = master_alerts, support_ui_pages = support_ui_pages,
     ui_router = core_ui_router, fuel_ui = fuel_ui, get_router_ui = get_router_ui,
-    -- Seite VENTILE (nodes/fuel/valve_page.lua) liest den Ventil-Router.
+    -- Seite VENTILE (nodes/fuel/valve_page.lua) liest den Ventil-Router
+    -- und die Zaehler verlorener Timer (Ueberlast-Anzeige).
     get_rs_router = get_rs_router,
+    loop_stats = support_runtime.loop_stats,
     ui = ui, colors = colors, keys = keys,
     -- Garantiert, dass ein Renderfehler tatsaechlich geloggt wird -- die
     -- Fallback-Seite verspricht sonst "Details im LOG_COLLECTOR-Export"
@@ -510,6 +512,9 @@ local function init()
   slow_services = service_manager.new({ log_prefix = "FUEL-BG" })
   comms = comms_service.new({
     config = config, log_prefix = "FUEL", on_command = handle_command,
+    -- Vom Heartbeat/Status der uebrigen Nodes nur den Absender -- siehe
+    -- fuel_status_network.make_payload_filter().
+    payload_filter = fuel_status_network.make_payload_filter(constants),
     on_message = function(message)
       if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then devices.proto_mismatch = true; return end
       if message.role == constants.roles.MASTER then

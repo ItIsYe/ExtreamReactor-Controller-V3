@@ -48,10 +48,12 @@ local state = {
     retries = 0,
     dedupe_hits = 0,
     timeouts = 0,
+    peer_only = 0,
     last_timeout_ts = nil,
     last_timeout_id = nil
   },
-  timeouts = {}
+  timeouts = {},
+  payload_filter = nil
 }
 
 local function now_ms()
@@ -83,10 +85,12 @@ local function reset_runtime_state()
     retries = 0,
     dedupe_hits = 0,
     timeouts = 0,
+    peer_only = 0,
     last_timeout_ts = nil,
     last_timeout_id = nil
   }
   state.timeouts = {}
+  state.payload_filter = nil
 end
 
 
@@ -659,6 +663,9 @@ function comms.init(opts)
   state.log_prefix = opts.log_prefix or "COMMS"
   state.logger = opts.logger
   state.drop_simulation = opts.drop_simulation or state.config.drop_simulation
+  -- Optional, je Rolle: function(raw) -> false, wenn von dieser Nachricht nur
+  -- der Absender zaehlt (siehe receive_peer_only()). Ohne: alles wie bisher.
+  state.payload_filter = type(opts.payload_filter) == "function" and opts.payload_filter or nil
   state.initialized = true
   return comms
 end
@@ -704,6 +711,29 @@ function comms.receive(raw_message)
   table.insert(state.incoming, raw_message)
 end
 
+-- Nur Lebenszeichen: Jede Node hoert JEDE Funkmeldung jeder anderen Node
+-- (Rundfunk), und bis v819 lief jede davon den vollen Weg -- Nutzlast
+-- komplett kopieren (protocol.sanitize_message), pruefen, an alle Handler
+-- reichen, Duplikat-Buchfuehrung. Eine Rolle, die vom Heartbeat/Status der
+-- anderen Nodes nur wissen muss, DASS sie leben, kann per payload_filter
+-- (comms.init) sagen, welche Nachrichten sie wirklich braucht. Fuer den
+-- Rest wird nur der Umschlag geprueft (dieselbe Pruefung wie im vollen
+-- Weg) und der Absender in der Peer-Tabelle aktualisiert -- genau das, was
+-- handle_message() bei einer Nachricht ohne Interesse ohnehin als einziges
+-- bewirkt haette. Ungueltiges laeuft weiter den vollen Weg (Log,
+-- PROTO_MISMATCH). Ein Filter, der fehlschlaegt oder etwas anderes als
+-- false liefert, heisst: voller Weg.
+local function receive_peer_only(raw)
+  local filter = state.payload_filter
+  if not filter or type(raw) ~= "table" then return false end
+  local ok_filter, wanted = pcall(filter, raw)
+  if not ok_filter or wanted ~= false then return false end
+  if protocol.validate(raw) ~= true then return false end
+  update_peer(protocol.sanitize_envelope(raw))
+  state.metrics.peer_only = state.metrics.peer_only + 1
+  return true
+end
+
 function comms.tick()
   if not state.initialized then return end
   prune_dedupe()
@@ -713,6 +743,7 @@ function comms.tick()
   local queue = state.incoming
   state.incoming = {}
   for _, raw in ipairs(queue) do
+    if receive_peer_only(raw) then goto next_raw end
     local message = protocol.sanitize_message(raw)
     local ok, err = protocol.validate(message)
     if not ok then
@@ -740,6 +771,7 @@ function comms.tick()
     else
       handle_message(message)
     end
+    ::next_raw::
   end
 
   -- Evaluate peer timeout transitions after ingesting fresh messages queued

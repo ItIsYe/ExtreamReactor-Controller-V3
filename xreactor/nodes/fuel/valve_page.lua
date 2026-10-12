@@ -87,7 +87,12 @@ end
 -- Rein: aus get_valve_status() die fertigen Anzeigezeilen. Nur Text und
 -- Farbschluessel -- das Ergebnis ist zugleich der Vergleichsstand fuer das
 -- Neuzeichnen (siehe nodes/fuel/monitor_ui.lua).
-function M.collect(valve_status, now_ms)
+--
+-- loop (optional): nodes/support/runtime.lua's loop_stats() von FUEL. Gehen
+-- dort Timer verloren, lief FUELs Ereignis-Warteschlange (256) ueber --
+-- dann verwirft CC:Tweaked auch Funkmeldungen still, und Ventile erscheinen
+-- "nie gehoert", obwohl sie senden.
+function M.collect(valve_status, now_ms, loop)
   local rows = {}
   local counts = { total = 0, online = 0, stale = 0, offline = 0, unknown = 0, waiting = 0, ack_error = 0 }
   local first_error = nil
@@ -136,7 +141,11 @@ function M.collect(valve_status, now_ms)
     worst = "LIMITED"
   end
   if counts.total == 0 then worst = "LIMITED" end
-  return { rows = rows, counts = counts, worst = worst, first_error = first_error }
+  local load = nil
+  if type(loop) == "table" then
+    load = { lost = tonumber(loop.lost) or 0, late = tonumber(loop.late) or 0 }
+  end
+  return { rows = rows, counts = counts, worst = worst, first_error = first_error, load = load }
 end
 
 local function write_line(mon, y, text, key)
@@ -215,7 +224,14 @@ function M.new(_opts)
     mux.banner(mon, 2, 4, CONTENT_W, mux.fit(summary, CONTENT_W - 2), view.worst or "LIMITED",
       view.worst == "OK" and "ok" or "warning")
 
-    blank(mon, 5)
+    if view.load then
+      local lost = view.load.lost
+      local text = string.format("FUEL-LAST: Timer verloren %d, verspaetet %d -- %s", lost, view.load.late,
+        lost > 0 and "UEBERLAST, Meldungen verloren" or "keine Ueberlast erkannt")
+      write_line(mon, 5, text, lost > 0 and "WARNING" or "muted")
+    else
+      blank(mon, 5)
+    end
     draw_legend(mon, 6)
     mux.table_header(mon, 2, 9, CONTENT_W, {
       { label = "ZUSTAND", width = COL.state.w }, { label = "NAME", width = COL.name.w },

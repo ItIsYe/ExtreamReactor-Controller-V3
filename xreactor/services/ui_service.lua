@@ -41,6 +41,8 @@ function ui.new(opts)
     on_error = opts.on_error,
     last_draw = 0,
     last_force_draw = 0,
+    -- Letzte passive Pruefung ohne Aenderung (siehe tick()).
+    last_check = 0,
     last_snapshot = nil,
     -- UI muss auf monitor_touch/mouse_click/key sofort reagieren, meldet
     -- sich daher immer fuer Event-Ticks an.
@@ -63,7 +65,15 @@ function ui:tick(_, event)
     or event_kind == "key" or event_kind == "char"
   local layout_change = event_kind == "monitor_resize" or event_kind == "term_resize"
   local immediate = interactive or layout_change
-  local due = ts - self.last_draw >= self.interval * 1000
+  -- Die Drossel zaehlt ab dem letzten Zeichnen ODER der letzten Pruefung,
+  -- die nichts Neues fand. Bis v819 zaehlte sie nur ab dem Zeichnen: blieb
+  -- der Stand gleich, war die Pruefung danach bei JEDEM weiteren Ereignis
+  -- wieder faellig -- bis zum erzwungenen Neuzeichnen nach force_interval.
+  -- Eine Node hoert jede Funkmeldung jeder anderen Node; FUEL baute so in
+  -- einer Messung 160-mal in 30 s das komplette Bildschirm-Modell (samt
+  -- Kopie und Vergleich des ganzen Status) statt rund 30-mal. Genau diese
+  -- Rechenzeit fehlte beim Abholen der Funkmeldungen.
+  local due = ts - math.max(self.last_draw, self.last_check or 0) >= self.interval * 1000
   -- Interaktive Events (Touch/Taste) umgehen die Zeit-Drossel fuer sofortige
   -- Reaktion, waehrend passive Netzwerk-Events (modem_message) weiterhin
   -- gedrosselt bleiben -- sonst blieben die Footer-Touch-Zonen nach einem
@@ -88,6 +98,7 @@ function ui:tick(_, event)
     local current_snapshot = model and model.snapshot
     local snapshot_changed = not deep_equal(current_snapshot, self.last_snapshot)
     if not immediate and not snapshot_changed and not force_due then
+      self.last_check = ts
       return
     end
     self.last_draw = ts
@@ -108,6 +119,7 @@ function ui:tick(_, event)
     snapshot_changed = not deep_equal(current_snapshot, self.last_snapshot)
   end
   if not immediate and not snapshot_changed and not force_due then
+    self.last_check = ts
     return
   end
   self.last_draw = ts
