@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-12 | beta | manifest-v816 | HEAD `b73012bd`**
+**Stand: 2026-10-12 | beta | manifest-v817 | HEAD `6a3546e7`**
 
 ---
 
@@ -14,8 +14,8 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `b73012bd` |
-| Fassung | `manifest-v816` / `beta-v816`, Prüfsumme `79274ff2` (aus `xreactor/release.lua`, nicht gezählt) |
+| HEAD | `6a3546e7` |
+| Fassung | `manifest-v817` / `beta-v817`, Prüfsumme `dae7f071` (aus `xreactor/release.lua`, nicht gezählt) |
 | Tests | 407 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
@@ -43,8 +43,9 @@ Punkte aus 2. Aber vorsichtig, und wenn es mehr Sinn macht, Blöcke komplett
 neu zu schreiben, als drin rumzudoktern, mache das"** — umgesetzt in v815
 (siehe G). Ebenfalls am 2026-10-12: **„Mach Punkt 2 und streich Punkt 4"**
 — FUEL-Routen auf globale Reaktor-Kennung, umgesetzt in v816 (siehe H);
-MASTER-Ausfall-Befunde A/B und die P2-Liste des Audits gestrichen. Die
-Selbstheilung (B) gehört nicht dazu, sie ist ein eigenes Vorhaben. Alles
+MASTER-Ausfall-Befunde A/B und die P2-Liste des Audits gestrichen. Danach:
+**„Mach den Rest von Stufe 1"** — Selbstheilung Ebene 1, umgesetzt in v817
+(siehe I). Ebene 2 und 3 der Selbstheilung (B) sind NICHT freigegeben. Alles
 andere braucht weiter eine ausdrückliche Freigabe, bevor Code angefasst wird. Der Betreiber kann derzeit **nicht im Spiel testen**
 („Bau weiter dran ich kan gead keine tests machen").
 
@@ -247,6 +248,7 @@ Discovery, mit der eingestellten Skala. Test:
    `warn_once`/`shouted` zurücksetzbar machen, sonst ist die *nächste*
    Störung stumm. Vorbild: `adapters/turbine.lua:176-195`. Risiko niedrig.
    **Diese Ebene behebt den Update-Quiesce, nicht das Feldbild** (siehe A).
+   **Erledigt mit v814–v817** (siehe I).
 2. **Ein Selbstprüf-Dienst, der nach der Wirkung fragt**, nicht nach der
    Anwesenheit: „habe ich für jedes gebundene Gerät einen frischen Messwert,
    und habe ich in den letzten N Sekunden überhaupt etwas gestellt?"
@@ -282,8 +284,8 @@ dabei aber **nie** das Handle oder den abgeleiteten Zustand, an dem es
 scheitert. **Seit v815** gibt es dafür einen Haken (siehe G) — wirksam nur
 für Dienste, die `discard_derived_state` anbieten (bisher `MATRIX_SAMPLE`).
 
-**Reihenfolge: Betrieb beobachten (TIMER LOST, siehe A) → Ebene 1 →
-Ebene 2 → Ebene 3.** Das Chunk-Modell steht
+**Reihenfolge: Betrieb beobachten (TIMER LOST, siehe A) → Ebene 1 (erledigt,
+v817) → Ebene 2 → Ebene 3.** Das Chunk-Modell steht
 (`tests/plant_chunk_reload_test.lua`); jede Ebene wird dort nachgewiesen.
 
 ### C) Grenzen der Harness (Konzeptpunkt A)
@@ -385,11 +387,8 @@ richtigen Grund scheitert.
    `turbine_control.read_turbine_rpm/read_turbine_flow` und ihre
    Durchreichungen in `main.lua`/`status_snapshot.lua`.
    Test: `tests/rt_monitor_single_read_path_test.lua`.
-   **Nachgelagert offen:** `ctx.capability_cache` und `module.caps` /
-   `module.peripheral` (`discovery_runtime.lua`) werden jetzt nur noch
-   geschrieben, von niemandem mehr gelesen — Kandidat zum Entfernen
-   (Selbstheilung Ebene 1), bewusst nicht angefasst, weil es die Discovery
-   betrifft.
+   `ctx.capability_cache` und `module.caps`/`module.peripheral` wurden
+   danach nur noch geschrieben — mit v817 entfernt (siehe I).
 2. **ENERGY: unbekannte Matrix-Kapazität ist nicht „100 % voll".**
    `matrix_snapshot_runtime.rebuild_snapshot` setzte `capacity = stored`,
    solange `getCapacity` nie gelesen war. Folgen, nachgemessen: MASTER
@@ -468,6 +467,44 @@ in `fuel_routes.lua`, FUEL kennt den Füllstand des **richtigen** Reaktors,
 die nicht zuordenbare Route ist gemeldet. Am Stand v815 scheitert er an der
 Umstellung.
 
+### I) Umgesetzt am 2026-10-12 (v817): Selbstheilung Ebene 1
+
+Freigabe: „Mach den Rest von Stufe 1". Ebene 1 heißt: abgeleiteter Zustand
+darf nie dauerhaft sein (siehe B). Vorher erledigt: Turbinen-Adapter merkt
+sich unvollständige Methodenlisten nicht (vor v812), Update-Quiesce
+namensbasiert (v814), Schirm mit einem Leseweg (v815), Verwerf-Haken im
+`service_manager` (v815).
+
+1. **Keine dauerhaften Geräte-Handles mehr im RT.** Die Discovery legte je
+   gebundenem Namen ein wrap-Handle (`ctx.peripherals`) und einen
+   Fähigkeiten-Eintrag (`ctx.capability_cache`) an und erneuerte beide nie.
+   Beides ist raus, samt `module.caps`/`module.peripheral`,
+   `get_device_caps`, `build_capabilities`, `clamp_turbine_flow`,
+   `has_reactor_rod_write_path` (kein Leser). `discovery_runtime.cache()`
+   heißt jetzt `normalize_bindings()` und prüft nur noch die Namen nach
+   Geräteart. Einziger verbliebener Leser war die Dampfmessung ohne
+   externen Tank (`reactor_control.read_reactor_steam_amount`) — die liest
+   jetzt jeden Reaktor frisch ein; dem alten Handle fehlte nach halbem
+   Laden `getHotFluidAmount` für immer. Test:
+   `tests/rt_reactor_steam_fresh_read_test.lua`; umgeschrieben:
+   `rt_peripherals_devices_isolation_test.lua`, `rt_discovery_runtime_test.lua`;
+   entfallen mit ihren Funktionen: `rt_get_device_caps_kind_normalization_test.lua`,
+   `rt_capability_cache_targeted_invalidation_test.lua`.
+2. **Warnungen einmal je Störung.** `core/once_log.lua` (neu): gemeldet wird
+   beim Eintritt; ein erfolgreicher Aufruf meldet die Erholung, die nächste
+   Störung wird wieder gemeldet — höchstens einmal je Minute (Flattern).
+   Umgestellt: `adapters/turbine.lua` (Aufrufe, Typfehler, Fähigkeiten,
+   Schirm-Meldungen), `reactor.lua` (Aufrufe, Typfehler, Stäbe lesen und
+   stellen getrennt, `setActive`), `energy_storage.lua`,
+   `induction_matrix.lua`, `logistical_sorter.lua` (getMethods),
+   `monitor.lua` (Einbinden, Aufrufe). Hinweise zur Konfiguration bleiben
+   einmalig. Eine dauerhaft fehlende Methode ist **eine** Störung, kein
+   Minutentakt. Test: `tests/once_log_rearm_test.lua`.
+3. **Geprüft, nichts zu tun:** der Reaktor-Adapter fragt die Methodenliste
+   je Aufruf frisch; ENERGY prüft die Matrix-Topologie spätestens alle 5 min
+   neu (`matrix_topology_cache.forced_rescan_interval_s`); WATER bindet die
+   Tanks bei jeder Discovery (15 s) neu ein.
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -537,9 +574,9 @@ Umstellung.
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v816? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v817? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v816 (Pruefsumme 79274ff2)`.
+   - Startzeile jedes Knotens: `beta-v817 (Pruefsumme dae7f071)`.
    - FUEL-Log nach dem Start: „FUEL-Route '…': Reaktor-Kennung … -> …
      (global, gespeichert)" für alte Routen; Meldungen „… im ROUTER neu
      einlernen" für Routen, die sich nicht zuordnen lassen — die dann im
@@ -551,10 +588,13 @@ Umstellung.
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
      „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v816 / Pruefsumme …".
-2. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
-   Für Ebene 1 bereit: der nur noch geschriebene Fähigkeiten-Cache der
-   RT-Discovery (G1), der Verwerf-Haken im `service_manager` (G3).
+     „Dateipruefung ok: N Dateien passen zu manifest-v817 / Pruefsumme …".
+   - Log nach einem Geräteausfall: dieselbe Warnung („Turbine call failed …")
+     kommt nach einer Erholung beim NÄCHSTEN Ausfall wieder (seit v817),
+     höchstens einmal je Minute.
+2. Selbstheilung Ebene 2 → 3 (Ebene 1 erledigt, siehe I), Ebene 3 nur auf
+   ausdrückliche Ansage. Sinnvoll erst, wenn sich im Betrieb zeigt, dass
+   Knoten nach dem Chunk-Laden trotz v812–v817 noch hängen.
 3. `beta` → `main`, sobald alles läuft (Betreiber).
 
 Gestrichen am 2026-10-12 (Betreiber): das am 2026-10-04 angekündigte
