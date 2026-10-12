@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-12 | beta | manifest-v815 | HEAD `212ac95f`**
+**Stand: 2026-10-12 | beta | manifest-v816 | HEAD `b73012bd`**
 
 ---
 
@@ -14,16 +14,24 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `212ac95f` |
-| Fassung | `manifest-v815` / `beta-v815`, Prüfsumme `b8c424e8` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 406 Lua + 45 Python, grün |
+| HEAD | `b73012bd` |
+| Fassung | `manifest-v816` / `beta-v816`, Prüfsumme `79274ff2` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 407 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
 
-### ⚠️ Stehende Vorgabe des Betreibers, am Sitzungsende noch in Kraft
+### ⚠️ Stehende Vorgaben des Betreibers, am Sitzungsende noch in Kraft
 
 > „achtung nichts umsetzen nur prüfen und iden konzept geben"
+
+> „gehe wie eben auch vorsichtig vor und wenn es sinnvoll ist, Codeblöcke
+> oder Dateien neu zu schreiben als drin rumzudoktern, mach das. **Das gilt
+> ab jetzt auch immer so.**" (2026-10-12)
+
+Heißt: freigegebene Arbeit vorsichtig umsetzen; wo ein Block oder eine
+Datei durch Flicken unübersichtlicher würde, ihn ganz neu schreiben (so in
+v815 `monitor_ui.build_turbine_status` und `master/ui/updates.lua`).
 
 Seither wird nur umgesetzt, was der Betreiber **einzeln freigibt**.
 Freigegeben und umgesetzt (Folgesitzungen 2026-10-04/05): der Chunk-Test,
@@ -33,9 +41,11 @@ Schleife (v813, ohne die Heartbeat-Logik anzufassen). Am 2026-10-08:
 (siehe A und F), dazu drei Entscheidungen (F). Am 2026-10-12: **„mach die
 Punkte aus 2. Aber vorsichtig, und wenn es mehr Sinn macht, Blöcke komplett
 neu zu schreiben, als drin rumzudoktern, mache das"** — umgesetzt in v815
-(siehe G). Die Selbstheilung (B) gehört nicht dazu, sie ist ein eigenes
-Vorhaben. Alles andere braucht weiter
-eine ausdrückliche Freigabe, bevor Code angefasst wird. Der Betreiber kann derzeit **nicht im Spiel testen**
+(siehe G). Ebenfalls am 2026-10-12: **„Mach Punkt 2 und streich Punkt 4"**
+— FUEL-Routen auf globale Reaktor-Kennung, umgesetzt in v816 (siehe H);
+MASTER-Ausfall-Befunde A/B und die P2-Liste des Audits gestrichen. Die
+Selbstheilung (B) gehört nicht dazu, sie ist ein eigenes Vorhaben. Alles
+andere braucht weiter eine ausdrückliche Freigabe, bevor Code angefasst wird. Der Betreiber kann derzeit **nicht im Spiel testen**
 („Bau weiter dran ich kan gead keine tests machen").
 
 ## Was in dieser Sitzung gemacht wurde (11 Commits, `670bb1c0` … `f331e450`)
@@ -299,7 +309,7 @@ kollidieren kurze Reaktor-Kennungen über RT-Knoten hinweg: 16 globale
 Kennungen, aber nur 2 kurze. `master/fuel_relay.lua` veröffentlicht global
 plus kurzen Altnamen und **verwirft den Alias bei Kollision**.
 Folge: `fuel_routes.lua` muss die **globale** Kennung tragen
-(`node_id:local_id`).
+(`node_id:local_id`). **Umgesetzt in v816 (siehe H).**
 
 ### E) Versionierung
 
@@ -421,6 +431,43 @@ liefen dort also gar nicht, beide Tests bestanden immer. Jetzt mit der
 Konstante; ein Gegenversuch (Unterdrückung entfernt) lässt den Test
 scheitern.
 
+### H) Umgesetzt am 2026-10-12 (v816): FUEL-Routen auf globale Kennung
+
+Lage vorher: neu eingelernte Routen trugen die globale Kennung schon
+(`reactor_targets.lua` nimmt `global_reactor_id`). Ältere Routen mit
+**kurzer** Kennung funktionierten nur, solange diese anlagenweit eindeutig
+war — MASTER (`fuel_relay.lua`) und das Mithören (`fuel_status_network.lua`)
+verwerfen den kurzen Alias bei einer Kollision. Bei 16 Reaktoren und 2
+kurzen Kennungen hieß das: keine Füllstände, keine Lieferung, keine Meldung.
+
+Neu: `nodes/fuel/route_identity.lua` und ein Hintergrunddienst
+`route_id_upgrade` in `nodes/fuel/main.lua` (alle 30 s):
+
+- umgestellt wird nur, wenn der **Routen-Name** unter den Reaktoren mit
+  dieser kurzen Kennung **genau einen** trifft (Groß/klein egal). Die
+  Kennung allein reicht nicht — „gerade eindeutig" kann heißen, dass der
+  andere RT-Knoten kurz schweigt.
+- nicht umgestellt, sondern einmal gemeldet („… im ROUTER neu einlernen" /
+  „… alte Route löschen"): mehrdeutig, falscher Name, ohne Namen, Reaktor
+  schon unter globaler Kennung eingelernt. Unbekannte Kennungen (RT aus)
+  bleiben still.
+- wartet, solange im Router bearbeitet wird (`router_ui:is_editing()`) oder
+  eine Lieferung läuft (`logistics_router:is_delivering()`).
+- schreibt über denselben atomaren Weg wie SPEICHERN
+  (`router_ui.save_routes`), **erst die Datei, dann die Laufzeit-Config**;
+  scheitert das Schreiben, bleibt beides und es folgt 10 min Pause. Die
+  Abklingzeit seit der letzten Lieferung zieht mit um
+  (`logistics_router:rekey_reactor`).
+- Beifang: `router_ui.copy_reactor` verlor das alte Feld `reactor_port` —
+  SPEICHERN lehnte dann die ganze Liste ab.
+
+Test: `tests/fuel_route_global_id_upgrade_test.lua` — Regeln, Schreibweg
+und Ende zu Ende mit zwei echt gebooteten RT-Knoten gleicher kurzer
+Kennung, MASTER und FUEL: die alte Route steht danach mit globaler Kennung
+in `fuel_routes.lua`, FUEL kennt den Füllstand des **richtigen** Reaktors,
+die nicht zuordenbare Route ist gemeldet. Am Stand v815 scheitert er an der
+Umstellung.
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -463,6 +510,8 @@ scheitern.
 
 ## Arbeitsweise, die gilt
 
+- **Vorsichtig, und lieber neu schreiben als flicken** (Betreibervorgabe
+  2026-10-12, gilt immer): siehe oben.
 - Lua-Tests: `lua5.2 -e "dofile('tests/cc_env_shim.lua')" tests/<datei>.lua`
 - Ablauf: beide Suiten → `python3 scripts/manifest_sync.py --write` → beide
   Suiten erneut → direkt auf `beta` committen und pushen (kein PR, keine
@@ -488,29 +537,31 @@ scheitern.
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v815? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v816? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v815 (Pruefsumme b8c424e8)`.
-   - RT-Diagnoseseite nach dem nächsten Chunk-Laden: „TIMER LOST / LATE".
-   - MASTERs Terminal: „[MASTER] Takt-Timer ausgeblieben …" belegt den
-     Ausgleich.
+   - Startzeile jedes Knotens: `beta-v816 (Pruefsumme 79274ff2)`.
+   - FUEL-Log nach dem Start: „FUEL-Route '…': Reaktor-Kennung … -> …
+     (global, gespeichert)" für alte Routen; Meldungen „… im ROUTER neu
+     einlernen" für Routen, die sich nicht zuordnen lassen — die dann im
+     Router neu einlernen und die alte löschen.
+   - RT-Diagnoseseite nach dem nächsten Chunk-Laden: „TIMER LOST / LATE";
+     MASTERs Terminal: „[MASTER] Takt-Timer ausgeblieben …".
    - RT-Schirm, Seite Turbinen: zeigt eine Turbine „-", kann auch der
      Regler sie nicht lesen (seit v815 derselbe Leseweg).
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
-     „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` mehr beim Hochfahren.
+     „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v815 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v816 / Pruefsumme …".
 2. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
    Für Ebene 1 bereit: der nur noch geschriebene Fähigkeiten-Cache der
    RT-Discovery (G1), der Verwerf-Haken im `service_manager` (G3).
-3. Älter und noch offen: MASTER-Ausfall-Befunde A und B (Inhalt nicht mehr
-   dokumentiert — erst nachlesen); die P2-Liste des Audits.
-4. Reaktor-Identität: `fuel_routes` auf globale Kennungen (siehe D).
-5. `beta` → `main`, sobald alles läuft (Betreiber).
+3. `beta` → `main`, sobald alles läuft (Betreiber).
 
-(Das am 2026-10-04 angekündigte „weitere Thema, indirekt damit
-zusammenhängend" ist gestrichen — am 2026-10-12 nachgefragt, der Betreiber
-wusste es nicht mehr: „Streich den Punkt".)
+Gestrichen am 2026-10-12 (Betreiber): das am 2026-10-04 angekündigte
+„weitere Thema, indirekt damit zusammenhängend" (er wusste es nicht mehr),
+die MASTER-Ausfall-Befunde A und B und die P2-Liste des Audits zu
+beta-v799 (Inhalt beider nicht im Repo; das Verhalten bei MASTER-Ausfall
+ist durch `plant_scenarios_test.lua` abgesichert).
 
 ---
 
