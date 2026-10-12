@@ -507,8 +507,10 @@ scheitern.
    dokumentiert — erst nachlesen); die P2-Liste des Audits.
 4. Reaktor-Identität: `fuel_routes` auf globale Kennungen (siehe D).
 5. `beta` → `main`, sobald alles läuft (Betreiber).
-6. **Der Betreiber hatte „noch ein weiteres Thema, aber indirekt damit
-   zusammenhängend" angekündigt und nie genannt. Danach fragen.**
+
+(Das am 2026-10-04 angekündigte „weitere Thema, indirekt damit
+zusammenhängend" ist gestrichen — am 2026-10-12 nachgefragt, der Betreiber
+wusste es nicht mehr: „Streich den Punkt".)
 
 ---
 
