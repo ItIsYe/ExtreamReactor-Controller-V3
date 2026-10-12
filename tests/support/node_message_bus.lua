@@ -37,6 +37,19 @@
 --
 -- Die Uhr laeuft fuer alle gemeinsam: net:advance() schiebt jede Node um
 -- denselben Betrag, sonst wuerde eine Node die andere als veraltet ansehen.
+--
+-- ROHE KANAELE (opts.raw_channels). Manche Rollen funken neben comms auf
+-- einem eigenen Kanal -- FUEL und VALVE etwa SET_VALVE/VALVE_ACK auf
+-- constants.channels.VALVE, ausserhalb von comms_service. In CC:Tweaked
+-- landet so eine Nachricht als modem_message bei JEDEM Service, der
+-- wants_events gesetzt hat (services/service_manager.lua). Standardmaessig
+-- stellt dieser Bus nur dem COMMS-Service zu; wer den Ventilkanal mitpruefen
+-- will, gibt ihn an:
+--
+--   local net = bus.new({ raw_channels = { [constants.channels.VALVE] = true } })
+--
+-- Nachrichten auf diesen Kanaelen gehen dann zusaetzlich an jeden Service
+-- mit wants_events (ausser COMMS), so wie service_manager es taete.
 
 local M = {}
 
@@ -52,6 +65,7 @@ function M.new(opts)
     dropped = {},          -- Nachrichten ohne Empfaenger
     step_ms = opts.step_ms or 100,
     tick_dt = opts.tick_dt or 0.1,
+    raw_channels = opts.raw_channels or {},
   }, Bus)
 end
 
@@ -175,6 +189,9 @@ function Bus:deliver()
             from = outgoing.from, to = entry.name,
             channel = item.channel, message = item.message,
           }
+          if self.raw_channels[item.channel] then
+            self:_deliver_raw(entry, event)
+          end
         end
       end
     end
@@ -183,6 +200,37 @@ function Bus:deliver()
     end
   end
   return #pending
+end
+
+-- Ein modem_message-Event auf einem rohen Kanal an jeden Service mit
+-- wants_events (ausser COMMS, der hat es schon), in fester Reihenfolge.
+--
+-- Als Seite (event[2]) steht hier der Name des Modems der EMPFANGENDEN Node,
+-- wie in CC:Tweaked: nodes/valve/controller.lua antwortet mit VALVE_ACK
+-- ueber peripheral.wrap(event[2]) -- mit der festen Seite 'back' faende es
+-- kein Modem und bliebe stumm.
+function Bus:_deliver_raw(entry, event)
+  local side = event[2]
+  for _, name in ipairs(entry.env.names or {}) do
+    if entry.env.types[name] == 'modem' then side = name; break end
+  end
+  event = { event[1], side, event[3], event[4], event[5], event[6] }
+  local names = {}
+  for key, service in pairs(entry.env.services) do
+    if key ~= 'COMMS' and type(service) == 'table' and service.wants_events == true
+        and service.tick then
+      names[#names + 1] = key
+    end
+  end
+  table.sort(names)
+  for _, service_name in ipairs(names) do
+    local service = entry.env.services[service_name]
+    local ok, err = pcall(service.tick, service, self.tick_dt, event)
+    if not ok then
+      error('Zustellung (roher Kanal ' .. tostring(event[3]) .. ') an "' .. entry.name
+        .. '", Service "' .. service_name .. '" gescheitert: ' .. tostring(err), 3)
+    end
+  end
 end
 
 -- Eine Runde: alle ticken, zustellen, Uhr weiterstellen.

@@ -42,11 +42,36 @@ function M.compute_view_state(model, devices, reserve, minimum)
   if payload.routing_load_status and payload.routing_load_status.ok == false then
     return { code = "ROUTING_INVALID", severity = "WARNING", title = "Routing ungueltig", detail = tostring(payload.routing_load_status.message or payload.routing_load_status.code or "Fehler"), action = "fuel_routes.lua pruefen" }
   end
+  -- Drei Ventil-Lagen, drei Handgriffe:
+  --   unbekannt -- unter der Kennung in der Ventilkette meldet sich seit dem
+  --                Start kein VALVE-Node: die ID passt nicht (Kette neu
+  --                einlernen). Funk pruefen hilft hier nicht.
+  --   offline   -- der VALVE-Node war da und ist weg (oder ueberfaellig):
+  --                Node und Funk pruefen.
+  --   anlauf    -- FUEL laeuft erst kurz, die Ventile melden sich noch.
+  local unknown = tonumber(valve.unknown) or 0
+  if unknown > 0 then
+    local ids = type(valve.unknown_ids) == "table" and valve.unknown_ids or {}
+    local named = table.concat(ids, ", ")
+    if unknown > #ids then named = named .. string.format(" (+%d)", unknown - #ids) end
+    return {
+      code = "VALVE_UNKNOWN", severity = "WARNING", title = "Ventil-Kennung unbekannt",
+      detail = string.format("%d nie gemeldet: %s", unknown, named),
+      action = "ROUTER > Ventilkette neu einlernen",
+    }
+  end
   if (tonumber(valve.offline) or 0) > 0 or (tonumber(valve.stale) or 0) > 0 then
     return {
       code = "VALVE_OFFLINE", severity = "WARNING", title = "Ventil-Verbindung nicht bereit",
       detail = string.format("offline=%d stale=%d", tonumber(valve.offline) or 0, tonumber(valve.stale) or 0),
       action = "VALVE-Node(s) und Funk pruefen",
+    }
+  end
+  if (tonumber(valve.waiting) or 0) > 0 then
+    return {
+      code = "VALVE_WAITING", severity = "LIMITED", title = "Ventile melden sich noch",
+      detail = string.format("%d von %d noch nicht gehoert", tonumber(valve.waiting) or 0, tonumber(valve.total) or 0),
+      action = "Kurz warten -- FUEL wurde gerade gestartet",
     }
   end
   if (tonumber(bindings.storage) or 0) == 0 then

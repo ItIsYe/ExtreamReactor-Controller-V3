@@ -93,13 +93,28 @@ function M.build_status_payload(ctx)
   -- eine kompakte VALVE-Offline-Zusammenfassung sind Teil des Payloads,
   -- damit Header/Banner/Ampel und Diagnostics dieselbe Wahrheit verwenden.
   payload.routing_load_status = ctx.routing_load_status
+  --
+  -- "unknown" (unter dieser Kennung hat sich nie ein VALVE-Node gemeldet)
+  -- und "waiting" (noch nicht gehoert, FUEL laeuft erst kurz) zaehlen NICHT
+  -- als offline: das sind andere Lagen mit anderen Handgriffen (Kette neu
+  -- einlernen bzw. kurz warten). unknown_ids nennt die ersten drei
+  -- Kennungen, damit der Schirm sagen kann, WELCHE nicht passen (mehr
+  -- passen nicht in die 77 Zeichen breite Bannerzeile).
   if valve_status then
-    local offline, stale = 0, 0
+    local offline, stale, unknown, waiting = 0, 0, 0, 0
+    local unknown_ids = {}
     for _, vs in ipairs(valve_status) do
-      if vs.online == false then offline = offline + 1
+      if vs.unknown == true then
+        unknown = unknown + 1
+        if #unknown_ids < 3 then unknown_ids[#unknown_ids + 1] = tostring(vs.id) end
+      elseif vs.waiting == true then waiting = waiting + 1
+      elseif vs.online == false then offline = offline + 1
       elseif vs.stale == true then stale = stale + 1 end
     end
-    payload.valve_summary = { total = #valve_status, offline = offline, stale = stale }
+    payload.valve_summary = {
+      total = #valve_status, offline = offline, stale = stale,
+      unknown = unknown, waiting = waiting, unknown_ids = unknown_ids,
+    }
   end
   return payload
 end

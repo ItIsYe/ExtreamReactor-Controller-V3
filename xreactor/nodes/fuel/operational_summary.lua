@@ -104,8 +104,12 @@ local function route_state(ctx, reactor)
   -- path[i] is a plain VALVE-Node id string (see redstone_router.lua) --
   -- no {side=,integrator=} step tables since the 2026-09-03 flat-path
   -- rewrite.
+  -- VALVE_UNKNOWN/VALVE_WAITING: siehe redstone_router.lua _valve_link() --
+  -- die Kennung meldet sich nie bzw. FUEL laeuft erst kurz.
   for _, step in ipairs(route.path or {}) do
     local valve = ctx.valves[tostring(step)]
+    if valve and valve.unknown == true then return "VALVE_UNKNOWN" end
+    if valve and valve.waiting == true then return "VALVE_WAITING" end
     if not valve or valve.online ~= true then return "VALVE_OFFLINE" end
     if valve.stale == true then return "VALVE_STALE" end
   end
