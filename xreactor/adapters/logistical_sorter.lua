@@ -17,20 +17,17 @@
 -- Mekanism's own "Requires Public Security" flag on these methods.
 
 local sorter = {}
-local warned = {}
 
 -- Falls back to a no-op if the shared logger isn't reachable (e.g. in a
 -- minimal test harness that doesn't stub core.utils).
 local ok_utils, utils = pcall(require, "core.utils")
 local log_impl = (ok_utils and type(utils.log) == "function") and utils.log or function() end
 
-local function log_once(prefix, key, message)
-  if warned[key] then
-    return
-  end
-  warned[key] = true
-  log_impl(prefix or "SORTER", message, "WARN")
-end
+
+-- getMethods-Fehlschlag einmal je Stoerung statt einmal je Laufzeit
+-- (core/once_log.lua): klappt das Erkennen wieder, wird die naechste
+-- Stoerung erneut gemeldet.
+local methods_once = require("core.once_log").new()
 
 -- Exactly the colors the operator's real in-game Mekanism Logistical
 -- Sorter actually works with (confirmed 2026-09-17), taken over verbatim
@@ -119,10 +116,13 @@ function sorter.detect(name, log_prefix)
   local ok, methods = pcall(peripheral.getMethods, name)
   if not ok or type(methods) ~= "table" then
     if not ok then
-      log_once(log_prefix, "methods:" .. tostring(name), "Sorter methods failed for " .. tostring(name) .. ": " .. tostring(methods))
+      if methods_once.report(name, "methods") then
+        log_impl(log_prefix or "SORTER", "Sorter methods failed for " .. tostring(name) .. ": " .. tostring(methods), "WARN")
+      end
     end
     return nil
   end
+  methods_once.recover(name, "methods")
   local method_set = {}
   for _, m in ipairs(methods) do
     method_set[m] = true

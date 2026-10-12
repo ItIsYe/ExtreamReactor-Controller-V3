@@ -33,7 +33,7 @@ local CONFIG = {
   ROD_MIN            = 0,
   ROD_MAX            = 100,
   INITIAL_ROD_LEVEL  = 100,
-  -- Flow-Grenzen fuer clamp_turbine_flow() und die Config-Validierung.
+  -- Flow-Grenzen fuer die Config-Validierung.
   -- Die Regelgrenzen liegen in rt2_turbine.lua (MIN_FLOW/MAX_FLOW dort).
   TARGET_RPM         = 900,
   MIN_FLOW           = 0,
@@ -164,17 +164,11 @@ local devices = {
   registry_load_error = nil, proto_mismatch = false,
   binding_signature = nil, last_scan_ts = nil, discovery_log_signature = nil
 }
--- Separate from `devices`: devices.reactors/.turbines hold the registry
--- ENTRY LIST ({id,name,kind,bound,...}, iterated with ipairs by
--- monitor_ui.lua and discovery_runtime.build_modules()),
--- while peripheral_cache.reactors/.turbines hold the wrapped CC:Tweaked
--- peripheral objects keyed by NAME (looked up by reactor_control.lua/
--- turbine_control.lua). These must stay two distinct
--- tables -- aliasing them let discovery_runtime.M.cache()'s peripheral-map
--- write silently overwrite devices.reactors/.turbines with a name-keyed map,
--- so every ipairs() consumer above saw zero entries and modules_registry
--- got wiped empty on every binding change.
-local peripheral_cache = { reactors = {}, turbines = {} }
+-- devices.reactors/.turbines halten die Registry-EINTRAGSLISTE
+-- ({id,name,kind,bound,...}, mit ipairs gelesen von monitor_ui.lua und
+-- discovery_runtime.build_modules()). Einen Cache mit wrap-Handles daneben
+-- gibt es seit v817 nicht mehr (siehe discovery_runtime.normalize_bindings):
+-- Hardwarezugriff laeuft namensbasiert ueber die Adapter.
 local master_seen_ts = nil
 local master_alerts  = {}
 
@@ -226,8 +220,6 @@ warn_once = function(key, msg)
   log("WARN", msg)
 end
 
-local safe_wrapped_call = support_runtime.safe_wrapped_call
-
 -- Die Master-Verbindung wird nicht mehr hier bewertet: rt2_master_link.lua
 -- fuehrt sie, gespeist aus note_master_seen() (siehe comms on_message in
 -- init()). Die frueher hier stehenden Helfer is_master_connected() und
@@ -239,8 +231,8 @@ local safe_wrapped_call = support_runtime.safe_wrapped_call
 -- Statt vieler lokaler Closures hat jede Funktion jetzt eine explizite
 -- Abhängigkeitsliste am Kopf (ctx.*).
 
--- Der ctx traegt nur noch, was der Hardware-Zugriff braucht: Peripherie,
--- Capability-Cache, Konfiguration, Logging. Die Regelung bekommt ihn nicht
+-- Der ctx traegt nur noch, was der Hardware-Zugriff braucht: Adapter,
+-- Konfiguration, Logging -- keine gemerkten wrap-Handles oder Faehigkeiten. Die Regelung bekommt ihn nicht
 -- mehr -- rt2_engine.lua liest die Hardware ueber nodes/rt/rt2_adapter.lua
 -- und haelt seinen Zustand selbst.
 local function build_ctx()
@@ -248,11 +240,9 @@ local function build_ctx()
     last_applied_rods         = state.last_applied_rods,
     last_rod_apply_ts         = state.last_rod_apply_ts,
     steam_tank_name           = state.steam_tank_name,
-    peripherals               = peripheral_cache,
     modules                   = modules_registry,
     reactor_ctrl              = {},   -- wird in init_reactor_ctrl befuellt
     turbine_ctrl_store        = {},   -- wird in init_turbine_ctrl befuellt
-    capability_cache          = { reactors = {}, turbines = {} },
     -- Config
     config  = config,
     CONFIG  = CONFIG,
@@ -267,7 +257,6 @@ local function build_ctx()
     -- Funktionen
     log               = log,
     warn_once         = warn_once,
-    safe_wrapped_call = safe_wrapped_call,
     get_turbine_ctrl  = function(name)
       return turbine_control.get_turbine_ctrl(ctx, name)
     end,
@@ -296,12 +285,7 @@ local function build_discovery_context()
     config = config,
     configured_reactors = runtime_config.configured_reactors,
     configured_turbines = runtime_config.configured_turbines,
-    peripherals = peripheral_cache,
     utils = utils,
-    capability_cache = ctx and ctx.capability_cache or {},
-    build_capabilities = function(name)
-      return turbine_control.get_device_caps(ctx, "turbines", name)
-    end,
     log = log, log_prefix = CONFIG.LOG_PREFIX,
     binding = binding,
     reactor_adapter = adapters.reactor,
@@ -324,11 +308,6 @@ local function build_discovery_context()
           modules_registry[id] = entry
         end
       end
-    end,
-    refresh_module_peripherals = function()
-      discovery_runtime.refresh_module_peripherals(modules_registry, peripheral_cache, function(kind, name)
-        return turbine_control.get_device_caps(ctx, kind, name)
-      end)
     end,
   }
 end

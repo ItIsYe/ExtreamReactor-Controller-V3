@@ -1,7 +1,18 @@
 local utils = require("core.utils")
+local once_log = require("core.once_log")
 
 local monitor = {}
 local warned = {}
+-- Stoerungen (Einbinden/Aufruf gescheitert) einmal je Stoerung statt einmal
+-- je Laufzeit (core/once_log.lua); warned/log_once bleibt fuer Hinweise zur
+-- Konfiguration, die sich nicht von selbst erledigen.
+local fault_once = once_log.new()
+
+local function warn_fault(prefix, name, sub, message)
+  if fault_once.report(name, sub) then
+    utils.log(prefix or "MONITOR", message, "WARN")
+  end
+end
 local scale_cache = setmetatable({}, { __mode = "k" })
 local scale_cache_by_name = {}
 local wrapper_cache_by_name = {}
@@ -29,8 +40,9 @@ local function wrap_monitor(name, log_prefix)
   if mon then
     wrapper_cache_by_name[cache_name] = mon
     known_monitor_names[cache_name] = true
+    fault_once.recover(cache_name, "wrap")
   elseif err then
-    log_once(log_prefix, "wrap:" .. cache_name, "Monitor wrap failed for " .. cache_name .. ": " .. tostring(err))
+    warn_fault(log_prefix, cache_name, "wrap", "Monitor wrap failed for " .. cache_name .. ": " .. tostring(err))
   end
   return mon, err
 end
@@ -42,7 +54,9 @@ local function safe_call(mon, name, method, log_prefix, ...)
   local fn = mon[method]
   local results = table.pack(pcall(fn, ...))
   if not results[1] then
-    log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(results[2]))
+    warn_fault(log_prefix, name, method, "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(results[2]))
+  else
+    fault_once.recover(name, method)
   end
   return table.unpack(results, 1, results.n)
 end

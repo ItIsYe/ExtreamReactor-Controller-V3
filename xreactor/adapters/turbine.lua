@@ -1,14 +1,23 @@
 local utils = require("core.utils")
+local once_log = require("core.once_log")
 
 local turbine = {}
-local warned = {}
 
-local function log_once(prefix, key, message)
-  if warned[key] then
-    return
+-- Meldungen "einmal je Stoerung" (core/once_log.lua): bis v816 stand hier
+-- eine Tabelle warned[key] = true -- einmal gemeldet, dann bis zum Neustart
+-- stumm, auch wenn die Turbine sich erholt hatte und spaeter erneut
+-- ausfiel. Jetzt meldet jeder erfolgreiche Aufruf die Erholung, und die
+-- naechste Stoerung wird wieder gemeldet (hoechstens einmal je Minute).
+-- Je Art der Meldung ein eigenes Register, damit eine Erholung nur ihre
+-- eigene Meldung wieder scharf macht.
+local call_once = once_log.new()   -- (name, method): Aufruf gescheitert
+local type_once = once_log.new()   -- (name, method): Wert mit falschem Typ
+local caps_once = once_log.new()   -- (name, art): Faehigkeiten fehlen/unlesbar
+
+local function warn(registry, prefix, name, sub, message)
+  if registry.report(name, sub) then
+    utils.log(prefix or "TURBINE", message, "WARN")
   end
-  warned[key] = true
-  utils.log(prefix or "TURBINE", message, "WARN")
 end
 
 local function safe_call(name, method, log_prefix, ...)
@@ -17,7 +26,10 @@ local function safe_call(name, method, log_prefix, ...)
   end
   local result, err = utils.safe_peripheral_call(name, method, ...)
   if err then
-    log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Turbine call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(err))
+    warn(call_once, log_prefix, name, method,
+      "Turbine call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(err))
+  else
+    call_once.recover(name, method)
   end
   return result
 end
@@ -25,16 +37,20 @@ end
 local function read_number(name, method, log_prefix)
   local value = safe_call(name, method, log_prefix)
   if type(value) == "number" then
+    if method then type_once.recover(name, method) end
     return value
   end
   if type(value) == "string" then
     local parsed = tonumber(value)
     if parsed then
+      type_once.recover(name, method)
       return parsed
     end
   end
   if value ~= nil then
-    log_once(log_prefix, tostring(name) .. ":" .. tostring(method) .. ":type", "Turbine metric type mismatch peripheral=" .. tostring(name) .. " method=" .. tostring(method) .. " type=" .. type(value) .. " value=" .. tostring(value))
+    warn(type_once, log_prefix, name, method,
+      "Turbine metric type mismatch peripheral=" .. tostring(name) .. " method=" .. tostring(method)
+        .. " type=" .. type(value) .. " value=" .. tostring(value))
   end
   return "n/a"
 end
@@ -161,11 +177,12 @@ end
 -- dafuer, dass "der Regler nichts tut" -- und er gehoert deshalb auf den
 -- Rechner selbst. utils.log()/log_once() routen zum Log-Collector; das
 -- ist keine Anzeige.
-local shouted = {}
-local function shout(key, msg)
-  if shouted[key] then return end
-  shouted[key] = true
-  pcall(print, "[RT] " .. msg)
+-- Auf den Rechner-Schirm, einmal je Stoerung wie oben.
+local shout_once = once_log.new()
+local function shout(name, sub, msg)
+  if shout_once.report(name, sub) then
+    pcall(print, "[RT] " .. msg)
+  end
 end
 
 local function capabilities(name, log_prefix)
@@ -174,11 +191,12 @@ local function capabilities(name, log_prefix)
 
   local methods, err = utils.safe_get_methods(name)
   if type(methods) ~= "table" then
-    log_once(log_prefix, tostring(name) .. ":getMethods",
+    warn(caps_once, log_prefix, name, "getMethods",
       "Turbine capabilities not readable for " .. tostring(name) .. ": " .. tostring(err)
         .. " -- Messwerte gelten diesen Takt als unbekannt (es wird nichts geraten)")
     return nil
   end
+  caps_once.recover(name, "getMethods")
 
   local set = {}
   for _, method in ipairs(methods) do set[method] = true end
@@ -198,21 +216,24 @@ local function capabilities(name, log_prefix)
   -- kein getFluidFlowRateMax meldete, wurde dauerhaft ohne Durchfluss-
   -- Methode gemerkt. Ihr Rueckmesswert blieb damit fuer immer unbekannt,
   -- obwohl die Drehzahl sauber las -- genau das Bild aus dem Betrieb.
+  if entry.rpm_method then caps_once.recover(name, "no-rpm-method") end
+  if entry.flow_method then caps_once.recover(name, "no-flow-method") end
+  if entry.energy_method or entry.energy_stats then caps_once.recover(name, "no-energy-method") end
   if entry.rpm_method and not (entry.energy_method or entry.energy_stats) then
-    log_once(log_prefix, tostring(name) .. ":no-energy-method",
+    warn(caps_once, log_prefix, name, "no-energy-method",
       "Turbine " .. tostring(name) .. " kennt noch keine Ausstoss-Methode --"
         .. " es wird bei jedem Takt neu nachgesehen")
     return entry
   end
   if entry.rpm_method and not entry.flow_method then
-    log_once(log_prefix, tostring(name) .. ":no-flow-method",
+    warn(caps_once, log_prefix, name, "no-flow-method",
       "Turbine " .. tostring(name) .. " kennt keine der bekannten Durchfluss-Methoden ("
         .. table.concat(FLOW_METHODS, ", ") .. ") -- der Rueckmesswert bleibt unbekannt,"
         .. " es wird bei jedem Takt neu nachgesehen")
     return entry
   end
   if not entry.rpm_method then
-    log_once(log_prefix, tostring(name) .. ":no-rpm-method",
+    warn(caps_once, log_prefix, name, "no-rpm-method",
       "Turbine " .. tostring(name) .. " kennt keine der bekannten Drehzahl-Methoden ("
         .. table.concat(RPM_METHODS, ", ") .. ") -- Drehzahl bleibt unbekannt,"
         .. " es wird bei jedem Takt neu nachgesehen")
@@ -268,7 +289,12 @@ function turbine.inspect(name, log_prefix)
   if not name or not peripheral.isPresent(name) then
     -- Weg -- vielleicht kommt an diesem Namen spaeter eine andere
     -- Turbine zurueck, also nicht auf alten Faehigkeiten sitzen bleiben.
-    if name then capability_cache[name] = nil end
+    -- Und was nach der Rueckkehr scheitert, ist eine NEUE Stoerung.
+    if name then
+      capability_cache[name] = nil
+      call_once.recover_name(name)
+      type_once.recover_name(name)
+    end
     return nil, "peripheral missing"
   end
   local type_name = peripheral.getType(name) or "turbine"
@@ -302,6 +328,10 @@ function turbine.inspect(name, log_prefix)
       energy = stats.energyProducedLastTick
     end
   end
+  if energy_readable then
+    caps_once.recover(name, "no-energy")
+    shout_once.recover(name, "no-energy")
+  end
   if caps and caps.rpm_method and not energy_readable then
     -- Laut sagen, nicht nur ins Log: ohne diesen Wert kommt das Einlernen
     -- nie zu einem Ergebnis, und von aussen sieht das nach einem
@@ -311,8 +341,8 @@ function turbine.inspect(name, log_prefix)
         .. " nicht lesbar, und ohne ihn kommt das EINLERNEN nie zu einem"
         .. " Ergebnis (es zaehlt nur Turbinen, die Leistung melden)",
       tostring(name), table.concat(ENERGY_METHODS, "/"))
-    log_once(log_prefix, tostring(name) .. ":no-energy", msg)
-    shout(tostring(name) .. ":no-energy", msg)
+    warn(caps_once, log_prefix, name, "no-energy", msg)
+    shout(name, "no-energy", msg)
   end
   -- Die Bauartgrenze. Nicht lesbar heisst nil -- der Regler faellt dann auf
   -- seinen eigenen Default zurueck (rt2_turbine.MAX_FLOW), nie auf etwas
@@ -355,26 +385,36 @@ function turbine.inspect(name, log_prefix)
 end
 
 
+-- Unterschluessel der "kann nicht stellen"-Meldung je Art, vorab gebildet:
+-- recover() laeuft bei jedem Stellbefehl.
+local NO_METHOD_SUB = { flow = "no-flow", coil = "no-coil", active = "no-active" }
+
 local function write_with(name, candidates, label, value, log_prefix)
   if not name then return nil, "missing peripheral" end
   local caps = capabilities(name, log_prefix)
   if not caps then return nil, "capabilities unknown" end
   local method = first_available(caps.set, candidates)
+  local no_method_sub = NO_METHOD_SUB[label] or ("no-" .. tostring(label))
   if not method then
     local msg = string.format(
       "Turbine %s kennt keine der bekannten %s-Methoden (%s) -- sie laesst sich nicht stellen,"
         .. " der Regler rechnet ins Leere",
       tostring(name), label, table.concat(candidates, ", "))
-    log_once(log_prefix, tostring(name) .. ":no-" .. label, msg)
-    shout(tostring(name) .. ":no-" .. label, msg)
+    warn(caps_once, log_prefix, name, no_method_sub, msg)
+    shout(name, no_method_sub, msg)
     return nil, "no method for " .. label
   end
+  caps_once.recover(name, no_method_sub)
+  shout_once.recover(name, no_method_sub)
   local ok, err = utils.safe_peripheral_call(name, method, value)
   if err then
-    log_once(log_prefix, tostring(name) .. ":" .. method,
+    warn(call_once, log_prefix, name, method,
       "Turbine " .. label .. " failed for " .. tostring(name) .. ": " .. tostring(err))
-    shout(tostring(name) .. ":" .. method .. ":err", string.format(
+    shout(name, method, string.format(
       "Turbine %s: %s ABGELEHNT (%s) -- %s", tostring(name), label, method, tostring(err)))
+  else
+    call_once.recover(name, method)
+    shout_once.recover(name, method)
   end
   return ok, err
 end

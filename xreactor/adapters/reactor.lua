@@ -1,31 +1,48 @@
 local utils = require("core.utils")
 local fluid = require("core.fluid")
+local once_log = require("core.once_log")
 
 local reactor = {}
-local warned = {}
 
-local function log_once(prefix, key, message)
-  if warned[key] then return end
-  warned[key] = true
-  utils.log(prefix or "REACTOR", message, "WARN")
+-- Meldungen "einmal je Stoerung" (core/once_log.lua), wie in
+-- adapters/turbine.lua: bis v816 einmal je Laufzeit (warned[key] = true),
+-- eine zweite Stoerung nach einer Erholung blieb stumm. Je Art der Meldung
+-- ein Register; ein erfolgreicher Aufruf macht seine Meldung wieder scharf.
+local call_once = once_log.new()   -- (name, method): Aufruf gescheitert
+local type_once = once_log.new()   -- (name, method): Wert mit falschem Typ
+local rod_read_once = once_log.new()    -- (name, method:detail): Staebe nicht lesbar
+local rod_write_once = once_log.new()   -- (name, method:detail): Stellen nicht bestaetigt
+
+local function warn(registry, prefix, name, sub, message)
+  if registry.report(name, sub) then
+    utils.log(prefix or "REACTOR", message, "WARN")
+  end
 end
 
 local function safe_call(name, method, log_prefix, ...)
   if not method then return nil end
   local result, err = utils.safe_peripheral_call(name, method, ...)
   if err then
-    log_once(log_prefix, tostring(name) .. ":" .. tostring(method),
+    warn(call_once, log_prefix, name, method,
       "Reactor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(err))
+  else
+    call_once.recover(name, method)
   end
   return result
 end
 
 local function read_number(name, method, log_prefix)
   local value = safe_call(name, method, log_prefix)
-  if type(value) == "number" then return value end
-  if type(value) == "string" then local parsed = tonumber(value); if parsed then return parsed end end
+  if type(value) == "number" then
+    if method then type_once.recover(name, method) end
+    return value
+  end
+  if type(value) == "string" then
+    local parsed = tonumber(value)
+    if parsed then type_once.recover(name, method); return parsed end
+  end
   if value ~= nil then
-    log_once(log_prefix, tostring(name) .. ":" .. tostring(method) .. ":type",
+    warn(type_once, log_prefix, name, method,
       "Reactor metric type mismatch peripheral=" .. tostring(name) .. " method=" .. tostring(method)
         .. " type=" .. type(value) .. " value=" .. tostring(value))
   end
@@ -71,8 +88,8 @@ local function summarize_value(value)
   return value_type
 end
 
-local function log_rod_error(log_prefix, name, method, detail)
-  log_once(log_prefix, tostring(name) .. ":rod:" .. tostring(method) .. ":" .. tostring(detail),
+local function log_rod_error(log_prefix, name, method, detail, registry)
+  warn(registry or rod_read_once, log_prefix, name, tostring(method) .. ":" .. tostring(detail),
     "Reactor rod access failed peripheral=" .. tostring(name)
       .. " expected=" .. tostring(method) .. " detail=" .. tostring(detail))
 end
@@ -133,7 +150,11 @@ local function count_rods(name, method_set)
 end
 
 function reactor.inspect(name, log_prefix)
-  if not name or not peripheral.isPresent(name) then return nil, "peripheral missing" end
+  if not name or not peripheral.isPresent(name) then
+    -- Weg: was nach der Rueckkehr scheitert, ist eine NEUE Stoerung.
+    if name then call_once.recover_name(name); type_once.recover_name(name) end
+    return nil, "peripheral missing"
+  end
   local type_name = peripheral.getType(name) or "reactor"
   local methods, method_set = build_method_set(name)
   local active = read_active(name, method_set, log_prefix)
@@ -216,7 +237,7 @@ end
 -- method_set is optional: pass the already-computed set from a caller that
 -- just did its own build_method_set(name) (e.g. reactor.inspect()) to skip
 -- a second, redundant peripheral.getMethods() call on the same peripheral.
-function reactor.read_control_rods_detail(name, log_prefix, method_set)
+local function read_control_rods_detail(name, log_prefix, method_set)
   if not name then return nil, "missing peripheral" end
   if not method_set then
     local _, computed_set = build_method_set(name)
@@ -289,6 +310,14 @@ function reactor.read_control_rods_detail(name, log_prefix, method_set)
   return nil, "unsupported methods"
 end
 
+-- Die Staebe sind wieder lesbar: die Lese-Meldungen dieses Reaktors sind
+-- erledigt, die naechste Stoerung wird wieder gemeldet.
+function reactor.read_control_rods_detail(name, log_prefix, method_set)
+  local detail, err = read_control_rods_detail(name, log_prefix, method_set)
+  if detail and name then rod_read_once.recover_name(name) end
+  return detail, err
+end
+
 local function confirm_safe_full_insertion(name, normalized_level, log_prefix)
   if normalized_level < 100 then return true end
   local detail, err = reactor.read_control_rods_detail(name, log_prefix)
@@ -312,9 +341,10 @@ function reactor.apply_rod_level(name, level, log_prefix)
   local function confirmed_success(method, detail)
     local safe, safe_err = confirm_safe_full_insertion(name, normalized_level, log_prefix)
     if safe ~= true then
-      log_rod_error(log_prefix, name, method, safe_err)
+      log_rod_error(log_prefix, name, method, safe_err, rod_write_once)
       return nil, safe_err
     end
+    rod_write_once.recover_name(name)
     log_rod_path(log_prefix, name, method, detail)
     return true
   end
@@ -391,8 +421,10 @@ function reactor.set_active(name, enabled, log_prefix)
   if not name then return nil, "missing peripheral" end
   local ok, err = utils.safe_peripheral_call(name, "setActive", enabled and true or false)
   if err then
-    log_once(log_prefix, tostring(name) .. ":setActive",
+    warn(call_once, log_prefix, name, "setActive",
       "Reactor active failed for " .. tostring(name) .. ": " .. tostring(err))
+  else
+    call_once.recover(name, "setActive")
   end
   return ok, err
 end

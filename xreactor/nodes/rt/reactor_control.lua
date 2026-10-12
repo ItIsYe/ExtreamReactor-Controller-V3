@@ -21,7 +21,6 @@
 --
 -- ctx-Felder die dieses Modul liest/schreibt:
 --   ctx.reactor_ctrl      -- { [name] = { last_applied, last_known_rods, ... } }
---   ctx.peripherals       -- { reactors = { [name] = peripheral } }
 --   ctx.warned            -- { [key] = true } einmalige Warn-Flags
 --   ctx.last_applied_rods -- letzter geschriebener Rod-Level
 --   ctx.last_rod_apply_ts -- os.clock() wann zuletzt geschrieben
@@ -123,20 +122,27 @@ function M.read_steam_tank_amount(ctx)
   return nil
 end
 
+-- Dampf ohne externen Tank: Summe der Reaktor-Innentanks.
+--
+-- Je Aufruf FRISCH eingebunden. Bis v816 nahm diese Funktion zuerst das
+-- wrap-Handle, das die Discovery einmal je Reaktor anlegte
+-- (ctx.peripherals.reactors) -- ein Handle traegt die Methoden von seinem
+-- Einbindezeitpunkt. War der Reaktor da gerade halb geladen (Chunk,
+-- Multiblock im Zusammenbau), fehlte dem Handle getHotFluidAmount fuer
+-- immer, und die Dampfanzeige blieb leer, bis die Bindung sich zufaellig
+-- aenderte. Reaktoren sind wenige; ein wrap je Lesung kostet nichts
+-- Nennenswertes (Selbstheilung Stufe 1, docs/SESSION_HANDOFF.md B).
 function M.read_reactor_steam_amount(ctx)
   local total, found = 0, false
   for _, name in ipairs(ctx.config.reactors or {}) do
-    local reactor = ctx.peripherals.reactors[name]
-    if not reactor then
-      local wrapped, err = ctx.utils.safe_wrap(name)
-      if wrapped then reactor = wrapped
-      else ctx.warn_once("reactor_wrap:" .. name,
-        "Reactor wrap failed for " .. name .. ": " .. tostring(err)) end
-    end
+    local reactor, err = ctx.utils.safe_wrap(name)
     if reactor then
       local amount = ctx.fluid.read_amount(reactor,
         { "getHotFluidAmount", "getSteamAmount", "getSteam" })
       if type(amount) == "number" then total = total + amount; found = true end
+    else
+      ctx.warn_once("reactor_wrap:" .. name,
+        "Reactor wrap failed for " .. name .. ": " .. tostring(err))
     end
   end
   return found and total or nil
@@ -167,18 +173,6 @@ function M.init_reactor_ctrl(ctx)
 end
 
 -- ── Rod-Ansteuerung ─────────────────────────────────────────────────────────
-
--- Prueft, ob ein Reaktor-Peripheral ueberhaupt einen Rod-Write-Pfad hat.
--- Genutzt von der Discovery/Bindung, nicht von einer Regelung.
-function M.has_reactor_rod_write_path(caps)
-  if type(caps) ~= "table" then return false end
-  return (
-    caps.setAllControlRodLevels or
-    caps.setControlRodsLevels   or
-    caps.setControlRodLevel     or
-    caps.getControlRods
-  ) and true or false
-end
 
 -- Schreibt EINEN Rod-Level auf alle konfigurierten Reaktoren. Der einzige
 -- Aufrufer ist apply_initial_reactor_rods() -- die laufende Rod-Regelung
@@ -231,8 +225,8 @@ function M.apply_update_quiesce(ctx)
     item.rods_safe = type(rods) == "number" and rods >= 99.5
 
     -- Aktiv-Zustand NAMENSBASIERT, wie die Staebe darueber. Bis v813 lief
-    -- er ueber das wrap-Handle aus ctx.peripherals.reactors, das die
-    -- Discovery einmal schreibt: kam der Reaktor nach dem Chunk-Laden
+    -- er ueber das wrap-Handle, das die Discovery einmal je Reaktor anlegte
+    -- (seit v817 entfernt): kam der Reaktor nach dem Chunk-Laden
     -- zuerst mit verkuerzter Methodenliste zurueck, fehlten dem Handle die
     -- Funktionen, und der Quiesce wurde nie bestaetigt (siehe
     -- turbine_control.lua). Die Methodenliste wird hier je Versuch frisch

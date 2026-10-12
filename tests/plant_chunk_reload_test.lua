@@ -7,8 +7,9 @@ package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?
 -- RT-Knotens half. "Es waren noch lebende Werte, aber nur RPM."
 --
 -- Die Uebergabe vom 2026-10-04 fuehrte das auf den Faehigkeiten-Cache in
--- nodes/rt/turbine_control.lua zurueck: get_device_caps() schreibt ihn
--- einmal und prueft nie nach. Das stimmt -- aber dieser Cache liegt nicht im
+-- nodes/rt/turbine_control.lua zurueck: get_device_caps() schrieb ihn
+-- einmal und pruefte nie nach (seit v817 samt den wrap-Handles der
+-- Discovery entfernt). Das stimmte -- aber dieser Cache lag nicht im
 -- Regelpfad. rt2_engine.tick() liest und schreibt ueber adapters/turbine.lua
 -- und adapters/reactor.lua, die Statusmeldung an MASTER ebenso
 -- (status_snapshot.lua), und beide Adapter heilen von selbst: eine

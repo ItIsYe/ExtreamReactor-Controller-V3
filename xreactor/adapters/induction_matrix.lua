@@ -1,16 +1,13 @@
 local utils = require("core.utils")
+local once_log = require("core.once_log")
 local energy_storage = require("adapters.energy_storage")
 
 local matrix = {}
-local warned = {}
+-- getMethods-Fehlschlag einmal je Stoerung statt einmal je Laufzeit
+-- (core/once_log.lua): klappt das Erkennen wieder, wird die naechste
+-- Stoerung erneut gemeldet.
+local methods_once = once_log.new()
 
-local function log_once(prefix, key, message)
-  if warned[key] then
-    return
-  end
-  warned[key] = true
-  utils.log(prefix or "MATRIX", message, "WARN")
-end
 
 local function to_set(list)
   local out = {}
@@ -334,10 +331,13 @@ function matrix.detect(name, log_prefix, opts)
   end
   if not ok or type(methods) ~= "table" then
     if not ok then
-      log_once(log_prefix, "methods:" .. tostring(name), "Matrix methods failed for " .. tostring(name) .. ": " .. tostring(methods))
+      if methods_once.report(name, "methods") then
+        utils.log(log_prefix or "MATRIX", "Matrix methods failed for " .. tostring(name) .. ": " .. tostring(methods), "WARN")
+      end
     end
     return nil
   end
+  methods_once.recover(name, "methods")
   local method_set = to_set(methods)
   local type_name = peripheral.getType(name) or "induction_matrix"
   -- Mekanism's Induction Matrix PORT block (the one actually wired to the

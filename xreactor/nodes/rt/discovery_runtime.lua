@@ -28,33 +28,23 @@ local function normalize_bound_names(ctx, kind, names)
   return normalized
 end
 
--- Nur wirklich neue Namen bekommen einen frischen build_capabilities()-
--- Aufruf; bereits gecachte Namen bleiben unangetastet, nicht mehr
--- gebundene Namen werden aus dem Cache entfernt (statt unbegrenzt
--- zu wachsen bei haeufig umgesteckter Hardware).
-local function refresh_capability_cache(ctx, kind, names)
-  local cache = ctx.capability_cache[kind]
-  local still_bound = {}
-  for _, name in ipairs(names) do
-    still_bound[name] = true
-    if not cache[name] then
-      cache[name] = ctx.build_capabilities(name)
-    end
-  end
-  for name in pairs(cache) do
-    if not still_bound[name] then
-      cache[name] = nil
-    end
-  end
-end
-
-function M.cache(ctx)
+-- Uebernimmt die gebundenen Namen, nach Geraeteart geprueft -- und nur das.
+--
+-- Bis v816 hiess diese Funktion cache() und legte dabei zwei abgeleitete
+-- Zustaende an: ein wrap-Handle je Name (ctx.peripherals, ueber
+-- utils.cache_peripherals) und einen Faehigkeiten-Cache (ctx.capability_cache,
+-- ein getMethods je Name). Beide wurden einmal je Name geschrieben und nicht
+-- erneuert, solange der Name gebunden blieb. Kam ein Geraet nach dem
+-- Chunk-Laden zuerst mit verkuerzter Methodenliste zurueck (Multiblock im
+-- Zusammenbau), blieben beide auf diesem Stand -- das Muster hinter dem
+-- haengenden Update-Quiesce (v814) und dem zweiten Leseweg des Schirms
+-- (v815). Gelesen hat sie zuletzt nur noch die Dampfmessung
+-- (reactor_control.lua), und die liest jetzt jedes Mal frisch. Aller
+-- Hardwarezugriff laeuft ueber die Adapter, namensbasiert
+-- (Selbstheilung Stufe 1, docs/SESSION_HANDOFF.md Abschnitt B).
+function M.normalize_bindings(ctx)
   ctx.config.reactors = normalize_bound_names(ctx, "reactor", ctx.config.reactors or {})
   ctx.config.turbines = normalize_bound_names(ctx, "turbine", ctx.config.turbines or {})
-  ctx.peripherals.reactors = ctx.utils.cache_peripherals(ctx.config.reactors) or {}
-  ctx.peripherals.turbines = ctx.utils.cache_peripherals(ctx.config.turbines) or {}
-  refresh_capability_cache(ctx, "reactors", ctx.config.reactors)
-  refresh_capability_cache(ctx, "turbines", ctx.config.turbines)
 end
 
 function M.build_binding_signature(reactors, turbines)
@@ -152,9 +142,8 @@ function M.refresh_bindings(ctx)
   end
   ctx.config.reactors = reactor_names
   ctx.config.turbines = turbine_names
-  M.cache(ctx)
+  M.normalize_bindings(ctx)
   ctx.build_modules()
-  ctx.refresh_module_peripherals()
 end
 
 function M.discover(ctx)
@@ -346,20 +335,6 @@ function M.build_modules(devices)
     }
   end
   return modules
-end
-
-function M.refresh_module_peripherals(modules, peripherals, get_device_caps)
-  local turbines = peripherals.turbines or {}
-  local reactors = peripherals.reactors or {}
-  for _, module in pairs(modules or {}) do
-    if module.type == "turbine" then
-      module.peripheral = turbines[module.name]
-      module.caps = module.peripheral and get_device_caps("turbines", module.name) or nil
-    else
-      module.peripheral = reactors[module.name]
-      module.caps = module.peripheral and get_device_caps("reactors", module.name) or nil
-    end
-  end
 end
 
 return M

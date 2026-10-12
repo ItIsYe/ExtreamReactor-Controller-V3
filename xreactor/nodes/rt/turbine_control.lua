@@ -1,38 +1,36 @@
 -- nodes/rt/turbine_control.lua
 --
--- Turbinen-HARDWAREZUGRIFF. Dieses Modul regelt nichts mehr.
+-- Turbinen-HARDWAREZUGRIFF. Dieses Modul regelt nichts.
 --
 -- Bis v768 lag hier v1s kompletter Turbinenregler (Flow-Rampe, Induktor-
 -- Logik, Overspeed, Turbinen-Rotation, Autonom-Modus). Der ist entfernt:
 -- die Regelung liegt vollstaendig in nodes/rt/rt2_engine.lua und schreibt
--- ueber nodes/rt/rt2_adapter.lua. Was hier bleibt, sind die Zugriffe, die
--- nicht zur Regelung gehoeren und trotzdem gebraucht werden:
+-- ueber nodes/rt/rt2_adapter.lua. Was hier bleibt:
 --
---   * Capability-Discovery (welche Methoden hat dieses Geraet?) -- genutzt
---     von der Discovery (discovery_runtime.lua).
---   * Der Sicherheitszustand fuer den Update-Quiesce (Flow 0, Turbine aus,
---     Coil eingehaengt) -- der einzige Schreibpfad, der hier noch existiert,
---     und er gehoert dem Updater, nicht dem Regler.
+--   * die Buchfuehrung je Turbine (ctrl-Eintraege), die der Quiesce
+--     zurueckschreibt;
+--   * der Sicherheitszustand fuer den Update-Quiesce (Flow 0, Turbine aus,
+--     Coil eingehaengt) -- der einzige Schreibpfad hier, und er gehoert dem
+--     Updater, nicht dem Regler.
+--
+-- Entfallen (v815/v817): das Lesen von Drehzahl und Durchfluss fuer den
+-- zweiten Leseweg des Schirms, die Faehigkeiten-Ermittlung je Geraet
+-- (build_capabilities/get_device_caps, ctx.capability_cache) und
+-- clamp_turbine_flow. Welche Methoden eine Turbine hat, weiss allein
+-- adapters/turbine.lua -- es merkt sich eine Liste nur, wenn sie
+-- vollstaendig ist, und verwirft sie, wenn die Peripherie verschwindet.
 --
 -- SCHNITTSTELLE: Alle oeffentlichen Funktionen nehmen ctx als ersten Parameter.
 --
 -- ctx-Felder die dieses Modul liest/schreibt:
 --   ctx.turbine_ctrl_store   -- { [name] = ctrl-Objekt } (interner State)
 --   ctx.adapters             -- { turbine = adapters/turbine.lua } (Update-Quiesce)
---   ctx.capability_cache     -- { reactors = {}, turbines = {} }
---   ctx.warned               -- { [key] = true } einmalige Warn-Flags
 --   ctx.config               -- turbines, reactors, ...
---   ctx.CONFIG               -- MIN_FLOW, MAX_FLOW, ...
---   ctx.utils                -- utils-Modul
---   ctx.binding              -- binding-Modul
+--   ctx.CONFIG               -- LOG_PREFIX
+--   ctx.utils                -- utils-Modul (safe_peripheral_call)
+--   ctx.binding              -- binding-Modul (Meldung "keine Turbinen")
 --   ctx.runtime_config       -- { configured_reactors, configured_turbines }
 --   ctx.log                  -- function(level, msg)
---
--- Drehzahl und Durchfluss werden hier nicht mehr gelesen. Bis v814 standen
--- hier read_turbine_rpm()/read_turbine_flow() fuer den zweiten Leseweg des
--- lokalen Schirms (wrap-Handle + Faehigkeiten-Cache); der ist entfallen,
--- gelesen wird nur noch ueber adapters/turbine.lua (siehe
--- monitor_ui.build_turbine_status).
 
 local M = {}
 
@@ -47,78 +45,6 @@ local function get_turbine_ctrl(ctx, name)
 end
 -- Exportiert, damit main.lua den Eintrag fuer den Quiesce erreichen kann.
 M.get_turbine_ctrl = get_turbine_ctrl
-
--- ── Capability-Discovery ────────────────────────────────────────────────────
-
-local function has_method(methods, method)
-  for _, name in ipairs(methods or {}) do
-    if name == method then return true end
-  end
-  return false
-end
-
-local function build_capabilities(name)
-  local ok, methods = pcall(peripheral.getMethods, name)
-  if not ok or type(methods) ~= "table" then methods = {} end
-  return {
-    getActive              = has_method(methods, "getActive"),
-    setActive              = has_method(methods, "setActive"),
-    setFluidFlowRate       = has_method(methods, "setFluidFlowRate"),
-    setFluidFlowRateMax    = has_method(methods, "setFluidFlowRateMax"),
-    getFluidFlowRate       = has_method(methods, "getFluidFlowRate"),
-    getFluidFlowRateMax    = has_method(methods, "getFluidFlowRateMax"),
-    getFluidFlowRateMaxMax = has_method(methods, "getFluidFlowRateMaxMax"),
-    getRotorSpeed          = has_method(methods, "getRotorSpeed"),
-    getRotorRPM            = has_method(methods, "getRotorRPM"),
-    getControlRods         = has_method(methods, "getControlRods"),
-    getControlRodLevel     = has_method(methods, "getControlRodLevel"),
-    getControlRodLevels    = has_method(methods, "getControlRodLevels"),
-    getControlRodsLevels   = has_method(methods, "getControlRodsLevels"),
-    getInductorEngaged     = has_method(methods, "getInductorEngaged"),
-    setInductorEngaged     = has_method(methods, "setInductorEngaged"),
-    setAllControlRodLevels = has_method(methods, "setAllControlRodLevels"),
-    setControlRodsLevels   = has_method(methods, "setControlRodsLevels"),
-    setControlRodLevel     = has_method(methods, "setControlRodLevel"),
-    isActivelyCooled       = has_method(methods, "isActivelyCooled"),
-  }
-end
-
--- Der Rest der RT-Discovery/Binding-Logik verwendet SINGULAR
--- ("reactor"/"turbine"), waehrend ctx.capability_cache intern PLURAL
--- ("reactors"/"turbines") als Cache-Schluessel erwartet -- normalize_kind()
--- macht get_device_caps() robust gegen beide Schreibweisen, sonst wuerde
--- ein Singular-Aufruf still einen separaten, nie befuellten Cache-
--- Namensraum erzeugen.
-local KIND_TO_CACHE_KEY = {
-  reactor = "reactors", reactors = "reactors",
-  turbine = "turbines", turbines = "turbines",
-}
-
-local function normalize_kind(kind)
-  return KIND_TO_CACHE_KEY[kind] or kind
-end
-
-function M.get_device_caps(ctx, kind, name)
-  -- Baut den Cache nur bei komplett fehlendem Eintrag neu auf --
-  -- discovery_runtime.lua schreibt ihn bereits gezielt bei echten
-  -- Attach-/Detach-/Rebind-Ereignissen neu, ein zusaetzlicher "ist gerade
-  -- angeschlossen"-Check hier wuerde peripheral.getMethods() unnoetig oft
-  -- erneut aufrufen.
-  kind = normalize_kind(kind)
-  ctx.capability_cache[kind] = ctx.capability_cache[kind] or {}
-  if not ctx.capability_cache[kind][name] then
-    ctx.capability_cache[kind][name] = build_capabilities(name)
-  end
-  return ctx.capability_cache[kind][name]
-end
-
--- ── Flow-Clamping ────────────────────────────────────────────────────────────
-
-function M.clamp_turbine_flow(ctx, rate)
-  return ctx.safety.clamp(
-    type(rate) == "number" and rate or ctx.CONFIG.MIN_FLOW,
-    ctx.CONFIG.MIN_FLOW, ctx.CONFIG.MAX_FLOW)
-end
 
 -- ── Buchfuehrung ────────────────────────────────────────────────────────────
 -- Legt pro Turbine einen leeren ctrl-Eintrag an. Er traegt keine Sollwerte
@@ -147,9 +73,9 @@ end
 --
 -- NAMENSBASIERT ueber adapters/turbine.lua, denselben Weg, den der Regler
 -- nimmt (rt2_adapter.lua). Bis v813 liefen Schreiben und Rueckmessung hier
--- ueber das wrap-Handle aus ctx.peripherals.turbines und den
--- Faehigkeiten-Cache ctx.capability_cache. Beide schreibt die Discovery
--- einmal und erneuert sie nicht, solange der Name gebunden bleibt. Kam eine
+-- ueber ein wrap-Handle und den Faehigkeiten-Cache der Discovery (beide
+-- seit v817 entfernt). Beide schrieb die Discovery einmal und erneuerte sie
+-- nicht, solange der Name gebunden blieb. Kam eine
 -- Turbine nach dem Laden der Anlage-Chunks zuerst mit verkuerzter
 -- Methodenliste zurueck (Multiblock im Zusammenbau), blieben beide auf
 -- diesem Stand: der Durchfluss liess sich nicht mehr zuruecklesen, der
