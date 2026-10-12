@@ -293,9 +293,12 @@ function M.new(opts)
     _link_log = once_log.new(),
     _state = {
       all_valves = {},
-      -- [id] = true: dieser VALVE-Node war seit dem Start mindestens einmal
-      -- in der Peer-Tabelle. Unterscheidet "offline" (war da, ist weg) von
-      -- "unbekannt" (hat sich unter dieser Kennung nie gemeldet).
+      -- [id] = { last_seen_ms =, label = }: dieser VALVE-Node war seit dem
+      -- Start mindestens einmal in der Peer-Tabelle -- mit dem Zeitpunkt
+      -- seiner letzten Meldung und seinem Namen. Unterscheidet "offline"
+      -- (war da, ist weg) von "unbekannt" (hat sich unter dieser Kennung nie
+      -- gemeldet) und haelt "zuletzt gehoert" fest, auch wenn comms den Peer
+      -- nach der Haltezeit (180 s) schon vergessen hat (Seite VENTILE).
       valve_seen = {},
       started_ms = os.epoch and os.epoch("utc") or 0,
       routes = {},
@@ -412,7 +415,10 @@ function M:_valve_link(id, peers)
   local peer = peers[id]
   local kind
   if peer then
-    self._state.valve_seen[id] = true
+    local seen = self._state.valve_seen[id]
+    if not seen then seen = {}; self._state.valve_seen[id] = seen end
+    if peer.last_seen ~= nil then seen.last_seen_ms = peer.last_seen end
+    if peer.label ~= nil then seen.label = peer.label end
     if peer.down == true then kind = "offline"
     elseif peer.stale == true then kind = "stale"
     else kind = "online" end
@@ -1125,12 +1131,8 @@ function M:check_pending_acks()
 end
 
 -- Fuehrt fuer jeden VALVE-Node zusammen: Live-Erreichbarkeit (siehe
--- _valve_link()), zuletzt angeforderten Zustand (siehe _set_valve()), und
--- belieferte Reaktoren.
---
--- "confirmed_state"/"state_matches" sind bewusst NICHT vorhanden -- nur
--- "requested_state" (was WIR zuletzt angefordert haben), niemals ein
--- bestaetigter Ist-Zustand.
+-- _valve_link()), zuletzt angeforderten Zustand (siehe _set_valve()), die
+-- letzte Rueckmeldung des Ventils und die belieferten Reaktoren.
 --
 -- Je Ventil:
 --   online  -- comms fuehrt den Node und er ist nicht down (auch "stale")
@@ -1139,8 +1141,18 @@ end
 --   unknown -- link == "unknown": unter dieser Kennung hat sich seit dem
 --              Start nie ein VALVE-Node gemeldet (falsche ID in der Kette)
 --   waiting -- link == "waiting": noch nie gehoert, FUEL laeuft erst kurz
+--   last_seen_ms -- letzte Meldung (os.epoch("utc")), auch nachdem comms den
+--              Peer vergessen hat; nil = nie gehoert
+--   requested_state -- was WIR zuletzt angefordert haben ("BLOCKED"/"OPEN")
+--   ack_*   -- die letzte VALVE_ACK dieses Ventils, so wie der VALVE-Node sie
+--              gemeldet hat (applied/high/error, Zeitpunkt). Das ist die
+--              Aussage des Ventils ueber seinen eigenen Schreibvorgang, kein
+--              von FUEL geratener Zustand. nil = noch keine Rueckmeldung.
+--   ack_pending -- ein Kommando ist gesendet, die Rueckmeldung steht aus
 function M:get_valve_status()
   local requested = self._state.valve_requested or {}
+  local confirmed = self._state.confirmed_valve_state or {}
+  local pending_acks = self._state.pending_valve_acks or {}
   local peers = self.comms and self.comms:get_peers() or {}
 
   -- Reaktor-Zuordnung: jedes Ventil auf dem Pfad einer Route bekommt deren
@@ -1162,9 +1174,17 @@ function M:get_valve_status()
   local out = {}
   for _, id in ipairs(self._state.all_valves) do
     local link, peer = self:_valve_link(id, peers)
+    local seen = self._state.valve_seen[id]
+    local ack = confirmed[id]
+    -- Ausgeschrieben statt "ack and ack.applied or nil": das machte aus
+    -- applied == false (genau der Fehlerfall) still nil.
+    local ack_applied, ack_high, ack_error, ack_ms = nil, nil, nil, nil
+    if ack then
+      ack_applied, ack_high, ack_error, ack_ms = ack.applied, ack.high, ack.error, ack.confirmed_ts
+    end
     out[#out + 1] = {
       id = id,
-      label = (peer and peer.label) or id,
+      label = (peer and peer.label) or (seen and seen.label) or id,
       configured = true,
       online = peer ~= nil and peer.down ~= true,
       stale = peer ~= nil and peer.stale == true,
@@ -1172,7 +1192,13 @@ function M:get_valve_status()
       unknown = link == "unknown",
       waiting = link == "waiting",
       age_s = peer and peer.age or nil,
+      last_seen_ms = (peer and peer.last_seen) or (seen and seen.last_seen_ms) or nil,
       requested_state = requested[id] or "UNKNOWN",
+      ack_applied = ack_applied,
+      ack_high = ack_high,
+      ack_error = ack_error,
+      ack_ms = ack_ms,
+      ack_pending = pending_acks[id] ~= nil,
       affected_routes = affected[id] or {},
     }
   end

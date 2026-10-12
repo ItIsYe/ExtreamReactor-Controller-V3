@@ -41,7 +41,8 @@ local fake_router = {
   handle_input = function() return false end,
   current = function() return nil end,
 }
-local ui_router = { new = function(opts) assert(#opts.pages == 4); return fake_router end }
+-- Fuenf Seiten seit v819: Uebersicht, Details, Diagnose, VENTILE, Router.
+local ui_router = { new = function(opts) assert(#opts.pages == 5); return fake_router end }
 
 local module = require('nodes.fuel.monitor_ui')
 local ctx = {

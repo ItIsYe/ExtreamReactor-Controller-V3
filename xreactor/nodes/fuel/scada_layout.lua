@@ -226,7 +226,7 @@ local function draw_reactor_slot(mon, x, y, w, reactor, index)
 end
 
 local function overview(mon, model, should_clear, state)
-  local w, _, view, ok = draw_header(mon, model, "FUEL NODE - OVERVIEW", "1/4", should_clear)
+  local w, _, view, ok = draw_header(mon, model, "FUEL NODE - OVERVIEW", "1/5", should_clear)
   if not ok then return false end
   local payload = model.payload or {}
   local logistics = payload.logistics or {}
@@ -281,7 +281,7 @@ local function last_delivery_text(reactor)
 end
 
 local function details(mon, model, should_clear, state)
-  local w, _, view, ok = draw_header(mon, model, "FUEL NODE - DETAILS", "2/4", should_clear)
+  local w, _, view, ok = draw_header(mon, model, "FUEL NODE - DETAILS", "2/5", should_clear)
   if not ok then return false end
   local logistics = (model.payload or {}).logistics or {}
   local reactors = logistics.reactors or {}
@@ -386,7 +386,7 @@ local function details(mon, model, should_clear, state)
 end
 
 local function diagnostics(mon, model, should_clear)
-  local _, _, view, ok = draw_header(mon, model, "FUEL NODE - DIAGNOSTICS", "3/4", should_clear)
+  local _, _, view, ok = draw_header(mon, model, "FUEL NODE - DIAGNOSTICS", "3/5", should_clear)
   if not ok then return false end
   local payload = model.payload or {}
   local summary = model.summary or {}

@@ -374,7 +374,7 @@ function M:render(target, ui, colors, should_clear, skip_footer)
   local u = self._ui
   local page_status = u.save.state == "FAILED" and "WARNING" or (u.dirty and "LIMITED" or "OK")
   if should_clear then mux.clear(target) end
-  mux.header(target, { title = "FUEL ROUTER", node_id = "FUEL NODE", page = "4/4", status = page_status, icon = "network" })
+  mux.header(target, { title = "FUEL ROUTER", node_id = "FUEL NODE", page = "5/5", status = page_status, icon = "network" })
 
   local footer_center
   if u.mode == "learn" then

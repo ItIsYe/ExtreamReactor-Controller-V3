@@ -427,6 +427,8 @@ local function fuel_ui_ctx()
     master_peer_state = master_peer_state, registry = registry, config = config,
     master_alerts = master_alerts, support_ui_pages = support_ui_pages,
     ui_router = core_ui_router, fuel_ui = fuel_ui, get_router_ui = get_router_ui,
+    -- Seite VENTILE (nodes/fuel/valve_page.lua) liest den Ventil-Router.
+    get_rs_router = get_rs_router,
     ui = ui, colors = colors, keys = keys,
     -- Garantiert, dass ein Renderfehler tatsaechlich geloggt wird -- die
     -- Fallback-Seite verspricht sonst "Details im LOG_COLLECTOR-Export"

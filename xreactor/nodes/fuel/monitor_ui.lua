@@ -14,11 +14,14 @@ local mux = require("core.mockup_ui")
 local utils = require("core.utils")
 local monitor_scada = require("nodes.fuel.monitor_scada")
 local half_overview = require("nodes.fuel.half_overview")
+local valve_page = require("nodes.fuel.valve_page")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
 local monitor_router = nil
+local valve_page_instance = valve_page.new()
+local VALVE_PAGE_NAME = "Valves"
 local current_mon = nil
 local bound_monitor_name = nil
 local scada_ready = false
@@ -105,10 +108,34 @@ function M.build_model(ctx)
     model.snapshot.ui_error_count = model.ui_diagnostics.error_count
     model.snapshot.view_state_code = model.view_state.code
   end
+  -- Seite VENTILE: die Ventilliste nur, solange die Seite offen ist. Sie
+  -- gehoert nicht in den Status-Payload (der geht per Funk an MASTER), und
+  -- im Vergleichsstand der anderen Seiten loeste sie nur unnoetiges
+  -- Neuzeichnen aus. Hier im snapshot sorgt sie dafuer, dass die Seite neu
+  -- gezeichnet wird, sobald sich ein angezeigter Text aendert.
+  local page = monitor_router and monitor_router:current() or nil
+  if page and page.name == VALVE_PAGE_NAME then
+    model.valve_page = M.collect_valve_page(ctx, now)
+    if type(model.snapshot) == "table" then model.snapshot.valve_page = model.valve_page end
+  end
   return model
 end
 
--- All four FUEL pages share the same page-navigation controls. The old
+-- Ventilliste fuer die Seite VENTILE, frisch aus dem Ventil-Router. nil,
+-- wenn es (noch) keinen gibt oder er nicht antwortet.
+function M.collect_valve_page(ctx, now)
+  local rs = nil
+  if ctx and type(ctx.get_rs_router) == "function" then
+    local ok, value = pcall(ctx.get_rs_router)
+    if ok then rs = value end
+  end
+  if not (rs and type(rs.get_valve_status) == "function") then return nil end
+  local ok, status = pcall(rs.get_valve_status, rs)
+  if not ok then return nil end
+  return valve_page.collect(status, now or os.epoch("utc"))
+end
+
+-- All FUEL pages share the same page-navigation controls. The old
 -- labels were short and their touch zones were exactly the text width.
 -- Longer, bracketed labels make the controls visually obvious and enlarge
 -- the physical touch target without consuming an additional content row.
@@ -162,6 +189,14 @@ function M.render_monitor(ctx, model)
           handle_touch = function(x, y) return fuel_ui.handle_details_touch and fuel_ui.handle_details_touch(x, y) or false end },
         { name = "Diagnostics", render = page_with_large_footer(fuel_ui.render_diagnostics, "FUEL DIAGNOSTICS"),
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
+        -- Alle Ventile mit Zustand, zuletzt gehoert und letzter Rueckmeldung
+        -- (nodes/fuel/valve_page.lua) -- direkt vor dem Router, in dem man
+        -- eine falsche Ventilkette dann repariert.
+        { name = VALVE_PAGE_NAME, render = page_with_large_footer(function(target, page_model, should_clear)
+            local data = page_model and page_model.valve_page or M.collect_valve_page(ctx)
+            valve_page_instance.render(target, page_model, should_clear, data, "4/5")
+          end, "FUEL VENTILE"),
+          handle_touch = function(x, y) return valve_page_instance.handle_touch(x, y) end },
         { name = "Router", render = function(target, page_model, should_clear)
             ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear, true)
             return large_footer(target, "ROUTER")
