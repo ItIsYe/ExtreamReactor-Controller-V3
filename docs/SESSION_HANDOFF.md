@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-08 | beta | manifest-v814 | HEAD `69054880`**
+**Stand: 2026-10-12 | beta | manifest-v815 | HEAD `212ac95f`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `69054880` |
-| Fassung | `manifest-v814` / `beta-v814`, Prüfsumme `48d03939` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 402 Lua + 45 Python, grün |
+| HEAD | `212ac95f` |
+| Fassung | `manifest-v815` / `beta-v815`, Prüfsumme `b8c424e8` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 406 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -30,8 +30,11 @@ Freigegeben und umgesetzt (Folgesitzungen 2026-10-04/05): der Chunk-Test,
 der Schleifen-Fix (v812), die CI-Remote-Prüfung und derselbe Fix für MASTERs
 Schleife (v813, ohne die Heartbeat-Logik anzufassen). Am 2026-10-08:
 **„Ok der Code der noch offen zu fixen ist machen"** — umgesetzt in v814
-(siehe A und F), dazu drei Entscheidungen (F). Die Selbstheilung (B) gehört
-nicht dazu, sie ist ein eigenes Vorhaben. Alles andere braucht weiter
+(siehe A und F), dazu drei Entscheidungen (F). Am 2026-10-12: **„mach die
+Punkte aus 2. Aber vorsichtig, und wenn es mehr Sinn macht, Blöcke komplett
+neu zu schreiben, als drin rumzudoktern, mache das"** — umgesetzt in v815
+(siehe G). Die Selbstheilung (B) gehört nicht dazu, sie ist ein eigenes
+Vorhaben. Alles andere braucht weiter
 eine ausdrückliche Freigabe, bevor Code angefasst wird. Der Betreiber kann derzeit **nicht im Spiel testen**
 („Bau weiter dran ich kan gead keine tests machen").
 
@@ -266,7 +269,8 @@ SCADA-Umbau) entfallen. Bewusst nicht nachgebaut: das wäre neues
 Verhalten (Ebene 2), keine Reparatur. Ebenfalls auffällig:
 `service_manager.lua:65` `schedule_retry` wiederholt mit Backoff, verwirft
 dabei aber **nie** das Handle oder den abgeleiteten Zustand, an dem es
-scheitert.
+scheitert. **Seit v815** gibt es dafür einen Haken (siehe G) — wirksam nur
+für Dienste, die `discard_derived_state` anbieten (bisher `MATRIX_SAMPLE`).
 
 **Reihenfolge: Betrieb beobachten (TIMER LOST, siehe A) → Ebene 1 →
 Ebene 2 → Ebene 3.** Das Chunk-Modell steht
@@ -354,6 +358,69 @@ noch relevant sind bzw. noch genommen werden dürfen"):
    (50 Turbinen, Skala ändern, Neustart mit 52 → alle 52 gebunden).
 3. **Prüfsummen für Dateien** — siehe E.
 
+### G) Umgesetzt am 2026-10-12 (v815)
+
+Freigabe: „mach die Punkte aus 2" — die vier kleinen Code-Reste aus der
+Liste vom 2026-10-12. Jeder hat einen Test, der am Stand v814 aus dem
+richtigen Grund scheitert.
+
+1. **RT-Schirm: ein Leseweg.** `monitor_ui.build_turbine_status` las eine
+   Turbine, für die `adapters/turbine.inspect()` keine Drehzahl oder keinen
+   Durchfluss lieferte, ein zweites Mal — per `peripheral.wrap` und mit dem
+   Fähigkeiten-Cache der Discovery (`ctx.capability_cache`, wird je Name
+   einmal geschrieben und nie erneuert). Neu geschrieben: nur noch
+   `inspect()`, nicht Lesbares bleibt unbekannt (`nil` → „-"). Damit zeigt
+   der Schirm, was der Regler sieht, statt bei blindem Regler normal
+   auszusehen (vgl. `rt2_unreadable_turbine_write_test.lua`). Entfallen:
+   `turbine_control.read_turbine_rpm/read_turbine_flow` und ihre
+   Durchreichungen in `main.lua`/`status_snapshot.lua`.
+   Test: `tests/rt_monitor_single_read_path_test.lua`.
+   **Nachgelagert offen:** `ctx.capability_cache` und `module.caps` /
+   `module.peripheral` (`discovery_runtime.lua`) werden jetzt nur noch
+   geschrieben, von niemandem mehr gelesen — Kandidat zum Entfernen
+   (Selbstheilung Ebene 1), bewusst nicht angefasst, weil es die Discovery
+   betrifft.
+2. **ENERGY: unbekannte Matrix-Kapazität ist nicht „100 % voll".**
+   `matrix_snapshot_runtime.rebuild_snapshot` setzte `capacity = stored`,
+   solange `getCapacity` nie gelesen war. Folgen, nachgemessen: MASTER
+   meldete `MATRIX_NEAR_FULL … 100.0%` für eine Matrix, deren Füllstand
+   niemand kannte, und die Gesamtanzeigen rechneten den erfundenen Nenner
+   mit. Den **Lastabwurf** hat es nicht ausgelöst: ohne vollständige Probe
+   ist der Schnappschuss veraltet, und `runtime_ops_profile.lua` lässt
+   veraltete ENERGY-Knoten aus. Jetzt wie bei den Speichern
+   (`storage_snapshot_runtime.lua`): Zähler und Nenner nur gemeinsam,
+   `capacity_known`, `total.stored_all`, `total.capacity_unknown`;
+   ENERGY- und MASTER-Seite zeigen „n/a".
+   Test: `tests/energy_matrix_unknown_capacity_test.lua`.
+3. **`service_manager`: abgeleiteten Zustand verwerfen.** Der Manager hält
+   selbst keine Handles. Er fragt deshalb den Dienst: wer
+   `discard_derived_state(stage, err, n)` anbietet, bekommt nach je 3
+   Fehlschlägen von `tick()` in Folge die Gelegenheit (`discard_after_failures`,
+   0 schaltet ab). `init()` wird bewusst **nicht** neu gestartet —
+   `comms_service:init()` baut Netzwerk und Comms-Objekt neu, auf die
+   andere Teile Verweise halten. Erster Nutzer: `MATRIX_SAMPLE`
+   (`runtime:invalidate()`, dieselbe, die die ENERGY-Discovery bei
+   Topologie-Änderung ruft). Nebenbei: die Fehlerzeile hatte Stufe und
+   Name vertauscht. Zähler `total_failures`/`discards` stehen in
+   `manager.service_state`. Test:
+   `tests/service_manager_discard_derived_state_test.lua`.
+4. **Dateiprüfung auf MASTERs Seite „Updates".** Spalte DATEIEN je Knoten
+   („OK", „3 ABW", „-" ohne Liste, „?" noch nicht geprüft oder Ergebnis zu
+   einer anderen Fassung); abweichende Dateien zählen als „braucht
+   Aufmerksamkeit" (Status DATEIEN). MASTERs eigenes Ergebnis in der
+   Fußzeile. **Transport über das STATUS-Paket** (`shared/build_info.lua`
+   → `meta.build.integrity`), **nicht über den Heartbeat** — der Test hält
+   fest, dass der Heartbeat nur `state` und `manifest_version` trägt.
+   Geprüft wird beim ersten Update-Check nach dem Start, vorher steht „?".
+   Test: `tests/master_updates_integrity_test.lua`.
+
+Beifang: `alert_rules_matrix_missing_offline_suppression_test.lua` und
+`alert_rules_stale_recovery_suppression_test.lua` gaben die Rolle als
+`'ENERGY_NODE'` an — die Konstante ist `"ENERGY-NODE"`, die ENERGY-Regeln
+liefen dort also gar nicht, beide Tests bestanden immer. Jetzt mit der
+Konstante; ein Gegenversuch (Unterdrückung entfernt) lässt den Test
+scheitern.
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -407,7 +474,7 @@ noch relevant sind bzw. noch genommen werden dürfen"):
   Fassung um zwei.
 - **Konfig-Falle:** `core/utils.migrate_config()` ergänzt Vorgaben **und
   schreibt sie fest**. Jede Änderung einer Vorgabe braucht eine
-  Schema-Migration (RT steht auf v8).
+  Schema-Migration (RT steht auf v9).
 - **Heißer Pfad bleibt namensbasiert** (`peripheral.call` /
   `utils.safe_peripheral_call`). Genau das lässt den Regler Chunk-Nachladen
   überleben; langlebige `peripheral.wrap`-Handles sind das zerbrechliche
@@ -420,23 +487,25 @@ noch relevant sind bzw. noch genommen werden dürfen"):
 
 ## Nächste Schritte
 
-1. **Im Betrieb beobachten:**
-   - MASTER, Seite **Updates**: alle Knoten auf v814?
-   - Startzeile jedes Knotens: `beta-v814 (Pruefsumme 48d03939)`.
+1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
+   - MASTER, Seite **Updates**: alle Knoten auf v815? Spalte **DATEIEN**
+     nach dem ersten Update-Check „OK" (vorher „?").
+   - Startzeile jedes Knotens: `beta-v815 (Pruefsumme b8c424e8)`.
    - RT-Diagnoseseite nach dem nächsten Chunk-Laden: „TIMER LOST / LATE".
    - MASTERs Terminal: „[MASTER] Takt-Timer ausgeblieben …" belegt den
      Ausgleich.
-   - RT-Schirm einmalig nach v814: „feste Geraeteliste entfernt" zeigt einen
-     Knoten, der von der Touch-Skalierung betroffen war.
+   - RT-Schirm, Seite Turbinen: zeigt eine Turbine „-", kann auch der
+     Regler sie nicht lesen (seit v815 derselbe Leseweg).
+   - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
+     „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` mehr beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v814 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v815 / Pruefsumme …".
 2. Selbstheilung Ebene 1 → 2 → 3, Ebene 3 nur auf ausdrückliche Ansage.
-3. Optional: das Ergebnis der Dateiprüfung auf MASTERs Updates-Seite zeigen
-   (bräuchte ein Feld im Heartbeat — Heartbeat-Inhalt, daher nur mit
-   Freigabe).
-4. Älter und noch offen: MASTER-Ausfall-Befunde A und B (Inhalt nicht mehr
-   dokumentiert — erst nachlesen); `matrix_snapshot_runtime.lua`
-   Kapazitäts-Rückfall; die P2-Liste des Audits.
+   Für Ebene 1 bereit: der nur noch geschriebene Fähigkeiten-Cache der
+   RT-Discovery (G1), der Verwerf-Haken im `service_manager` (G3).
+3. Älter und noch offen: MASTER-Ausfall-Befunde A und B (Inhalt nicht mehr
+   dokumentiert — erst nachlesen); die P2-Liste des Audits.
+4. Reaktor-Identität: `fuel_routes` auf globale Kennungen (siehe D).
 5. `beta` → `main`, sobald alles läuft (Betreiber).
 6. **Der Betreiber hatte „noch ein weiteres Thema, aber indirekt damit
    zusammenhängend" angekündigt und nie genannt. Danach fragen.**
