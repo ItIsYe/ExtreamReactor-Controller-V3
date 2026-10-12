@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-12 | beta | manifest-v817 | HEAD `6a3546e7`**
+**Stand: 2026-10-12 | beta | manifest-v818 | HEAD `ed8a9165`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `6a3546e7` |
-| Fassung | `manifest-v817` / `beta-v817`, Prüfsumme `dae7f071` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 407 Lua + 45 Python, grün |
+| HEAD | `ed8a9165` |
+| Fassung | `manifest-v818` / `beta-v818`, Prüfsumme `02d8d1ba` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 408 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -505,6 +505,55 @@ namensbasiert (v814), Schirm mit einem Leseweg (v815), Verwerf-Haken im
    neu (`matrix_topology_cache.forced_rescan_interval_s`); WATER bindet die
    Tanks bei jeder Discovery (15 s) neu ein.
 
+### J) Umgesetzt am 2026-10-12 (v818): Ventil-Erreichbarkeit live
+
+Anlass: Test im Spiel — „die Valves verbinden sich anscheinend nicht mit
+FUEL über Funk". Funk und Pairing waren in Ordnung (VALVE `node-68` an FUEL
+`node-64` gepaart, MASTER online), FUEL zeigte trotzdem
+„Ventil-Verbindung nicht bereit — offline=17" und blockierte alles.
+Freigabe: „Ja mach Fehler 1, vorsichtig wie immer".
+
+1. **Ursache (Fehler 1):** `nodes/fuel/redstone_router.lua` legte in
+   `refresh()` eine Momentaufnahme an (`_state.integrators`): schaltbar war
+   nur, was in genau diesem Augenblick in der Peer-Tabelle stand.
+   `refresh()` läuft beim Start — bevor ein VALVE-Node seinen ersten
+   Heartbeat geschickt hat — und danach höchstens alle 60 s (nur mit
+   eingeschalteter Logistik, nie während einer Lieferung). Bis dahin galten
+   alle Ventile als offline, jede Lieferung scheiterte sofort mit
+   Safety-Latch. Im Anlagentest: erste Lieferung nach **65,7 s**, jetzt nach
+   **5,7 s**.
+2. **Jetzt:** `_valve_link()` fragt die Peer-Tabelle in dem Moment, in dem
+   die Antwort gebraucht wird: `online`, `stale`, `offline` (war da, ist
+   weg — auch nach Ablauf aus der Peer-Tabelle), `waiting` (noch nie
+   gehört, FUEL läuft < 60 s), `unknown` (unter dieser Kennung hat sich seit
+   dem Start **nie** ein VALVE-Node gemeldet). Senderegel: **BLOCKED** an
+   jedes Ventil, das comms führt (auch stale/down — Sperren ist immer
+   sicher), **OPEN** nur an ein gerade `online`-Ventil (dieselbe Bedingung
+   wie die Exportfreigabe). Nicht gesendet → sofort gescheitert, wie bisher.
+   ACK-Pflicht, Safety-Latch, Quiesce: unverändert. Meldungen einmal je
+   Störung (`core/once_log.lua`), im Anlauf keine.
+3. **Anzeige:** neuer Banner **VALVE_UNKNOWN** „Ventil-Kennung unbekannt —
+   N nie gemeldet: <bis zu drei IDs> (+Rest)", Handgriff „ROUTER >
+   Ventilkette neu einlernen"; **VALVE_WAITING** „Ventile melden sich noch"
+   (LIMITED) im Anlauf; `route_state` `VALVE_UNKNOWN`/`VALVE_WAITING`;
+   Diagnosezeile `VALVES n/off/alt/unb`. `VALVE_OFFLINE` heißt jetzt nur
+   noch: war da, ist weg oder überfällig.
+4. **Harness:** `tests/support/node_message_bus.lua` kann rohe Kanäle
+   (`raw_channels`) an alle `wants_events`-Services zustellen, mit dem
+   Modem des Empfängers als Seite — damit läuft SET_VALVE/VALVE_ACK im
+   Anlagentest echt. Standard unverändert (nur COMMS). Neuer Test
+   `tests/fuel_valve_link_live_test.lua` (Router, Anzeige, ganze Anlage mit
+   RT, MASTER, FUEL, zwei VALVE-Nodes); scheitert am alten Router aus dem
+   richtigen Grund. Hinweis für Harness-Ventile: `redstone_side` und
+   `trusted_source` in die Konfig, sonst ACK `applied=false` (kein Aktor)
+   bzw. `PAIRING_PERSIST_FAILED` (Test-Platte kann kein `mkdir`).
+5. **Noch offen (Betreiber):** ob im Spiel zusätzlich die **Kennungen in
+   der Ventilkette** nicht passen (Verdacht, weil offline=17 dauerhaft
+   blieb). Mit v818 zeigt der FUEL-Schirm das direkt: steht dort
+   „Ventil-Kennung unbekannt", die Ventilkette im ROUTER neu einlernen. Im
+   FUEL-Log steht dann je Kennung: „unter der Kennung '…' hat sich seit dem
+   Start kein VALVE-Node gemeldet".
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -574,9 +623,14 @@ namensbasiert (v814), Schirm mit einem Leseweg (v815), Verwerf-Haken im
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v817? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v818? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v817 (Pruefsumme dae7f071)`.
+   - Startzeile jedes Knotens: `beta-v818 (Pruefsumme 02d8d1ba)`.
+   - **FUEL nach dem Start (v818):** wenige Sekunden „Ventile melden sich
+     noch", dann entweder bereit — oder „Ventil-Kennung unbekannt" mit den
+     IDs, die nicht passen: dann ROUTER > Ventilkette neu einlernen (siehe J).
+     „Ventil-Verbindung nicht bereit" heißt nur noch: Ventil war da und ist
+     weg.
    - FUEL-Log nach dem Start: „FUEL-Route '…': Reaktor-Kennung … -> …
      (global, gespeichert)" für alte Routen; Meldungen „… im ROUTER neu
      einlernen" für Routen, die sich nicht zuordnen lassen — die dann im
@@ -588,7 +642,7 @@ namensbasiert (v814), Schirm mit einem Leseweg (v815), Verwerf-Haken im
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
      „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v817 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v818 / Pruefsumme …".
    - Log nach einem Geräteausfall: dieselbe Warnung („Turbine call failed …")
      kommt nach einer Erholung beim NÄCHSTEN Ausfall wieder (seit v817),
      höchstens einmal je Minute.
