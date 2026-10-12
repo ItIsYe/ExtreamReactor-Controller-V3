@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-12 | beta | manifest-v819 | HEAD `c73c5114`**
+**Stand: 2026-10-12 | beta | manifest-v820 | HEAD `7064bed9`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `c73c5114` |
-| Fassung | `manifest-v819` / `beta-v819`, Prüfsumme `d7f86f34` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 409 Lua + 45 Python, grün |
+| HEAD | `7064bed9` |
+| Fassung | `manifest-v820` / `beta-v820`, Prüfsumme `988047d9` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 410 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -589,6 +589,49 @@ UI-Seite".
    als vierte von fünf Seiten); `fuel_monitor_backbuffer_test` erwartet
    jetzt fünf Seiten.
 
+### L) Umgesetzt am 2026-10-12 (v820): FUEL entlastet — Funkmeldungen gingen verloren
+
+Befund (Betreiber, Seite VENTILE): immer dieselben VALVE-Nodes „nie
+gehört", alle mit Ender-Modem → Überlast. Mechanismus: jede Node hört jede
+Meldung jeder anderen Node (Rundfunk); CC:Tweaked hat je Rechner höchstens
+256 Ereignisse in der Warteschlange und verwirft den Rest still; alle
+Rechner teilen sich standardmäßig **einen** Lua-Thread des Servers. Die
+Gesamtlast wächst etwa quadratisch mit der Zahl der Nodes.
+Hinweis: „nach FUEL-Neustart dieselben IDs" trennt Überlast und Modem
+**nicht** sicher — die Sendetakte der Ventile liegen fest zueinander,
+unabhängig von FUEL.
+
+1. **`services/ui_service.lua`** (alle Rollen mit Schirm): passive
+   Ereignisse prüfen höchstens einmal je Intervall (`last_check`). Vorher
+   war die Prüfung nach Ablauf des Intervalls bei **jeder** weiteren
+   Funkmeldung erneut fällig — je Meldung ein komplettes Modell samt Kopie
+   und Vergleich des ganzen Status. Messung FUEL: 159 → 30 Aufbauten in
+   30 s, gezeichnet unverändert 27-mal.
+2. **`core/comms.lua` `payload_filter`** (opt-in je Rolle, über
+   `comms_service.new{payload_filter=}`): Nachrichten, deren Inhalt die
+   Rolle nicht braucht, aktualisieren nur den Absender in der Peer-Tabelle
+   (gleiche Umschlagprüfung), keine Nutzlast-Kopie, keine Handler, keine
+   Duplikat-Buchführung. Ungültiges und Filterfehler: voller Weg. Ohne
+   Filter unverändert. Zähler `metrics.peer_only`.
+   `protocol.sanitize_envelope()` = Umschlag ohne Nutzlast.
+3. **FUEL** (`fuel_status_network.make_payload_filter`): Inhalt von
+   MASTER, von allem mit `dst`, und außer HEARTBEAT/STATUS/HELLO/ALERT;
+   sonst nur Absender. Der Füllstand-Mithörer prüft `type`/`role` **vor**
+   dem Kopieren (nur RT-Status).
+4. **Seite VENTILE, Zeile 5:** `FUEL-LAST: Timer verloren N, verspaetet M`
+   aus `runtime.loop_stats()` — N > 0 heißt: Warteschlange lief über.
+5. Messung je empfangener Meldung (Host-Lua, Harness 3 RT + MASTER +
+   12 Ventile): 0,119 → 0,061 ms. Im Spiel (Cobalt, RT mit 50 Turbinen)
+   ist der Gewinn größer. Heartbeat-Logik unverändert.
+6. Test `tests/fuel_radio_load_relief_test.lua` (scheitert an jeder alten
+   Datei aus dem richtigen Grund).
+
+**Möglicher nächster Schritt (nicht umgesetzt, Freigabe nötig):** denselben
+`payload_filter` für die **VALVE-Nodes** (29 Rechner, brauchen von anderen
+Nodes nur MASTER und Kommandos) und ggf. weitere Rollen — entlastet den
+gemeinsamen Lua-Thread des Servers für alle. Je Rolle vorher prüfen,
+welche Handler fremde Status-Inhalte lesen (MASTER braucht alle!).
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -658,9 +701,9 @@ UI-Seite".
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v819? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v820? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v819 (Pruefsumme d7f86f34)`.
+   - Startzeile jedes Knotens: `beta-v820 (Pruefsumme 988047d9)`.
    - **FUEL nach dem Start (v818):** wenige Sekunden „Ventile melden sich
      noch", dann entweder bereit — oder „Ventil-Kennung unbekannt" mit den
      IDs, die nicht passen: dann ROUTER > Ventilkette neu einlernen (siehe J).
@@ -671,6 +714,10 @@ UI-Seite".
      (REAKTOREN)? Mit den VALVE-Schirmen (zeigen ihre eigene ID) abgleichen.
      Steht „WARTET" länger als eine Minute, startet FUEL neu — dann
      FUEL-Log ansehen (siehe K).
+   - **Nach v820:** Seite VENTILE, Zeile 5 „FUEL-LAST: Timer verloren …".
+     Bleibt sie bei 0 und werden alle Ventile gehört, ist die Überlast weg.
+     Steigt die Zahl weiter, reicht die Entlastung von FUEL allein nicht —
+     dann VALVE-Nodes ebenfalls entlasten (siehe L, nächster Schritt).
    - FUEL-Log nach dem Start: „FUEL-Route '…': Reaktor-Kennung … -> …
      (global, gespeichert)" für alte Routen; Meldungen „… im ROUTER neu
      einlernen" für Routen, die sich nicht zuordnen lassen — die dann im
@@ -682,7 +729,7 @@ UI-Seite".
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
      „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v819 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v820 / Pruefsumme …".
    - Log nach einem Geräteausfall: dieselbe Warnung („Turbine call failed …")
      kommt nach einer Erholung beim NÄCHSTEN Ausfall wieder (seit v817),
      höchstens einmal je Minute.
