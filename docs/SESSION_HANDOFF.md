@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-12 | beta | manifest-v818 | HEAD `ed8a9165`**
+**Stand: 2026-10-12 | beta | manifest-v819 | HEAD `c73c5114`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `ed8a9165` |
-| Fassung | `manifest-v818` / `beta-v818`, Prüfsumme `02d8d1ba` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 408 Lua + 45 Python, grün |
+| HEAD | `c73c5114` |
+| Fassung | `manifest-v819` / `beta-v819`, Prüfsumme `d7f86f34` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 409 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -554,6 +554,41 @@ Freigabe: „Ja mach Fehler 1, vorsichtig wie immer".
    FUEL-Log steht dann je Kennung: „unter der Kennung '…' hat sich seit dem
    Start kein VALVE-Node gemeldet".
 
+### K) Umgesetzt am 2026-10-12 (v819): FUEL-Seite VENTILE
+
+Anlass: nach v818 meldete FUEL im Spiel „6 von 29 noch nicht gehört", die
+Zahl änderte sich nicht, die Nodes waren laut Betreiber alle online. Im
+Code keine Erklärung gefunden (IDs auf beiden Seiten aus `node_id.txt`,
+`update_peer` zählt jede gültige Meldung, Protokoll seit Januar gleich).
+Übrig bleiben im Spiel: (1) IDs in der Kette, die keine VALVE-Node hat,
+(2) FUEL hört diese Nodes nicht (Reichweite: normale statt Ender-Modem am
+FUEL-Computer, oder zwei Modems). Bleibt „melden sich noch" länger als
+60 s stehen, startet FUEL neu (Anlaufzeit beginnt von vorn) — noch nicht
+geklärt. Wunsch des Betreibers: „ein extra Seite wo nur alle Valves
+angezeigt werden … farbig … wann die zuletzt gehört wurden … komplett neue
+UI-Seite".
+
+1. **Neue Datei `nodes/fuel/valve_page.lua`**, Seite **4/5** (vor dem
+   Router; alle Seitennummern jetzt x/5). Eine Zeile je Ventil, Probleme
+   zuerst: ZUSTAND farbig (UNBEKANNT orange, OFFLINE rot, NICHT AKTUELL
+   gelb, WARTET grau, ONLINE grün), NAME, ID, ZULETZT (grob: `< 10 s`,
+   `vor 20 s`, `vor 3 min`, `nie`), VENTIL (letzte VALVE_ACK: ZU / AUF /
+   FEHLER, `?` solange ausstehend), REAKTOREN (in welchen Ketten). Kopf mit
+   Zählern, Legende mit Handgriffen, erste Schreibfehler-Meldung eines
+   Ventils im Klartext (z. B. „sorter not found …"), 20 Ventile je Seite.
+2. **Nur im Bildschirm-Modell, solange die Seite offen ist** — nicht im
+   Status-Payload (kein Funkverkehr zu MASTER), kein Neuzeichnen anderer
+   Seiten. Grobe Zeitstufen, damit die Seite nicht jede Sekunde neu zeichnet.
+3. **`get_valve_status()`** liefert zusätzlich `last_seen_ms` und den Namen
+   (bleiben nach Ablauf aus der Peer-Tabelle erhalten), die letzte
+   VALVE_ACK als `ack_applied/ack_high/ack_error/ack_ms` und `ack_pending`.
+   Achtung Lua: `ack and ack.applied or nil` macht aus `false` still `nil`
+   — ausgeschrieben, Test fängt es.
+4. Test `tests/fuel_valve_page_test.lua` (Aufbereitung, Zeichnen auf
+   82×40 mit echten Farben, Blättern ohne Reste, Router-Felder, Einbindung
+   als vierte von fünf Seiten); `fuel_monitor_backbuffer_test` erwartet
+   jetzt fünf Seiten.
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -623,14 +658,19 @@ Freigabe: „Ja mach Fehler 1, vorsichtig wie immer".
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v818? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v819? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v818 (Pruefsumme 02d8d1ba)`.
+   - Startzeile jedes Knotens: `beta-v819 (Pruefsumme d7f86f34)`.
    - **FUEL nach dem Start (v818):** wenige Sekunden „Ventile melden sich
      noch", dann entweder bereit — oder „Ventil-Kennung unbekannt" mit den
      IDs, die nicht passen: dann ROUTER > Ventilkette neu einlernen (siehe J).
      „Ventil-Verbindung nicht bereit" heißt nur noch: Ventil war da und ist
      weg.
+   - **FUEL-Seite VENTILE (v819, Seite 4/5):** welche IDs stehen auf
+     UNBEKANNT / OFFLINE, seit wann (ZULETZT), in welcher Kette
+     (REAKTOREN)? Mit den VALVE-Schirmen (zeigen ihre eigene ID) abgleichen.
+     Steht „WARTET" länger als eine Minute, startet FUEL neu — dann
+     FUEL-Log ansehen (siehe K).
    - FUEL-Log nach dem Start: „FUEL-Route '…': Reaktor-Kennung … -> …
      (global, gespeichert)" für alte Routen; Meldungen „… im ROUTER neu
      einlernen" für Routen, die sich nicht zuordnen lassen — die dann im
@@ -642,7 +682,7 @@ Freigabe: „Ja mach Fehler 1, vorsichtig wie immer".
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
      „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v818 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v819 / Pruefsumme …".
    - Log nach einem Geräteausfall: dieselbe Warnung („Turbine call failed …")
      kommt nach einer Erholung beim NÄCHSTEN Ausfall wieder (seit v817),
      höchstens einmal je Minute.
