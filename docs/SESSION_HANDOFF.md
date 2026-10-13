@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-13 | beta | manifest-v823 | HEAD `a19dd78a`**
+**Stand: 2026-10-13 | beta | manifest-v824 | HEAD `bebb78d5`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `a19dd78a` |
-| Fassung | `manifest-v823` / `beta-v823`, Prüfsumme `8f7c66a7` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 414 Lua + 45 Python, grün |
+| HEAD | `bebb78d5` |
+| Fassung | `manifest-v824` / `beta-v824`, Prüfsumme `cd89c73c` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 415 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -632,7 +632,7 @@ Nodes nur MASTER und Kommandos) und ggf. weitere Rollen — entlastet den
 gemeinsamen Lua-Thread des Servers für alle. Je Rolle vorher prüfen,
 welche Handler fremde Status-Inhalte lesen (MASTER braucht alle!).
 
-### M) Funk-Hygiene — Konzept, Stufe 1 (v821), Stufe 2 (v822), Stufe 3 (v823), 2026-10-13
+### M) Funk-Hygiene — Konzept, Stufe 1 (v821), Stufe 2 (v822), Stufe 3 (v823/v824), 2026-10-13
 
 Betreiber: „Funk-Hygiene … alle Meldungen, die nicht nötig sind, raus …
 verschiedene Kanäle und Filter, so dass jeder PC nur noch verarbeitet, was
@@ -767,6 +767,32 @@ darf ich nicht ändern — also hört FUEL die Heartbeats gar nicht mehr.
 Empfang je Minute, gleicher Harness): FUEL **530 → 128**; Ventile +6
 (Pings). Geschätzt für die Anlage des Betreibers: FUEL ≈ 1700 → ≈ 275.
 
+**v824 — Befunde der Code-Prüfung nach v823** (Betreiber: „Ja setze 1 bis
+3 um, Ping alle 5 s"):
+1. **Ping-Toleranz:** v823 (10 s Takt, „überfällig" nach 20 s) vertrug eine
+   einzige verlorene Antwort — eine Lieferung, die genau dann öffnete,
+   brach ab (Sicherheits-Riegel). Jetzt Ping alle **5 s**, überfällig
+   nach **17,5 s** (2 verlorene ok), weg nach **30 s** (5 verlorene).
+   `VALVE_ACK` und `HOP_SCAN` zählen als Lebenszeichen (`valve_reply`) —
+   **nur** bei Ventilen, die auf den Ping antworten (ältere beurteilt FUEL
+   über den Heartbeat; `redstone_router_refresh_transaction_race_test`
+   sichert: comms sagt „weg" → kein Export, auch nach frischer Quittung),
+   und **nie** fürs Schließen des Uplinks (`all_valves_answer_ping` nur
+   Ping-Antworten — sonst ginge 6501 bei jeder Lieferung eines alten
+   Ventils kurz zu).
+2. **Sichtbarkeit:** `comms_service:get_uplink_state().reason` (auch
+   „MASTER noch nicht auf dem Downlink gehört", „wieder geöffnet; schließt
+   frühestens 60 s danach"); einmal INFO „Uplink-Kanal 6501 bleibt offen:
+   …", wenn derselbe Grund 60 s hält (nur Rollen mit
+   `uplink_close_check`); FUEL-Seite VENTILE Zeile 36 „UPLINK 6501: ZU" /
+   „OFFEN -- <Grund>".
+3. **Log-Kanal:** 6503 nach **45 s** ohne Antwort auf 6505 wieder offen
+   (= `LOG_ONLINE_TIMEOUT_S`; vorher 60 s).
+
+Test `tests/fuel_valve_ping_tolerance_test.lua`; 15 Rückbauten, alle
+erkannt. Gemessen (Harness wie oben): FUEL 151/min (v823: 128, v822:
+530). Geschätzt für die Anlage des Betreibers: ≈ 450/min statt ≈ 1700.
+
 **Noch offen (nur Konzept, siehe Gespräch vom 2026-10-13):** A — Ventile
 per eigenem Kabelnetz an FUEL (baut auf Stufe 3 auf; eigenes Netz, nicht
 FUELs Peripherie-Kabel, sonst greift die Selbsterkennung der Ventile
@@ -851,14 +877,15 @@ MASTER?). Nur auf ausdrückliche Freigabe.
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v823? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v824? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v823 (Pruefsumme 8f7c66a7)`.
-   - **Nach v823 (Stufe 3):** FUEL loggt „Uplink-Kanal 6501 geschlossen:
-     alle Ventile antworten auf VALVE_PING …". Steht dort stattdessen
-     „… Ventil X antwortet nicht auf VALVE_PING", ist X noch nicht auf
-     v823 oder nicht erreichbar (Seite VENTILE). Seite VENTILE: alle
-     Ventile online, „FUEL-LAST" bei 0?
+   - Startzeile jedes Knotens: `beta-v824 (Pruefsumme cd89c73c)`.
+   - **Nach v823/v824 (Stufe 3):** FUEL-Seite VENTILE, Zeile 36: „UPLINK
+     6501: ZU" ist der Normalfall. „OFFEN -- Ventil X antwortet nicht auf
+     VALVE_PING": X ist noch nicht auf v823+ oder nicht erreichbar — oder
+     die Kennung in der Kette ist falsch (Zeile UNBEKANNT). Dasselbe steht
+     nach 60 s einmal im FUEL-Log („… bleibt offen: …"). Alle Ventile
+     online, „FUEL-LAST" bei 0?
    - **Nach v822 (Funk-Hygiene Stufe 2):** RT/ENERGY/WATER/REPROC/VALVE
      loggen einmal „Uplink-Kanal 6501 geschlossen: MASTER sendet auf dem
      Downlink 6500 …", jede Node „Log-Kanal 6503 geschlossen: der
@@ -892,7 +919,7 @@ MASTER?). Nur auf ausdrückliche Freigabe.
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
      „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v823 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v824 / Pruefsumme …".
    - Log nach einem Geräteausfall: dieselbe Warnung („Turbine call failed …")
      kommt nach einer Erholung beim NÄCHSTEN Ausfall wieder (seit v817),
      höchstens einmal je Minute.
