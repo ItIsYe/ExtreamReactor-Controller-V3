@@ -4,16 +4,15 @@ local reactor_identity = require("core.reactor_identity")
 
 local M = {}
 
--- 4s statt 10s. Der Fuellstand selbst aendert sich langsam -- entscheidend
--- ist, dass dieses Relais fuer eine FUEL-Node, die die RT-Nodes NICHT
--- direkt mithoeren kann (nodes/fuel/fuel_status_network.lua's
--- make_overhear_service, braucht Funkreichweite zur RT), der einzige Weg
--- ist. Dann lag das Budget bei RT-status_interval (5s) + 10s Relais, also
--- bis zu 15s bis zum ersten Fuellstand. Das Relais ist ein kleines,
--- quittiertes Kommando an wenige FUEL-Nodes -- es darf haeufiger laufen
--- als der teure RT-Statusaufbau (der jeden Reaktor und jede Turbine live
--- abfragt) und ist damit nicht mehr der bestimmende Term.
-local RELAY_INTERVAL_MS = 4000
+-- Alle 10 s, ohne Quittung (Funk-Hygiene v821, Betreiberentscheidung).
+-- FUEL hoert die RT-Statusmeldungen direkt mit (nodes/fuel/
+-- fuel_status_network.lua's make_overhear_service) -- das Relais ist der
+-- Rueckweg fuer den Fall, dass das nicht klappt. Bis v820 lief es alle 4 s
+-- als quittiertes Kommando: je Lauf zwei Quittungen zurueck, eine davon mit
+-- der kompletten Tabelle als Echo, alles als Rundruf an jeden Rechner der
+-- Anlage. Eine neu auftauchende FUEL-Node bekommt den Stand weiterhin
+-- sofort (nodes_changed unten), nicht erst nach dem Intervall.
+local RELAY_INTERVAL_MS = 10000
 local MAX_SAMPLE_AGE_MS = 60000
 local MAX_REACTORS = 256
 
@@ -116,7 +115,7 @@ function M.tick(runtime)
     runtime.refs.comms:send_command(id, {
       target = constants.command_targets.FUEL_STATUS,
       value = snapshot,
-    })
+    }, { no_ack = true })
   end
 end
 

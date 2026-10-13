@@ -276,6 +276,9 @@ function M.check_timeouts(runtime)
       node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN] = nil
       node.down_since = nil; node.down_pending_since = nil; node.offline = false; node.stale = false; node.recovering = false; node.managed = true
       if was_down then
+        -- War die Node weg, hat sie womoeglich neu gestartet: Sollwerte beim
+        -- naechsten Abgleich sofort senden (rt_sync.setpoint_send_due).
+        node.last_setpoints_ts = nil
         -- Alert clearen wenn Node wieder online kommt
         if runtime.refs and runtime.refs.alert_service then
           local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))

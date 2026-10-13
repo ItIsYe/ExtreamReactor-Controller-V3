@@ -497,8 +497,11 @@ local function handle_ack(message)
     if not entry.require_applied then
       state.inflight[ack_for] = nil
     end
+    -- Quittungen und "queued" je Kommando: DEBUG (Funk-Hygiene v821) --
+    -- MASTER schrieb davon drei Zeilen je Kommando, jede per Funk an den
+    -- Log-Sammler. Fehlschlaege meldet message_handlers.lua als WARN.
     if entry.message and entry.message.type == constants.message_types.COMMAND then
-      log(("Command delivered ack %s from %s"):format(tostring(ack_for), tostring(message.src or message.sender_id or "unknown")))
+      log(("Command delivered ack %s from %s"):format(tostring(ack_for), tostring(message.src or message.sender_id or "unknown")), "DEBUG")
     end
   elseif message.type == constants.message_types.ACK_APPLIED then
     state.inflight[ack_for] = nil
@@ -509,10 +512,20 @@ local function handle_ack(message)
         tostring(ack_for),
         tostring(message.src or message.sender_id or "unknown"),
         status
-      ))
+      ), result.ok == false and "INFO" or "DEBUG")
     end
   end
   return true
+end
+
+-- Ein Kommando, dessen Absender keine Quittung will (payload.no_ack, siehe
+-- comms_service:send_command opts.no_ack): eine regelmaessig wiederholte
+-- Mitteilung wie MASTERs Fuellstand-Relais an FUEL. Bis v820 kamen darauf
+-- zwei Quittungen zurueck, eine davon mit der kompletten Tabelle als Echo.
+local function command_wants_ack(message)
+  if message.type ~= constants.message_types.COMMAND then return false end
+  local payload = message.payload
+  return not (type(payload) == "table" and payload.no_ack == true)
 end
 
 local function handle_message(message)
@@ -528,7 +541,7 @@ local function handle_message(message)
     local dup = find_dedupe(message.src, message.message_id)
     if dup then
       state.metrics.dedupe_hits = state.metrics.dedupe_hits + 1
-      if message.type == constants.message_types.COMMAND then
+      if command_wants_ack(message) then
         send_ack(message, constants.message_types.ACK_DELIVERED, { detail = "duplicate" })
         if dup.applied then
           send_ack(message, constants.message_types.ACK_APPLIED, { result = dup.applied })
@@ -550,7 +563,7 @@ local function handle_message(message)
     return
   end
 
-  if message.type == constants.message_types.COMMAND then
+  if command_wants_ack(message) then
     send_ack(message, constants.message_types.ACK_DELIVERED)
   end
 
@@ -567,7 +580,9 @@ local function handle_message(message)
         applied.command_value = cmd.value
       end
     end
-    send_ack(message, constants.message_types.ACK_APPLIED, { result = applied })
+    if command_wants_ack(message) then
+      send_ack(message, constants.message_types.ACK_APPLIED, { result = applied })
+    end
     add_dedupe(message.src, message.message_id, applied)
   else
     add_dedupe(message.src, message.message_id, nil)
@@ -701,7 +716,7 @@ function comms.send(dst, msg_type, payload, opts)
       tostring(message.message_id),
       tostring(dst or "broadcast"),
       tostring(opts and opts.require_applied or false)
-    ))
+    ), "DEBUG")
   end
   return entry
 end

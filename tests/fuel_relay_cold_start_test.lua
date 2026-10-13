@@ -42,8 +42,8 @@ local function make_runtime()
         },
       },
     },
-    refs = { comms = { send_command = function(_self, target, command)
-      sent[#sent + 1] = { target = target, command = command }
+    refs = { comms = { send_command = function(_self, target, command, opts)
+      sent[#sent + 1] = { target = target, command = command, opts = opts }
     end } },
     sent = sent,
   }
@@ -83,21 +83,26 @@ do
   assert_eq(#runtime.sent, 3, 'after the kick the interval applies again')
 end
 
--- 3. Die periodische Drossel darf nicht laenger sein als das
---    RT-Statusintervall -- sonst ist das Relais und nicht die RT-Node der
---    bestimmende Term fuer eine FUEL-Node ohne Direktempfang.
+-- 3. Periodisch alle 10 s, ohne Quittung (Funk-Hygiene v821,
+--    Betreiberentscheidung). Bis v820 verlangte dieser Abschnitt "nicht
+--    laenger als das RT-Statusintervall" (5 s) -- fuer eine FUEL-Node, die
+--    die RTs nicht direkt hoert. FUEL hoert sie direkt mit (Abschnitt 4/5);
+--    das Relais ist der Rueckweg, und eine neu auftauchende FUEL-Node wird
+--    weiterhin sofort bedient (Abschnitt 2).
 do
-  local rt_config = require('nodes.rt.config')
   local runtime = make_runtime()
   runtime.state.nodes['FUEL-1'] = { id = 'FUEL-1', role = constants.roles.FUEL_NODE, last_seen = now }
   fuel_relay.tick(runtime)
   local baseline = #runtime.sent
+  assert_true(runtime.sent[baseline].opts and runtime.sent[baseline].opts.no_ack == true,
+    'das Relais geht ohne Quittung raus')
 
-  local rt_status_interval_ms = (rt_config.status_interval or rt_config.heartbeat_interval) * 1000
-  now = now + rt_status_interval_ms
+  now = now + 9000
   fuel_relay.tick(runtime)
-  assert_true(#runtime.sent > baseline, string.format(
-    'relay interval must not exceed the RT status interval (%dms)', rt_status_interval_ms))
+  assert_eq(#runtime.sent, baseline, 'vor Ablauf von 10 s kein erneutes Relais')
+  now = now + 1000
+  fuel_relay.tick(runtime)
+  assert_true(#runtime.sent > baseline, 'nach 10 s erneut')
 end
 
 -- 4. Der Mithoer-Dienst haengt am KONFIGURIERTEN Status-Kanal, nicht an

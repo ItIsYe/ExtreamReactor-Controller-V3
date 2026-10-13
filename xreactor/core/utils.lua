@@ -655,6 +655,21 @@ function utils.init_logger(opts)
   return result
 end
 
+-- DEBUG-Zeilen gehen im Normalbetrieb ("all"/"remote") nirgendwohin -- weder
+-- per Funk an den Log-Sammler noch auf die Platte. Bis v820 wurde JEDE
+-- Zeile jeder Stufe per Rundruf gesendet; jeder Rechner der Anlage hoerte
+-- sie mit (Funk-Hygiene v821). Einschalten je Rechner, wenn man die
+-- Einzelheiten braucht:  set xreactor.log_debug true   (aus: false)
+-- Die ausdruecklichen Modi "disk" und "terminal" schreiben weiter alles.
+local function debug_lines_enabled()
+  if settings and type(settings.get) == "function" then
+    local ok, value = pcall(settings.get, "xreactor.log_debug")
+    return ok and value == true
+  end
+  return false
+end
+utils.debug_lines_enabled = debug_lines_enabled
+
 function utils.log(prefix, message, level)
   local resolved_prefix = prefix or CONFIG.LOGGER_DEFAULT_PREFIX
   local mode = current_log_mode or "all"
@@ -663,6 +678,7 @@ function utils.log(prefix, message, level)
     pcall(print, string.format("[%s] %s", resolved_prefix, tostring(message)))
     return
   end
+  if level == "DEBUG" and mode ~= "disk" and not debug_lines_enabled() then return end
   if mode == "all" or mode == "remote" then
     send_remote_log(resolved_prefix, level or "INFO", message)
   end

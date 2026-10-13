@@ -443,6 +443,10 @@ function M.new(opts)
       assign_node_status_from_health(nodes[id], "hello")
       nodes[id].state = constants.node_states.OFF
       if nodes[id].role == constants.roles.RT_NODE then sequencer:enqueue(id) end
+      -- Die Node hat neu gestartet und kennt ihre Sollwerte nicht mehr: beim
+      -- naechsten Abgleich sofort senden, nicht erst nach der Auffrischung
+      -- (rt_sync.setpoint_send_due, "first").
+      nodes[id].last_setpoints_ts = nil
       mark_rt_sync_dirty(nodes[id], "hello")
     elseif message.type == constants.message_types.HEARTBEAT then
       nodes[id].state = message.payload.state
@@ -584,7 +588,7 @@ function M.new(opts)
       if not redundant_setpoint_ack or needs_workflow_followup then
         mark_rt_sync_dirty(nodes[id], "ack_applied")
       else
-        log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
+        log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)), "DEBUG")
       end
       -- Korreliert dieses ACK_APPLIED gegen einen evtl. laufenden
       -- Config-Editor-Edit (per message_id/ack_for).

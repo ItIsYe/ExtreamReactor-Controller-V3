@@ -49,6 +49,32 @@ local function yesno(value)
   return value and "yes" or "no"
 end
 
+-- Empfangsfilter fuer jede Rolle AUSSER MASTER (core/comms.lua,
+-- payload_filter; Funk-Hygiene v821). Jede Node hoert jede Meldung jeder
+-- anderen Node mit. Den INHALT braucht eine Rolle ausser MASTER nur:
+--   * von MASTER (Lebenszeichen, Alarme, Kommandos, Fuellstand-Relais)
+--   * bei allem mit Ziel (dst) -- Kommandos, Quittungen, gezielte Meldungen
+--   * bei jedem Typ ausser Heartbeat/Status/Hello/Alarm (Fehler wie
+--     PROTO_MISMATCH, Quittungen, ...)
+-- Von Heartbeat/Status/Hello/Alarm der uebrigen Nodes zaehlt nur der
+-- Absender (Peer-Tabelle: wer lebt -- fuer FUEL die Ventil-Erreichbarkeit).
+-- Geprueft fuer RT, ENERGY, WATER, REPROCESSOR, VALVE und FUEL: deren
+-- on_message werten nur MASTER-Meldungen und PROTO_MISMATCH aus. MASTER
+-- braucht alles und bekommt diesen Filter NICHT.
+function comms_service.follower_payload_filter()
+  local types = constants.message_types
+  local peer_only = {
+    [types.HEARTBEAT] = true, [types.STATUS] = true,
+    [types.HELLO] = true, [types.ALERT] = true,
+  }
+  return function(raw)
+    if raw.role == constants.roles.MASTER then return true end
+    if raw.dst ~= nil then return true end
+    if not peer_only[raw.type] then return true end
+    return false
+  end
+end
+
 function comms_service.new(opts)
   opts = opts or {}
   local self = {
@@ -253,12 +279,19 @@ function comms_service:init()
   end)
 end
 
+-- opts.no_ack: eine Mitteilung ohne Quittung und ohne Wiederholung -- fuer
+-- regelmaessig neu gesendete Inhalte (MASTERs Fuellstand-Relais). Der
+-- Empfaenger sieht payload.no_ack und quittiert nicht (core/comms.lua,
+-- command_wants_ack); ein aelterer Empfaenger quittiert weiter, das schadet
+-- nicht.
 function comms_service:send_command(target, command, opts)
+  local no_ack = opts and opts.no_ack == true or false
   local payload = { target = target, command = command }
+  if no_ack then payload.no_ack = true end
   return self.comms.send(target, constants.message_types.COMMAND, payload, {
     priority = 1,
-    require_ack = true,
-    require_applied = opts and (opts.requires_applied or opts.require_applied) or false,
+    require_ack = not no_ack,
+    require_applied = not no_ack and opts and (opts.requires_applied or opts.require_applied) or false,
     channel = control_channel(self.config)
   })
 end

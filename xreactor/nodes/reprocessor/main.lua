@@ -376,6 +376,8 @@ local function init()
   slow_services = service_manager.new({ log_prefix = "REPROC-BG" })
   comms = comms_service.new({
     config = config, log_prefix = "REPROC", on_command = handle_command,
+    -- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821).
+    payload_filter = comms_service.follower_payload_filter(),
     on_message = function(message)
       if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then devices.proto_mismatch = true; return end
       if message.role == constants.roles.MASTER then

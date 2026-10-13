@@ -632,7 +632,15 @@ local function handle_command_rt2(message)
   -- bewerten, ohne auf den naechsten Regeltakt zu warten.
   local result = rt2_engine.handle_command(command, master_seen_ts)
   last_command, last_command_ts = (result.ok and "ok" or (result.error or "error")), os.epoch("utc")
-  log(result.ok == false and "WARN" or "INFO", ("v2 command target=%s ok=%s%s"):format(
+  -- Ein angenommener SET_SETPOINTS kommt im Normalbetrieb regelmaessig
+  -- (Auffrischung) und ist kein Ereignis: DEBUG (Funk-Hygiene v821).
+  local command_level = "INFO"
+  if result.ok == false then
+    command_level = "WARN"
+  elseif command.target == constants.command_targets.SET_SETPOINTS then
+    command_level = "DEBUG"
+  end
+  log(command_level, ("v2 command target=%s ok=%s%s"):format(
     tostring(command.target), tostring(result.ok),
     result.ok == false and (" error=" .. tostring(result.error) .. " reason=" .. tostring(result.reason_code)) or ""))
   -- module_id gehoert in die Quittung: MASTERs Startup-Sequencer ordnet das
@@ -692,6 +700,8 @@ local function init()
 
   comms = comms_service.new({
     config = config, log_prefix = "RT",
+    -- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821).
+    payload_filter = comms_service.follower_payload_filter(),
     on_command = handle_command,
     on_message = function(message)
       if message.type == constants.message_types.ERROR

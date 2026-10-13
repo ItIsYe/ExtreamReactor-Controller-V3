@@ -102,6 +102,51 @@ function M.same_setpoints(a, b)
      and a.desired_node_state   == b.desired_node_state
 end
 
+-- ── Wann Sollwerte gesendet werden (Funk-Hygiene, v821) ────────────────────
+--
+-- Bis v820 gingen die Sollwerte bei JEDEM sync_rt_node()-Lauf raus -- und der
+-- laeuft bei jedem Heartbeat (2 s) und jedem Status (5 s) jedes RT. Im
+-- Anlagen-Test bekam so jeder RT etwa alle 1,4 s dieselben Sollwerte, jedes
+-- Mal mit zwei Quittungen zurueck, alles als Rundruf an JEDEN Rechner der
+-- Anlage. (Die Dedup-Logik davor wurde am 2026-06-25 komplett entfernt; die
+-- Tests, die "immer senden" festschrieben, waren im August nur an diesen
+-- Stand angepasst worden -- die urspruengliche Fassung vom Mai verlangte
+-- das Gegenteil: keine Sende-Flut.)
+--
+-- Gesendet wird jetzt, wenn
+--   first     -- noch nie gesendet, oder die Node hat sich neu gemeldet
+--                (HELLO nach einem Neustart, Wiederverbindung nach
+--                OFFLINE -- dort wird last_setpoints_ts geloescht)
+--   changed   -- der Plan etwas anderes will als zuletzt gesendet
+--   rejected  -- der RT das zuletzt Gesendete abgelehnt hat (hoechstens alle
+--                SETPOINT_REJECT_RETRY_MS: waehrend des Kapazitaets-Lernens
+--                lehnt er minutenlang ab, das soll keine Flut werden)
+--   refresh   -- seit SETPOINT_REFRESH_MS nichts mehr gesendet wurde -- falls
+--                ein Neustart unbemerkt blieb oder eine Quittung verloren ging
+-- Die MASTER-Verbindung erkennt der RT an JEDER MASTER-Meldung (Heartbeat
+-- alle 2 s), nicht an den Sollwerten -- daran aendert sich nichts.
+M.SETPOINT_REFRESH_MS = 10 * 1000
+M.SETPOINT_REJECT_RETRY_MS = 3 * 1000
+
+function M.setpoint_send_due(node, desired, now)
+  local last = node and node.last_setpoints
+  local last_ts = tonumber(node and node.last_setpoints_ts)
+  if type(last) ~= "table" or last_ts == nil then return true, "first" end
+  if not M.same_setpoints(last, desired) then return true, "changed" end
+  -- Uhr zurueckgesprungen: lieber einmal zu viel senden.
+  if now < last_ts then return true, "refresh" end
+  local age = now - last_ts
+  local result = node.last_command_result
+  if type(result) == "table" and result.ok == false
+      and result.command_target == constants.command_targets.SET_SETPOINTS
+      and (tonumber(result.at) or 0) >= last_ts
+      and age >= M.SETPOINT_REJECT_RETRY_MS then
+    return true, "rejected"
+  end
+  if age >= M.SETPOINT_REFRESH_MS then return true, "refresh" end
+  return false, "unchanged"
+end
+
 local function mode_sync_action(ctx, node, now)
   local desired = node and (node.desired_mode or (ctx.config and ctx.config.rt_default_mode) or "MASTER") or "MASTER"
   if desired == nil or tostring(desired) == "" then return nil, nil, "NO_DESIRED_MODE" end
@@ -406,27 +451,43 @@ function M.sync_rt_node(ctx, node)
   local trigger = tostring(ctx.trigger or "unknown")
 
   -- Der Plan-Wert wird bei JEDEM sync_rt_node()-Lauf in node geschrieben,
-  -- unabhaengig vom ACK_MATCH/Dedup-Pfad -- Dedup spart nur den Funkversand,
+  -- unabhaengig davon, ob gesendet wird -- das spart nur den Funkversand,
   -- nicht die UI-Daten (sonst bliebe node.assignment_state im haeufigsten
   -- Fall dauerhaft UNASSIGNED, obwohl der Master intern korrekt plant).
   node.assignment_state = assigned.assignment_state
   node.assignment_reason = assigned.assignment_reason
   node.control_source = assigned.mode
   node.capacity_source = assigned.capacity_source
+
+  -- Die Planzeile kam bis v820 bei jedem Lauf -- also bei jedem Heartbeat
+  -- und Status jedes RT -- als INFO ins Log und damit per Funk an den
+  -- Log-Sammler. Jetzt nur, wenn sich am Plan dieser Node etwas aendert.
   if ctx.log then
-    ctx.log(("RT plan node=%s trigger=%s state=%s controllable=%s reason=%s assigned=%.2f percent=%.1f capacity=%.2f source=%s mode=%s status=%s"):format(
-      tostring(node_id), trigger, tostring(desired.assignment_state), tostring(assigned.controllable), tostring(assigned.assignment_reason), tonumber(desired.power_target) or 0,
-      tonumber(desired.power_target_percent) or 0, tonumber(assigned.capacity) or 0, tostring(assigned.capacity_source),
-      tostring(assigned.mode), tostring(assigned.status)
-    ), assigned.controllable and "INFO" or "WARN")
+    local line = ("RT plan node=%s state=%s controllable=%s reason=%s percent=%.1f source=%s mode=%s status=%s"):format(
+      tostring(node_id), tostring(desired.assignment_state), tostring(assigned.controllable),
+      tostring(assigned.assignment_reason), tonumber(desired.power_target_percent) or 0,
+      tostring(assigned.capacity_source), tostring(assigned.mode), tostring(assigned.status))
+    if line ~= node.last_plan_log then
+      node.last_plan_log = line
+      ctx.log(line .. " trigger=" .. trigger, assigned.controllable and "INFO" or "WARN")
+    else
+      ctx.log(line .. " trigger=" .. trigger, "DEBUG")
+    end
   end
-  -- Setpoint immer senden.
+
+  local due, why = M.setpoint_send_due(node, desired, now)
+  if not due then
+    if ctx.log then
+      ctx.log(("RT setpoints unchanged node=%s trigger=%s"):format(tostring(node_id), trigger), "DEBUG")
+    end
+    return
+  end
   if ctx.log then
-    ctx.log(("RT setpoints send node=%s trigger=%s pct=%.1f state=%s"):format(
-      tostring(node_id), trigger,
+    ctx.log(("RT setpoints send node=%s why=%s trigger=%s pct=%.1f state=%s"):format(
+      tostring(node_id), why, trigger,
       tonumber(desired.power_target_percent) or 0,
       tostring(desired.assignment_state)
-    ), "INFO")
+    ), why == "refresh" and "DEBUG" or "INFO")
   end
   M.send_rt_setpoints(ctx.comms, node, desired)
 end

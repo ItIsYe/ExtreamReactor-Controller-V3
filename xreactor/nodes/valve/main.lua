@@ -218,7 +218,10 @@ local function check_teach_input()
   teach_input_state = any_high
 end
 
-local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label })
+-- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821) -- eine
+-- VALVE-Node braucht von den anderen gar nichts, nur MASTER.
+local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label,
+  payload_filter = comms_service.follower_payload_filter() })
 -- Lokale 51x19-Terminal-UI am Ventil-Computer selbst -- rein lesend. Seit
 -- 2026-09-29 gibt es dort keine Bedienung mehr (der Sperrknopf ist raus,
 -- siehe local_ui.lua-Kopfkommentar). Alle Closures liefern nur bereits
