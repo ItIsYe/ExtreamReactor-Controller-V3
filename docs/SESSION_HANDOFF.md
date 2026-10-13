@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-12 | beta | manifest-v820 | HEAD `7064bed9`**
+**Stand: 2026-10-13 | beta | manifest-v821 | HEAD `ffe7f03d`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `7064bed9` |
-| Fassung | `manifest-v820` / `beta-v820`, Prüfsumme `988047d9` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 410 Lua + 45 Python, grün |
+| HEAD | `ffe7f03d` |
+| Fassung | `manifest-v821` / `beta-v821`, Prüfsumme `bdb73ba4` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 411 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -632,6 +632,52 @@ Nodes nur MASTER und Kommandos) und ggf. weitere Rollen — entlastet den
 gemeinsamen Lua-Thread des Servers für alle. Je Rolle vorher prüfen,
 welche Handler fremde Status-Inhalte lesen (MASTER braucht alle!).
 
+### M) Funk-Hygiene — Konzept und Stufe 1 (v821, 2026-10-13)
+
+Betreiber: „Funk-Hygiene … alle Meldungen, die nicht nötig sind, raus …
+verschiedene Kanäle und Filter, so dass jeder PC nur noch verarbeitet, was
+er braucht … erst Konzept, dann vorsichtig." **Server-Konfiguration wird
+ausdrücklich NICHT angefasst** (kein `computer_threads`). Freigabe: „Alle
+10 s, setze Stufe 1 erst um, dann Stufe 2."
+
+**Befund** (Anlagen-Harness, 11 Nodes, 60 s; Zählskript im Muster von
+`tests/radio_hygiene_stage1_test.lua`): 1088 Sendungen/min, jeder Rechner
+öffnet 6500/6501/6503 und bekommt damit alles. Außer MASTER braucht keine
+Rolle fremde Inhalte (geprüft: on_message von RT/ENERGY/WATER/REPROC/
+FUEL/VALVE werten nur MASTER und PROTO_MISMATCH aus; FUEL zusätzlich
+RT-Status direkt über den Mithörer und Ventil-Lebenszeichen).
+
+**Stufe 1 (v821) — umgesetzt:** 1088 → 603 Sendungen/min.
+- **1a Sollwerte** `master/rt_sync.lua` `setpoint_send_due()`: first /
+  changed / rejected (≥ 3 s) / refresh (10 s). HELLO und Wiederverbindung
+  nach OFFLINE löschen `last_setpoints_ts` → sofort. Nach einem RT-Neustart
+  wartet MASTER wie bisher erst SET_MODE ab (Bestätigung im nächsten
+  Status), dann gehen die Sollwerte sofort raus. Die „immer senden"-Tests
+  (Aug.-Anpassung an die Dedup-Entfernung vom 25.06.) sind umgeschrieben.
+- **1b Logs:** `utils.log` lässt DEBUG nur mit `set xreactor.log_debug true`
+  durch (vorher ging **jede** Zeile jeder Stufe per Funk). MASTERs
+  Abgleich-Zeilen, RTs angenommene SET_SETPOINTS, FUELs Relais-Empfang →
+  DEBUG; „RT plan" nur bei Änderung.
+- **1c Relais** alle 10 s ohne Quittung (`payload.no_ack`,
+  `comms.command_wants_ack`); alter Empfänger quittiert weiter (harmlos).
+- **1d Filter** `comms_service.follower_payload_filter()` für alle Rollen
+  außer MASTER.
+
+**Stufe 2 (geplant, eigene Version) — Kanäle aufteilen, selbstumschaltend:**
+
+| Kanal | Inhalt | Wer hört |
+|---|---|---|
+| 6500 Abwärts | MASTER → alle: Kommandos, MASTER-Heartbeat/Status/Alarm | alle |
+| 6501 Aufwärts | Nodes → MASTER: Heartbeat/Status/Hello/Alarm/Quittungen | MASTER, FUEL, Pocket |
+| 6503 Log | Logzeilen | nur Log-Sammler |
+| 6505 Log-Antwort | Quittung/Ping des Sammlers | alle |
+| 6504 Ventil | FUEL → Ventile | Ventile (+FUEL) |
+| 6506 Ventil-Antwort | Ventile → FUEL | nur FUEL |
+
+Mischbetrieb: eine Node schließt 6501 erst, wenn sie MASTER auf 6500
+gehört hat (30 s nichts → wieder öffnen); Logzeilen/SET_VALVE tragen die
+Antwortadresse mit; Node schließt 6503 erst nach Antwort auf 6505.
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -701,9 +747,9 @@ welche Handler fremde Status-Inhalte lesen (MASTER braucht alle!).
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v820? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v821? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v820 (Pruefsumme 988047d9)`.
+   - Startzeile jedes Knotens: `beta-v821 (Pruefsumme bdb73ba4)`.
    - **FUEL nach dem Start (v818):** wenige Sekunden „Ventile melden sich
      noch", dann entweder bereit — oder „Ventil-Kennung unbekannt" mit den
      IDs, die nicht passen: dann ROUTER > Ventilkette neu einlernen (siehe J).
@@ -729,7 +775,7 @@ welche Handler fremde Status-Inhalte lesen (MASTER braucht alle!).
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
      „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v820 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v821 / Pruefsumme …".
    - Log nach einem Geräteausfall: dieselbe Warnung („Turbine call failed …")
      kommt nach einer Erholung beim NÄCHSTEN Ausfall wieder (seit v817),
      höchstens einmal je Minute.
