@@ -121,6 +121,7 @@ local controller = valve_controller.new({
   config = config,
   config_path = CONFIG.CONFIG_PATH,
   node_id = node_id,
+  label = valve_label,
   constants = constants,
   utils = utils,
   log_prefix = CONFIG.LOG_PREFIX,

@@ -98,7 +98,12 @@ function comms_service.new(opts)
     -- sobald MASTER nachweislich auf dem Downlink (control, 6500) sendet.
     -- Ohne Angabe: offen wie bisher (MASTER, FUEL, alles Unbekannte).
     listen_uplink = opts.listen_uplink ~= false,
-    uplink = { closed = false, master_downlink_ms = nil, closes = 0, reopens = 0 },
+    -- Optional, fuer eine Rolle, die den Uplink hoert (FUEL, v823):
+    -- function() -> can_close, reason. Liefert sie true, braucht die Rolle
+    -- den Uplink gerade nicht und schliesst ihn wie eine Folge-Node --
+    -- solange MASTER auf dem Downlink sendet. Ohne: offen wie bisher.
+    uplink_close_check = opts.uplink_close_check,
+    uplink = { closed = false, master_downlink_ms = nil, opened_ms = nil, closes = 0, reopens = 0 },
     network = nil,
     comms = nil,
     rx_diag_seen = {},
@@ -196,7 +201,7 @@ end
 
 function comms_service:init()
   sanitize_channels(self.config)
-  self.uplink = { closed = false, master_downlink_ms = nil, closes = 0, reopens = 0 }
+  self.uplink = { closed = false, master_downlink_ms = nil, opened_ms = nil, closes = 0, reopens = 0 }
   self.config.comms = comms_lib.sanitize_config(self.config.comms or {})
   self.network = network_lib.init(self.config)
   local normalized_id = utils.normalize_node_id(self.network.id)
@@ -216,7 +221,10 @@ function comms_service:init()
     -- Wer den Uplink nicht braucht, fuehrt nur MASTER als Peer: die anderen
     -- Nodes hoert er nach dem Schliessen nicht mehr und wuerde jeden davon
     -- als "Peer down" melden (Funk-Hygiene v822).
-    track_peer = (not self.listen_uplink) and function(message)
+    -- Mit uplink_close_check (FUEL): alle, solange der Uplink offen ist,
+    -- sonst nur MASTER.
+    track_peer = (not self.listen_uplink or self.uplink_close_check ~= nil) and function(message)
+      if self.listen_uplink and not self.uplink.closed then return true end
       return normalize_role(message.role) == master_role()
     end or nil
   })
@@ -408,7 +416,17 @@ end
 -- MASTERs Heartbeat oder Status AUF DEM DOWNLINK gehoert hat -- ein MASTER
 -- bis v821 sendet beides auf 6501 und bleibt so erreichbar. Hoert sie das
 -- UPLINK_REOPEN_MS lang nicht mehr, oeffnet sie den Uplink wieder.
+--
+-- Seit v823 auch eine Rolle, die den Uplink eigentlich hoert, aber gerade
+-- nicht braucht (uplink_close_check, FUEL: alle Ventile antworten auf
+-- VALVE_PING). Sie schliesst unter derselben MASTER-Bedingung, oeffnet
+-- wieder, sobald die Pruefung nein sagt, und schliesst danach fruehestens
+-- nach UPLINK_MIN_OPEN_MS erneut -- ein Ventil, das nur ab und zu eine
+-- Runde verpasst, laesst den Kanal nicht flattern. Waehrend der Uplink zu
+-- ist, fuehrt sie nur MASTER als Peer; beim Schliessen vergisst sie die
+-- uebrigen still (kein "Peer down" fuer Nodes, die sie nicht mehr hoert).
 comms_service.UPLINK_REOPEN_MS = 30 * 1000
+comms_service.UPLINK_MIN_OPEN_MS = 60 * 1000
 
 -- Nur Heartbeat und Status beweisen einen MASTER ab v822: Kommandos und
 -- Hello sendet auch ein aelterer MASTER auf dem Downlink.
@@ -429,32 +447,59 @@ function comms_service:_set_uplink_open(open, reason)
   self.uplink.closed = not open
   if open then
     self.uplink.reopens = self.uplink.reopens + 1
+    self.uplink.opened_ms = now_ms()
   else
     self.uplink.closes = self.uplink.closes + 1
+    if self.listen_uplink and self.comms and type(self.comms.forget_peers) == "function" then
+      local master = master_role()
+      self.comms.forget_peers(function(_, peer)
+        return normalize_role(peer and peer.role) ~= master
+      end)
+    end
   end
   utils.log(self.log_prefix, ("Uplink-Kanal %s %s: %s"):format(
     tostring(status), open and "wieder offen" or "geschlossen", tostring(reason)), "INFO")
   return true
 end
 
+-- Braucht diese Rolle den Uplink gerade? Zweiter Wert: der Grund (fuers Log).
+function comms_service:_uplink_wanted()
+  local seen = self.uplink.master_downlink_ms
+  local age = seen and (now_ms() - seen) or nil
+  if age == nil or age < 0 or age > comms_service.UPLINK_REOPEN_MS then
+    return true, ("MASTER seit %d s nicht auf dem Downlink gehoert")
+      :format(math.floor(comms_service.UPLINK_REOPEN_MS / 1000))
+  end
+  if not self.listen_uplink then
+    return false, "MASTER sendet auf dem Downlink "
+      .. tostring(control_channel(self.config)) .. "; die anderen Nodes braucht diese Rolle nicht"
+  end
+  if type(self.uplink_close_check) ~= "function" then return true, nil end
+  local ok, can_close, reason = pcall(self.uplink_close_check)
+  if ok and can_close == true then return false, reason or "die Rolle braucht den Uplink gerade nicht" end
+  if not ok then return true, "Pruefung fehlgeschlagen: " .. tostring(can_close) end
+  return true, reason
+end
+
+function comms_service:_check_uplink()
+  local wanted, reason = self:_uplink_wanted()
+  if wanted then
+    if self.uplink.closed then self:_set_uplink_open(true, reason) end
+    return
+  end
+  if self.uplink.closed then return end
+  if self.listen_uplink and self.uplink.opened_ms ~= nil then
+    local open_for = now_ms() - self.uplink.opened_ms
+    if open_for >= 0 and open_for < comms_service.UPLINK_MIN_OPEN_MS then return end
+  end
+  self:_set_uplink_open(false, reason)
+end
+
 function comms_service:_note_downlink(message)
   if type(message) ~= "table" or not is_downlink_proof(message.type) then return end
   if normalize_role(message.role) ~= master_role() then return end
   self.uplink.master_downlink_ms = now_ms()
-  if not self.listen_uplink and not self.uplink.closed then
-    self:_set_uplink_open(false, "MASTER sendet auf dem Downlink "
-      .. tostring(control_channel(self.config)) .. "; die anderen Nodes braucht diese Rolle nicht")
-  end
-end
-
-function comms_service:_check_uplink()
-  if not self.uplink.closed then return end
-  local seen = self.uplink.master_downlink_ms
-  local age = seen and (now_ms() - seen) or nil
-  if age == nil or age < 0 or age > comms_service.UPLINK_REOPEN_MS then
-    self:_set_uplink_open(true, ("MASTER seit %d s nicht auf dem Downlink gehoert")
-      :format(math.floor(comms_service.UPLINK_REOPEN_MS / 1000)))
-  end
+  if not self.listen_uplink or self.uplink_close_check ~= nil then self:_check_uplink() end
 end
 
 function comms_service:get_uplink_state()
@@ -462,6 +507,7 @@ function comms_service:get_uplink_state()
     listen = self.listen_uplink,
     closed = self.uplink.closed,
     master_downlink_ms = self.uplink.master_downlink_ms,
+    opened_ms = self.uplink.opened_ms,
     closes = self.uplink.closes,
     reopens = self.uplink.reopens,
   }

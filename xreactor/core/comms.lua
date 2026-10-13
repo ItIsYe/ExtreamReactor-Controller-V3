@@ -858,6 +858,23 @@ function comms.get_peer_state()
   return out
 end
 
+-- Peers still vergessen -- ohne "Peer down"/"Peer expired" --, fuer die
+-- predicate(id, peer) true liefert. Fuer eine Rolle, die einen Kanal
+-- schliesst und die Absender darauf danach nicht mehr hoert (FUEL,
+-- services/comms_service.lua). Rueckgabe: Anzahl.
+function comms.forget_peers(predicate)
+  if type(predicate) ~= "function" then return 0 end
+  local removed = 0
+  for id, peer in pairs(state.peers) do
+    local ok, drop = pcall(predicate, id, peer)
+    if ok and drop == true then
+      state.peers[id] = nil
+      removed = removed + 1
+    end
+  end
+  return removed
+end
+
 function comms.get_diagnostics()
   local inflight_count = 0
   for _ in pairs(state.inflight) do

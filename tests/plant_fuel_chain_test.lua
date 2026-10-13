@@ -92,7 +92,14 @@ net:run(300)
 do
   assert_true(#net:messages_from('FUEL', 'HELLO') >= 1,
     'FUEL muss sich anmelden -- Verkehr: ' .. net:traffic_summary())
-  assert_eq(#net.dropped, 0, 'keine Nachricht darf ohne Empfaenger bleiben')
+  -- Ausgenommen: FUELs VALVE_PING (seit v823, Rundruf alle 10 s an die
+  -- Ventile) -- in dieser Anlage gibt es keinen VALVE-Node, der ihn hoert.
+  local dropped = 0
+  for _, item in ipairs(net.dropped) do
+    local m = item.item and item.item.message
+    if not (type(m) == 'table' and m.type == 'VALVE_PING') then dropped = dropped + 1 end
+  end
+  assert_eq(dropped, 0, 'keine Nachricht darf ohne Empfaenger bleiben')
 end
 
 -- ── 2. MASTER relais den Fuellstand ueberhaupt ───────────────────────────

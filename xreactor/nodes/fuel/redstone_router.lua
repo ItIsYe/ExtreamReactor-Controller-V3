@@ -46,6 +46,23 @@ local M = {}
 -- ein VALVE-Node kann dabei laenger brauchen als FUEL.
 local VALVE_UNKNOWN_GRACE_MS = 60 * 1000
 
+-- Lebenszeichen-Abfrage der Ventile (Funk-Hygiene Stufe 3, v823). Bis v822
+-- erfuhr FUEL nur aus den Heartbeats (alle 2 s, dazu Status alle 5 s), ob
+-- ein Ventil da ist -- und musste dafuer den ganzen Uplink 6501 mithoeren,
+-- also die Meldungen ALLER Nodes. Jetzt fragt FUEL selbst: VALVE_PING alle
+-- VALVE_PING_INTERVAL_MS als Rundruf auf 6504, jedes Ventil ab v823
+-- antwortet mit VALVE_PONG auf 6506 (nodes/valve/controller.lua). Die
+-- Heartbeats der Ventile an MASTER bleiben unveraendert. Eine Antwort gilt
+-- als "ueberfaellig" (kein OPEN mehr) nach VALVE_PONG_STALE_MS -- also nach
+-- einer verpassten Runde --, als "weg" nach VALVE_PONG_DOWN_MS.
+M.VALVE_PING_INTERVAL_MS = 10 * 1000
+M.VALVE_PONG_STALE_MS = 20 * 1000
+M.VALVE_PONG_DOWN_MS = 30 * 1000
+
+local function epoch_ms()
+  return os.epoch and os.epoch("utc") or 0
+end
+
 local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then return nil, "no_method" end
   local ok, r = pcall(obj[method], ...)
@@ -305,6 +322,11 @@ function M.new(opts)
       -- gemeldet) und haelt "zuletzt gehoert" fest, auch wenn comms den Peer
       -- nach der Haltezeit (180 s) schon vergessen hat (Seite VENTILE).
       valve_seen = {},
+      -- [id] = { last_ms =, label =, blocked =, initialized =, error = }:
+      -- die letzte Antwort dieses Ventils auf VALVE_PING (siehe
+      -- handle_valve_pong()).
+      valve_pong = {},
+      last_ping_ms = nil,
       started_ms = os.epoch and os.epoch("utc") or 0,
       routes = {},
       active_target = nil,
@@ -365,6 +387,9 @@ function M:refresh()
   self._state.routes = routes
   self._state.tree_valid = #errors == 0
   self._state.tree_errors = errors
+  -- Die Ventilketten sind geladen -- erst ab jetzt weiss uplink_close_check(),
+  -- welche Ventile antworten muessen.
+  self._state.routes_loaded = true
 
   if #errors > 0 then
     for _, e in ipairs(errors) do
@@ -398,8 +423,10 @@ end
 -- alle VALVE-Nodes laengst funkten. Umgekehrt blieb ein Ventil, das nach dem
 -- refresh() ausfiel, bis zum naechsten refresh() "schaltbar".
 --
--- Jetzt fragt jede Stelle (Schalten, Exportfreigabe, Statusanzeige) die
--- Peer-Tabelle in dem Moment, in dem sie die Antwort braucht:
+-- Jetzt fragt jede Stelle (Schalten, Exportfreigabe, Statusanzeige) in dem
+-- Moment, in dem sie die Antwort braucht -- seit v823 valve_peers(): die
+-- Peer-Tabelle von comms (Heartbeats, solange FUEL den Uplink hoert)
+-- zusammen mit den Antworten auf VALVE_PING, das jeweils Bessere zaehlt:
 --   "online"  -- comms kennt den Node, er ist weder down noch ueberfaellig
 --   "stale"   -- comms kennt ihn, sein letzter Heartbeat ist ueberfaellig
 --   "offline" -- comms fuehrt ihn als down, oder er war schon einmal da und
@@ -415,8 +442,115 @@ end
 -- nicht (frueher stand dort fuer jedes Ventil "nicht per Funk erreichbar"),
 -- und faellt ein Ventil nach einer Erholung erneut aus, wird das wieder
 -- gemeldet.
+-- Ventil-Lebenszeichen fuer alle Abfragen: die Peer-Tabelle von comms,
+-- ergaenzt um die Antworten auf VALVE_PING (Eintraege in derselben Form wie
+-- comms:get_peers(), mit via = "ping"). Hat ein Ventil beides, zaehlt das
+-- Bessere (online vor ueberfaellig vor weg, bei Gleichstand das Juengere).
+-- Eine Antwort mit Zeitstempel aus der Zukunft (Uhr zurueckgesprungen) gilt
+-- als ueberfaellig, nicht als frisch: die naechste Runde heilt das.
+local function presence_rank(entry)
+  if entry.down == true then return 2 end
+  if entry.stale == true then return 1 end
+  return 0
+end
+
+function M:valve_peers()
+  local peers = self.comms and self.comms:get_peers() or {}
+  local pongs = self._state.valve_pong
+  if next(pongs) == nil then return peers end
+  local now = epoch_ms()
+  for id, pong in pairs(pongs) do
+    local age_ms = now - (pong.last_ms or 0)
+    local entry = {
+      last_seen = pong.last_ms,
+      age = math.max(0, age_ms) / 1000,
+      stale = age_ms < 0 or age_ms > M.VALVE_PONG_STALE_MS,
+      down = age_ms > M.VALVE_PONG_DOWN_MS,
+      role = constants.roles.VALVE_NODE,
+      label = pong.label,
+      via = "ping",
+    }
+    local current = peers[id]
+    local better = current == nil
+      or presence_rank(entry) < presence_rank(current)
+      or (presence_rank(entry) == presence_rank(current)
+        and (entry.last_seen or 0) > (current.last_seen or 0))
+    if better then
+      if entry.label == nil and current ~= nil then entry.label = current.label end
+      peers[id] = entry
+    end
+  end
+  return peers
+end
+
+-- VALVE_PING als Rundruf an alle Ventile, hoechstens alle
+-- VALVE_PING_INTERVAL_MS (springt die Uhr zurueck: sofort). true = gesendet.
+function M:ping_valves(now)
+  if not self.valve_modem then return false end
+  local src = self.source_node_id
+  if type(src) ~= "string" or src == "" then return false end
+  now = now or epoch_ms()
+  local last = self._state.last_ping_ms
+  if last ~= nil and now >= last and now - last < M.VALVE_PING_INTERVAL_MS then return false end
+  self._state.last_ping_ms = now
+  local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    type = "VALVE_PING", src = src, ts = now,
+    reply_channel = constants.channels.VALVE_REPLY,
+  })
+  return ok
+end
+
+-- Antwort eines Ventils auf VALVE_PING. Nur Antworten an DIESE FUEL-Node
+-- (dst) zaehlen. true = uebernommen.
+function M:handle_valve_pong(message)
+  if type(message) ~= "table" or message.type ~= "VALVE_PONG" then return false end
+  if type(message.src) ~= "string" or message.src == "" then return false end
+  if message.dst == nil or message.dst ~= self.source_node_id then return false end
+  self._state.valve_pong[message.src] = {
+    last_ms = epoch_ms(),
+    label = type(message.label) == "string" and message.label ~= "" and message.label or nil,
+    blocked = message.blocked,
+    initialized = message.initialized,
+    error = message.error,
+  }
+  return true
+end
+
+-- Antwortet jedes Ventil der Routen auf VALVE_PING (juengste Antwort nicht
+-- aelter als VALVE_PONG_DOWN_MS)? Nur dann braucht FUEL die Heartbeats auf
+-- dem Uplink nicht (nodes/fuel/main.lua, uplink_close_check). Zweiter
+-- Rueckgabewert: das erste Ventil, das nicht antwortet. Ohne Routen: true.
+function M:all_valves_answer_ping(now)
+  now = now or epoch_ms()
+  for _, id in ipairs(self._state.all_valves or {}) do
+    local pong = self._state.valve_pong[id]
+    local age = pong and (now - (pong.last_ms or 0)) or nil
+    if age == nil or age < 0 or age > M.VALVE_PONG_DOWN_MS then return false, id end
+  end
+  return true
+end
+
+-- Darf FUEL den Uplink 6501 schliessen (services/comms_service.lua,
+-- uplink_close_check)? Nur, wenn die Ventilketten geladen sind (vorher ist
+-- "alle antworten" trivial wahr), jedes Ventil der Routen auf VALVE_PING
+-- antwortet -- sonst kennt FUEL ein Ventil nur ueber dessen Heartbeat --
+-- und nicht, waehrend im ROUTER eine Kette bearbeitet wird (editing): die
+-- Auswahl soll auch ein Ventil zeigen, das (noch) nicht antwortet.
+-- Rueckgabe: can_close, Grund.
+function M:uplink_close_check(editing, now)
+  if not self._state.routes_loaded then
+    return false, "die Ventilketten sind noch nicht geladen"
+  end
+  if editing then return false, "im ROUTER wird eine Ventilkette bearbeitet" end
+  local answering, missing = self:all_valves_answer_ping(now)
+  if not answering then
+    return false, "Ventil " .. tostring(missing) .. " antwortet nicht auf VALVE_PING"
+  end
+  return true, "alle Ventile antworten auf VALVE_PING, den Fuellstand reicht MASTER weiter"
+end
+
 function M:_valve_link(id, peers)
-  if peers == nil then peers = self.comms and self.comms:get_peers() or {} end
+  if peers == nil then peers = self:valve_peers() end
   local peer = peers[id]
   local kind
   if peer then
@@ -535,7 +669,7 @@ end
 
 function M:block_all()
   local all_ok = true
-  local peers = self.comms and self.comms:get_peers() or {}
+  local peers = self:valve_peers()
   for _, id in ipairs(self._state.all_valves) do
     if not self:_set_valve(id, true, peers) then all_ok = false end
   end
@@ -549,7 +683,7 @@ end
 -- gescheitert (sync_ok == false, siehe _check_valve_batch()).
 function M:_request_valve_batch(entries)
   local pending = {}
-  local peers = self.comms and self.comms:get_peers() or {}
+  local peers = self:valve_peers()
   for _, entry in ipairs(entries) do
     local ok, command_id = self:_set_valve(entry.id, entry.high, peers)
     local sent = ok == true
@@ -891,7 +1025,7 @@ end
 -- _valve_link()). Grund im Fehlerfall: "<Zustand>:<Ventil-ID>", etwa
 -- "stale:VALVE-3" oder "unknown:node-12".
 function M:_path_runtime_ready(path)
-  local peers = self.comms and self.comms:get_peers() or {}
+  local peers = self:valve_peers()
   for _, integrator in ipairs(path or {}) do
     local link = self:_valve_link(integrator, peers)
     if link ~= "online" then
@@ -1162,7 +1296,7 @@ function M:get_valve_status()
   local requested = self._state.valve_requested or {}
   local confirmed = self._state.confirmed_valve_state or {}
   local pending_acks = self._state.pending_valve_acks or {}
-  local peers = self.comms and self.comms:get_peers() or {}
+  local peers = self:valve_peers()
 
   -- Reaktor-Zuordnung: jedes Ventil auf dem Pfad einer Route bekommt deren
   -- Reaktor-Label zugeordnet -- ein Ventil, das in MEHREREN Routen

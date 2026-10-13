@@ -515,6 +515,19 @@ local function init()
     -- Vom Heartbeat/Status der uebrigen Nodes nur den Absender -- siehe
     -- fuel_status_network.make_payload_filter().
     payload_filter = fuel_status_network.make_payload_filter(constants),
+    -- Funk-Hygiene Stufe 3 (v823): den Uplink 6501 (die Meldungen ALLER
+    -- Nodes) braucht FUEL nur, solange nicht jedes Ventil der Routen auf
+    -- VALVE_PING antwortet -- dann kennt FUEL es nur ueber seinen Heartbeat
+    -- (Ventil bis v822, Ventil weg, Funkstoerung). Den Reaktor-Fuellstand
+    -- reicht MASTER ohnehin alle 10 s weiter (FUEL_STATUS); den direkten
+    -- RT-Status braucht FUEL dafuer nicht. Waehrend im ROUTER eine Kette
+    -- bearbeitet wird, bleibt 6501 offen: die Auswahl soll auch ein Ventil
+    -- zeigen, das (noch) nicht antwortet. Geschlossen wird nur, solange
+    -- MASTER auf dem Downlink sendet (services/comms_service.lua).
+    uplink_close_check = function()
+      local editing = router_ui_instance ~= nil and router_ui_instance:is_editing()
+      return get_rs_router():uplink_close_check(editing)
+    end,
     on_message = function(message)
       if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then devices.proto_mismatch = true; return end
       if message.role == constants.roles.MASTER then
@@ -540,6 +553,10 @@ local function init()
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
     if not is_valve_reply_channel(channel) then return end
+    if type(message) == "table" and message.type == "VALVE_PONG" then
+      get_rs_router():handle_valve_pong(message)
+      return
+    end
     if type(message) == "table" and message.type == "VALVE_ACK" then
       local rs = get_rs_router()
       rs:handle_valve_ack(message)
@@ -565,6 +582,11 @@ local function init()
     if type(message) == "table" and message.type == "HOP_SCAN" then
       get_rs_router():handle_hop_scan(message)
     end
+  end })
+  -- VALVE_PING alle 10 s (redstone_router.lua's ping_valves() haelt den
+  -- Takt selbst) -- ein modem.transmit, kein Peripherie-Warten.
+  services:add({ name = "valve_ping", tick = function()
+    get_rs_router():ping_valves()
   end })
   local last_valve_retry_check_ms = 0
   services:add({ name = "valve_ack_retry", tick = function()

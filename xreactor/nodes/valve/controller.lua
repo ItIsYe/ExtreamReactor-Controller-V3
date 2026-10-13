@@ -40,6 +40,9 @@ function M.new(opts)
     config = opts.config,
     config_path = opts.config_path,
     node_id = opts.node_id,
+    -- Anzeigename (installer/valve_naming.lua), geht mit jeder Ping-Antwort
+    -- an FUEL (Seite VENTILE, ROUTER). nil = keiner.
+    label = opts.label,
     constants = opts.constants,
     utils = opts.utils,
     log_prefix = opts.log_prefix or "VALVE",
@@ -301,10 +304,36 @@ function M:_send_ack(reply_side, command_id, applied, high, err, dst, persisted,
   })
 end
 
+-- Antwort auf FUELs Lebenszeichen-Abfrage (VALVE_PING, Rundruf auf 6504,
+-- seit v823). FUEL erfaehrt so, ob das Ventil da ist, ohne die Heartbeats
+-- aller Nodes mithoeren zu muessen (Funk-Hygiene Stufe 3). Nur fuer die
+-- vertraute Quelle -- oder fuer jede, solange das Ventil noch nicht gepaart
+-- ist (wie SET_VALVE). Die Antwort beruehrt NICHTS am Ventil: kein
+-- Schreiben am Aktor, keine Sicherungsfrist (last_command_ts), kein
+-- gelernter Antwortkanal -- das bleibt Sache von SET_VALVE.
+function M:_answer_ping(reply_side, message)
+  if not valid_string(message.src) then return false end
+  if self.config.trusted_source and message.src ~= self.config.trusted_source then return false end
+  if not reply_side or not self.peripheral or type(self.peripheral.wrap) ~= "function" then return false end
+  local ok, modem = pcall(self.peripheral.wrap, reply_side)
+  if not ok or not modem or type(modem.transmit) ~= "function" then return false end
+  local channel = self:_reply_channel_for(message)
+  pcall(modem.transmit, channel, channel, {
+    type = "VALVE_PONG", src = self.node_id, dst = message.src, label = self.label,
+    blocked = self.current_high, initialized = self.initialized == true,
+    error = self.last_write_error, ts = now_ms(self.os),
+  })
+  return true
+end
+
 function M:handle_event(event)
   if type(event) ~= "table" or event[1] ~= "modem_message" then return false end
   local reply_side, channel, message = event[2], event[3], event[5]
   if channel ~= self.constants.channels.VALVE then return false end
+  if type(message) == "table" and message.type == "VALVE_PING" then
+    self:_answer_ping(reply_side, message)
+    return false
+  end
   if type(message) ~= "table" or message.type ~= "SET_VALVE" or message.dst ~= self.node_id then return false end
   local reply_channel = self:_reply_channel_for(message)
   if not valid_string(message.src) then

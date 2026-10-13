@@ -337,11 +337,21 @@ local function draw_chest_pick(self, target, _w, _h)
   u.chest_cancel_btn = mux.button(target, 34, 33, 15, "ABBRECHEN", "OFFLINE", 2)
 end
 
+-- Alle Ventile, die gerade antworten -- seit v823 aus redstone_router's
+-- valve_peers() (Heartbeats UND Antworten auf VALVE_PING): schliesst FUEL
+-- den Uplink, kennt die Peer-Tabelle von comms die Ventile nicht mehr.
 local function known_valves(self)
   local out = {}
   local rr = self.redstone_router
-  if not rr or not rr.comms or type(rr.comms.get_peers) ~= "function" then return out end
-  local ok, peers = pcall(rr.comms.get_peers, rr.comms)
+  if not rr then return out end
+  local ok, peers
+  if type(rr.valve_peers) == "function" then
+    ok, peers = pcall(rr.valve_peers, rr)
+  elseif rr.comms and type(rr.comms.get_peers) == "function" then
+    ok, peers = pcall(rr.comms.get_peers, rr.comms)
+  else
+    return out
+  end
   if not ok or type(peers) ~= "table" then return out end
   for id, data in pairs(peers) do
     if type(data) == "table" and data.down ~= true and data.role == constants.roles.VALVE_NODE then

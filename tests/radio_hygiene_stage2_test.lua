@@ -162,7 +162,10 @@ for _, name in ipairs(order) do
   net:node(name).seen_transmitted = #envs[name].transmitted
 end
 local followers = { 'RT', 'VALVE1', 'VALVE2', 'ENERGY', 'REPROC' }
-local listeners = { 'MASTER', 'FUEL' }
+-- FUEL hoert den Uplink, schliesst ihn aber seit v823, sobald jedes Ventil
+-- auf VALVE_PING antwortet (radio_hygiene_stage3_test.lua) -- hier zaehlt
+-- nur, dass FUEL ihn grundsaetzlich hoert.
+local listeners = { 'MASTER' }
 
 net:run(300)   -- 30 s Anlauf
 
@@ -180,6 +183,7 @@ for _, name in ipairs(listeners) do
   assert_eq(u.listen, true, name .. ': hoert den Uplink')
   assert_eq(u.closed, false, name .. ': Uplink bleibt offen')
 end
+assert_eq(uplink(fuel).listen, true, 'FUEL hoert den Uplink grundsaetzlich')
 
 local d0 = #net.delivered
 local tx0 = {}
@@ -201,8 +205,10 @@ end
 for _, name in ipairs({ 'RT', 'FUEL', 'VALVE1', 'VALVE2', 'ENERGY', 'REPROC' }) do
   assert_true((rx.MASTER.from[name .. ':' .. T.HEARTBEAT] or 0) > 0, 'MASTER hoert ' .. name)
 end
-assert_true((rx.FUEL.from['VALVE1:' .. T.HEARTBEAT] or 0) > 0, 'FUEL hoert valve-1')
-assert_true((rx.FUEL.from['VALVE2:' .. T.HEARTBEAT] or 0) > 0, 'FUEL hoert valve-2')
+-- FUEL erfaehrt seit v823 per VALVE_PONG von den Ventilen (nicht mehr
+-- unbedingt ueber ihren Heartbeat).
+assert_true((rx.FUEL.from['VALVE1:VALVE_PONG'] or 0) > 0, 'FUEL hoert valve-1')
+assert_true((rx.FUEL.from['VALVE2:VALVE_PONG'] or 0) > 0, 'FUEL hoert valve-2')
 -- Die Folge-Nodes empfangen nur noch einen Bruchteil dessen, was MASTER hoert.
 for _, name in ipairs(followers) do
   assert_true(rx[name].total * 2 < rx.MASTER.total, string.format(
@@ -255,9 +261,12 @@ for _, name in ipairs(followers) do
       name .. ': kein "Peer down" fuer Nodes, die er nicht mehr hoert: ' .. line.message)
   end
 end
--- FUEL fuehrt weiter jedes Ventil (Ventil-Erreichbarkeit).
-local fuel_peers = fuel.services.COMMS:get_peers()
-assert_true(fuel_peers['valve-1'] ~= nil and fuel_peers['valve-2'] ~= nil, 'FUEL kennt beide Ventile')
+-- FUEL kennt jedes Ventil (Ventil-Erreichbarkeit; seit v823 auch ohne
+-- deren Heartbeat, siehe radio_hygiene_stage3_test.lua).
+local fuel_status = net:last_message_from('FUEL', 'STATUS')
+local vs = fuel_status and fuel_status.payload and fuel_status.payload.valve_summary or {}
+assert_eq(vs.total, 2, 'FUEL kennt beide Ventile')
+assert_eq(vs.offline, 0, 'keines offline')
 
 -- ══ 3. Ventilkette ═══════════════════════════════════════════════════════════
 local set_valve, ack_reply, ack_old, ack_at_valve = 0, 0, 0, 0
