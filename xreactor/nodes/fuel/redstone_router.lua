@@ -274,7 +274,12 @@ function M.new(opts)
   -- von comms_service -- roh per modem.transmit, kein Ack/Retry-Overhead.
   local router_config = opts.config or {}
   local valve_modem = find_wireless_modem(router_config)
-  if valve_modem then pcall(valve_modem.open, constants.channels.VALVE) end
+  -- 6504 bleibt offen fuer Ventile bis v821, die noch dort antworten;
+  -- Ventile ab v822 antworten auf VALVE_REPLY (Funk-Hygiene v822).
+  if valve_modem then
+    pcall(valve_modem.open, constants.channels.VALVE)
+    if constants.channels.VALVE_REPLY then pcall(valve_modem.open, constants.channels.VALVE_REPLY) end
+  end
   local self = {
     config = router_config,
     source_node_id = resolve_source_node_id(opts, router_config),
@@ -510,6 +515,9 @@ function M:_set_valve(integrator, high, peers)
   local message = {
     type = "SET_VALVE", src = source_node_id, dst = integrator,
     command_id = command_id, high = high, ts = os.epoch and os.epoch("utc") or 0,
+    -- Hierauf antwortet ein Ventil ab v822 (VALVE_ACK, HOP_SCAN, Teach);
+    -- aeltere ignorieren das Feld und antworten auf 6504.
+    reply_channel = constants.channels.VALVE_REPLY,
   }
   local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
   if not ok then
@@ -1124,6 +1132,7 @@ function M:check_pending_acks()
         pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
           type = "SET_VALVE", src = entry.src, dst = entry.dst,
           command_id = entry.command_id, high = entry.high, ts = now,
+          reply_channel = constants.channels.VALVE_REPLY,
         })
       end
     end

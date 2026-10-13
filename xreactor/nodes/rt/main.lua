@@ -702,6 +702,8 @@ local function init()
     config = config, log_prefix = "RT",
     -- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821).
     payload_filter = comms_service.follower_payload_filter(),
+    -- Funk-Hygiene v822: Meldungen anderer Nodes braucht diese Rolle nicht.
+    listen_uplink = false,
     on_command = handle_command,
     on_message = function(message)
       if message.type == constants.message_types.ERROR

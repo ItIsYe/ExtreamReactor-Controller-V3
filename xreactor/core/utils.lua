@@ -6,6 +6,14 @@ local CONFIG = {
   LOG_NAME_SEPARATOR = "_",
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
   REMOTE_LOG_CHANNEL = 6503,  -- muss mit shared/constants.lua channels.LOG uebereinstimmen
+  -- Antwortkanal des LOG_COLLECTORs (LOG_ACK/LOG_PING), shared/constants.lua
+  -- channels.LOG_REPLY. Funk-Hygiene v822: bis v821 hatte jede Node 6503
+  -- offen, um die Antworten zu hoeren -- und hoerte damit auch jede
+  -- Log-Zeile jeder anderen Node mit.
+  REMOTE_LOG_REPLY_CHANNEL = 6505,
+  -- So lange nichts vom Collector auf dem Antwortkanal (er pingt alle 20 s):
+  -- 6503 wieder oeffnen -- ein Collector bis v821 antwortet nur dort.
+  REMOTE_LOG_REPLY_STALE_MS = 60 * 1000,
   REMOTE_LOG_PENDING_LIMIT = 16,  -- reduziert: weniger Retry-Last wenn Collector haengt
   REMOTE_LOG_RETRY_EVERY = 60,   -- seltener retrien: weniger Modem-Traffic bei Collector-Problemen
                                 -- node-52/55 with 25 turbines each + 7 nodes =
@@ -94,7 +102,13 @@ local remote_log_state = {
   -- Set at init time (grace period from boot, so a node never falls back
   -- to local writes just because it hasn't heard the collector YET) and
   -- refreshed on every LOG_PING/LOG_ACK -- see logger_reachable().
-  last_seen_logger_ticks = nil
+  last_seen_logger_ticks = nil,
+  -- Funk-Hygiene v822: 6503 ist zu, solange der Collector auf dem
+  -- Antwortkanal antwortet (siehe note_log_reply / check_log_channel).
+  log_channel_closed = false,
+  reply_seen_ms = nil,
+  log_channel_closes = 0,
+  log_channel_reopens = 0
 }
 
 local function read_file(path)
@@ -213,10 +227,69 @@ local function refresh_log_modems(force)
   for _, entry in ipairs(remote_log_state.modems) do
     remote_log_state.modem_names[#remote_log_state.modem_names + 1] = entry.name
     if type(entry.modem.open) == "function" then
-      pcall(entry.modem.open, CONFIG.REMOTE_LOG_CHANNEL)
+      pcall(entry.modem.open, CONFIG.REMOTE_LOG_REPLY_CHANNEL)
+      if not remote_log_state.log_channel_closed then
+        pcall(entry.modem.open, CONFIG.REMOTE_LOG_CHANNEL)
+      end
     end
   end
   remote_log_state.modem_refreshes = (remote_log_state.modem_refreshes or 0) + 1
+end
+
+local function epoch_ms()
+  if os and type(os.epoch) == "function" then
+    local ok, value = pcall(os.epoch, "utc")
+    if ok and type(value) == "number" then return value end
+  end
+  return nil
+end
+
+-- 6503 auf den Log-Modems schliessen oder wieder oeffnen. Der
+-- LOG_COLLECTOR selbst schliesst nie: auf 6503 empfaengt er die Log-Zeilen.
+local function set_log_channel_open(open, reason)
+  if not open then
+    local own_role = tostring(read_role_config_value()):upper():gsub("%-", "_")
+    if own_role == "LOG_COLLECTOR" or own_role == "LOG" then return false end
+  end
+  local method = open and "open" or "close"
+  remote_log_state.log_channel_closed = not open
+  if open then
+    remote_log_state.log_channel_reopens = remote_log_state.log_channel_reopens + 1
+  else
+    remote_log_state.log_channel_closes = remote_log_state.log_channel_closes + 1
+  end
+  for _, entry in ipairs(remote_log_state.modems or {}) do
+    if entry.modem and type(entry.modem[method]) == "function" then
+      pcall(entry.modem[method], CONFIG.REMOTE_LOG_CHANNEL)
+    end
+  end
+  if type(utils.log) == "function" then
+    pcall(utils.log, "NET", ("Log-Kanal %d %s: %s"):format(CONFIG.REMOTE_LOG_CHANNEL,
+      open and "wieder offen" or "geschlossen", tostring(reason)), "INFO")
+  end
+  return true
+end
+
+-- Eine Antwort des Collectors (LOG_ACK -- auch an eine andere Node -- oder
+-- LOG_PING) auf dem Antwortkanal: der Collector ist ab v822, 6503 braucht
+-- diese Node nicht mehr.
+local function note_log_reply(channel)
+  if channel ~= CONFIG.REMOTE_LOG_REPLY_CHANNEL then return end
+  remote_log_state.reply_seen_ms = epoch_ms()
+  if not remote_log_state.log_channel_closed then
+    set_log_channel_open(false, "der LOG_COLLECTOR antwortet auf "
+      .. tostring(CONFIG.REMOTE_LOG_REPLY_CHANNEL))
+  end
+end
+
+local function check_log_channel()
+  if not remote_log_state.log_channel_closed then return end
+  local seen, now = remote_log_state.reply_seen_ms, epoch_ms()
+  local age = (seen and now) and (now - seen) or nil
+  if age == nil or age < 0 or age > CONFIG.REMOTE_LOG_REPLY_STALE_MS then
+    set_log_channel_open(true, ("vom LOG_COLLECTOR seit %d s nichts auf %d gehoert"):format(
+      math.floor(CONFIG.REMOTE_LOG_REPLY_STALE_MS / 1000), CONFIG.REMOTE_LOG_REPLY_CHANNEL))
+  end
 end
 
 local function settings_bool(key, fallback)
@@ -338,6 +411,7 @@ local function retry_pending(force)
   -- retry sweep is throttled.
   flush_log_batch_if_due()
   refresh_log_modems(false)
+  check_log_channel()
   local now = now_ticks()
   if not force and now < (remote_log_state.next_retry_at or 0) then return end
   remote_log_state.next_retry_at = now + CONFIG.REMOTE_LOG_RETRY_EVERY
@@ -373,7 +447,7 @@ end
 -- STATUS/HEARTBEAT/COMMAND -- the most likely cause of the reported
 -- MASTER<->RT/FUEL/VALVE comms instability. Now recognized and swallowed
 -- here too, same as LOG_ACK/LOG_PING always were.
-local function handle_remote_ack(message)
+local function handle_remote_ack(message, channel)
   if type(message) ~= "table" then return false end
   -- LOG_PING is a lightweight, unaddressed presence beacon the collector
   -- broadcasts periodically (nodes/log_collector/main.lua) purely so every
@@ -382,6 +456,7 @@ local function handle_remote_ack(message)
   if message.type == "LOG_PING" then
     if not remote_log_state.initialized then init_remote_log({}) end
     remote_log_state.last_seen_logger_ticks = now_ticks()
+    note_log_reply(channel)
     return true
   end
   -- LOG_EVENT/LOG_EVENT_BATCH are someone else's outbound log traffic
@@ -394,8 +469,17 @@ local function handle_remote_ack(message)
   if message.type ~= "LOG_ACK" then return false end
   if not remote_log_state.initialized then return true end
   remote_log_state.last_seen_logger_ticks = now_ticks()
+  note_log_reply(channel)
   if message.to_node and tostring(message.to_node) ~= tostring(remote_log_state.node_id or resolve_node_id()) then return true end
   if message.event_id and forget_pending(message.event_id) then remote_log_state.acked = remote_log_state.acked + 1 end
+  -- Ein Collector ab v822 quittiert alle Zeilen eines Schreibvorgangs in
+  -- EINEM LOG_ACK (event_ids) statt eines je Zeile -- siehe
+  -- nodes/log_collector/main.lua's send_acks.
+  if type(message.event_ids) == "table" then
+    for _, event_id in ipairs(message.event_ids) do
+      if forget_pending(event_id) then remote_log_state.acked = remote_log_state.acked + 1 end
+    end
+  end
   return true
 end
 
@@ -454,7 +538,10 @@ local function send_remote_log(prefix, level, message)
       -- das Haeufigste auf diesem Kanal.
       event_id = tostring(boot_id) .. ":" .. tostring(remote_log_state.seq),
       ts = os and os.epoch and os.epoch("utc") or nil,
-      ack = true
+      ack = true,
+      -- Hierauf quittiert ein Collector ab v822; aeltere ignorieren das Feld
+      -- und quittieren auf 6503.
+      reply_channel = CONFIG.REMOTE_LOG_REPLY_CHANNEL
     }
     queue_log_entry(payload)
   end)
@@ -693,9 +780,11 @@ function utils.log(prefix, message, level)
   end
 end
 
-function utils.handle_remote_log_message(message)
+-- channel: der Kanal, auf dem die Meldung kam (event[3]). Ohne ihn zaehlt
+-- keine Antwort als "Collector antwortet auf 6505".
+function utils.handle_remote_log_message(message, channel)
   if not remote_log_state.initialized then init_remote_log({}) end
-  return handle_remote_ack(message)
+  return handle_remote_ack(message, channel)
 end
 
 function utils.flush_remote_logs(force)
@@ -835,7 +924,11 @@ function utils.remote_log_status()
     resent = remote_log_state.resent,
     dropped = remote_log_state.dropped,
     acked = remote_log_state.acked,
-    pending = #remote_log_state.pending_order
+    pending = #remote_log_state.pending_order,
+    log_channel_closed = remote_log_state.log_channel_closed == true,
+    reply_seen_ms = remote_log_state.reply_seen_ms,
+    log_channel_closes = remote_log_state.log_channel_closes,
+    log_channel_reopens = remote_log_state.log_channel_reopens
   }
 end
 

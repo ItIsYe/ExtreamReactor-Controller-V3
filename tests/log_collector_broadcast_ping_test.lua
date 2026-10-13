@@ -45,6 +45,7 @@ local env = setmetatable({
   computer_node_id = function() return "LOG-1" end,
   now_ms = function() return 12345 end,
   CHANNEL = 6503,
+  REPLY_CHANNEL = 6505,
 }, { __index = _G })
 
 local fn = assert(load(chunk_src, "=log_collector_broadcast_ping_test", "t", env))
@@ -52,8 +53,14 @@ local mod = fn()
 
 mod.broadcast_ping()
 
-assert(#transmitted == 1, "broadcast_ping() must transmit exactly once (stop at the first successful modem), got " .. #transmitted)
+-- Funk-Hygiene v822: der Ping geht ueber das erste erfolgreiche Modem auf
+-- BEIDE Kanaele -- 6503 fuer Nodes bis v821, 6505 (LOG_REPLY) fuer Nodes ab
+-- v822, die 6503 geschlossen haben. Bis v821 genau eine Sendung auf 6503.
+assert(#transmitted == 2, "broadcast_ping() must transmit once per channel on the first successful modem, got " .. #transmitted)
 assert(transmitted[1].ch == 6503 and transmitted[1].reply == 6503, "must transmit on the LOG channel")
+assert(transmitted[2].ch == 6505 and transmitted[2].reply == 6505, "and on the LOG_REPLY channel")
+assert(transmitted[2].via == transmitted[1].via, "both over the same modem, never falling through to the next")
+assert(transmitted[2].msg == transmitted[1].msg, "the same ping")
 local msg = transmitted[1].msg
 assert(msg.type == "LOG_PING", "expected a LOG_PING message, got: " .. tostring(msg.type))
 assert(msg.collector_node == "LOG-1", "expected the collector's own node id")

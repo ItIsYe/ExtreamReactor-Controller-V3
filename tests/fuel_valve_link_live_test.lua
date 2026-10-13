@@ -338,7 +338,10 @@ do
   for _, spec in ipairs({ { fuel, 'nodes/fuel/main.lua' }, { v1, 'nodes/valve/main.lua' }, { v2, 'nodes/valve/main.lua' } }) do
     boot.reset_module_cache(); spec[1]:activate(); spec[1]:boot(spec[2])
   end
-  local net = bus_lib.new({ raw_channels = { [constants.channels.VALVE] = true } })
+  -- Seit v822 antworten die Ventile auf VALVE_REPLY (Funk-Hygiene); beide
+  -- Kanaele gehen an FUELs rohe Listener.
+  local net = bus_lib.new({ raw_channels = { [constants.channels.VALVE] = true,
+    [constants.channels.VALVE_REPLY] = true } })
   net:attach('RT', rt); net:attach('MASTER', master); net:attach('FUEL', fuel)
   net:attach('VALVE1', v1); net:attach('VALVE2', v2)
 
@@ -353,7 +356,7 @@ do
 
   local acks = 0
   for _, d in ipairs(net.delivered) do
-    if d.to == 'FUEL' and d.channel == constants.channels.VALVE
+    if d.to == 'FUEL' and (d.channel == constants.channels.VALVE or d.channel == constants.channels.VALVE_REPLY)
         and type(d.message) == 'table' and d.message.type == 'VALVE_ACK' and d.message.applied == true then
       acks = acks + 1
     end

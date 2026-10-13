@@ -211,7 +211,10 @@ local function check_teach_input()
     end
   end
   if any_high and not teach_input_state and valve_modem then
-    pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    -- Auf dem von FUEL gelernten Antwortkanal (Funk-Hygiene v822, siehe
+    -- controller.lua's reply_channel); vor der ersten SET_VALVE 6504.
+    local reply = controller:reply_channel()
+    pcall(valve_modem.transmit, reply, reply, {
       type = "ROUTE_TEACH_PULSE", src = node_id,
     })
   end
@@ -221,7 +224,9 @@ end
 -- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821) -- eine
 -- VALVE-Node braucht von den anderen gar nichts, nur MASTER.
 local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label,
-  payload_filter = comms_service.follower_payload_filter() })
+  payload_filter = comms_service.follower_payload_filter(),
+  -- Funk-Hygiene v822: Meldungen anderer Nodes braucht ein Ventil nicht.
+  listen_uplink = false })
 -- Lokale 51x19-Terminal-UI am Ventil-Computer selbst -- rein lesend. Seit
 -- 2026-09-29 gibt es dort keine Bedienung mehr (der Sperrknopf ist raus,
 -- siehe local_ui.lua-Kopfkommentar). Alle Closures liefern nur bereits
@@ -320,7 +325,8 @@ slow_services:add({ name = "hop_scan_report", tick = function()
   local items = hop_reporter:scan()
   if not items then return end
   last_hop_scan_ms = now
-  pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+  local reply = controller:reply_channel()
+  pcall(valve_modem.transmit, reply, reply, {
     type = "HOP_SCAN", src = node_id, items = items, ts = now,
   })
 end })

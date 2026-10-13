@@ -82,15 +82,28 @@ constants.command_targets = {
   REMOTE_UPDATE = "REMOTE_UPDATE"
 }
 
+-- Funk-Hygiene v822: jede Richtung ihr eigener Kanal. Ein Computer bekommt
+-- nur Meldungen auf Kanaelen, die er offen hat -- wer eine Richtung nicht
+-- braucht, hat ihren Kanal zu und muss die Meldungen gar nicht erst
+-- verwerfen.
 constants.channels = {
+  -- Downlink: MASTER -> alle (Kommandos, MASTERs Heartbeat/Status/Alarm/
+  -- Hello). Jede Node hoert ihn.
   CONTROL = 6500,
+  -- Uplink: Nodes -> MASTER (Heartbeat/Status/Hello/Alarm/Quittungen).
+  -- Dauerhaft hoeren ihn nur MASTER und FUEL (services/comms_service.lua).
   STATUS  = 6501,
-  LOG     = 6503,  -- separater Kanal; Log-Traffic laeuft ueber Wired-Modem
-                    -- getrennt vom Control/Status-Traffic (6500/6501 via Ender-Modem)
-  -- Dedizierter Kanal fuer FUEL<->VALVE Ventil-Kommandos, ausserhalb der
+  -- Log-Zeilen an den LOG_COLLECTOR. Nur er hoert ihn (ab v822).
+  LOG     = 6503,
+  -- Antworten des LOG_COLLECTORs (LOG_ACK, LOG_PING) an die Nodes.
+  LOG_REPLY = 6505,
+  -- Dedizierter Kanal fuer FUEL -> VALVE Ventil-Kommandos, ausserhalb der
   -- normalen comms_service-Pipeline -- kein Ack/Retry-Overhead, rohes
   -- modem.transmit/pullEvent fuer minimale Latenz.
   VALVE   = 6504,
+  -- Antworten der Ventile an FUEL (VALVE_ACK, HOP_SCAN, ROUTE_TEACH_PULSE).
+  -- Nur FUEL hoert ihn.
+  VALVE_REPLY = 6506,
 }
 
 return constants

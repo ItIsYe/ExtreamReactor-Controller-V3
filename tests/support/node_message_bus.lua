@@ -50,6 +50,12 @@
 --
 -- Nachrichten auf diesen Kanaelen gehen dann zusaetzlich an jeden Service
 -- mit wants_events (ausser COMMS), so wie service_manager es taete.
+--
+-- OFFENE KANAELE. Wie in CC:Tweaked bekommt eine Node eine Meldung nur,
+-- wenn eines ihrer Modems deren Kanal offen hat (env:listening_modem in
+-- support/cc_node_boot.lua). Was niemand hoert, steht in net.not_heard
+-- (Zaehler je Node). Fuer einen Test, der bewusst das alte "jeder hoert
+-- alles" braucht: bus.new({ ignore_open_channels = true }).
 
 local M = {}
 
@@ -66,6 +72,8 @@ function M.new(opts)
     step_ms = opts.step_ms or 100,
     tick_dt = opts.tick_dt or 0.1,
     raw_channels = opts.raw_channels or {},
+    ignore_open_channels = opts.ignore_open_channels == true,
+    not_heard = {},        -- [Node] = Meldungen, deren Kanal sie nicht offen hatte
   }, Bus)
 end
 
@@ -157,8 +165,15 @@ end
 -- Was seit dem letzten Lauf gesendet wurde, an alle ANDEREN Nodes zustellen.
 --
 -- Zugestellt wird wie in CC:Tweaked: als modem_message-Event in den
--- COMMS-Service. Der filtert selbst nach Kanal (control/status) -- genau
--- diese Filterung ist Teil dessen, was hier mitgeprueft wird.
+-- COMMS-Service, und nur an Nodes, die den Kanal offen haben. COMMS filtert
+-- danach selbst nach Kanal (control/status) -- genau diese Filterung ist
+-- Teil dessen, was hier mitgeprueft wird.
+function Bus:hears(entry, channel)
+  if self.ignore_open_channels then return true end
+  if type(entry.env.listening_modem) ~= 'function' then return true end
+  return entry.env:listening_modem(channel) ~= nil
+end
+
 function Bus:deliver()
   local pending = {}
   for _, entry in ipairs(self.nodes) do
@@ -173,7 +188,11 @@ function Bus:deliver()
     local item = outgoing.item
     local had_receiver = false
     for _, entry in ipairs(self.nodes) do
-      if entry.name ~= outgoing.from then
+      local listening = entry.name ~= outgoing.from and self:hears(entry, item.channel)
+      if entry.name ~= outgoing.from and not listening then
+        self.not_heard[entry.name] = (self.not_heard[entry.name] or 0) + 1
+      end
+      if listening then
         local comms = entry.env.services.COMMS
         if comms and comms.handle_event then
           entry.env:activate()
@@ -211,8 +230,14 @@ end
 -- kein Modem und bliebe stumm.
 function Bus:_deliver_raw(entry, event)
   local side = event[2]
-  for _, name in ipairs(entry.env.names or {}) do
-    if entry.env.types[name] == 'modem' then side = name; break end
+  local listening = (not self.ignore_open_channels) and type(entry.env.listening_modem) == 'function'
+    and entry.env:listening_modem(event[3]) or nil
+  if listening then
+    side = listening
+  else
+    for _, name in ipairs(entry.env.names or {}) do
+      if entry.env.types[name] == 'modem' then side = name; break end
+    end
   end
   event = { event[1], side, event[3], event[4], event[5], event[6] }
   local names = {}

@@ -53,7 +53,8 @@ local state = {
     last_timeout_id = nil
   },
   timeouts = {},
-  payload_filter = nil
+  payload_filter = nil,
+  track_peer = nil
 }
 
 local function now_ms()
@@ -91,6 +92,7 @@ local function reset_runtime_state()
   }
   state.timeouts = {}
   state.payload_filter = nil
+  state.track_peer = nil
 end
 
 
@@ -214,6 +216,16 @@ end
 local function update_peer(message)
   local sender = message.src or message.sender_id
   if not sender or sender == state.node_id then return end
+  -- Optional, je Rolle (comms.init track_peer): wessen Lebenszeichen diese
+  -- Rolle ueberhaupt fuehrt. Eine Node, die von den anderen nur MASTER
+  -- braucht und den Uplink schliesst (Funk-Hygiene v822), fuehrt sonst
+  -- Peers, die sie danach nicht mehr hoert -- und meldet jeden davon als
+  -- "Peer down". Ein Filter, der fehlschlaegt, heisst: fuehren.
+  local track = state.track_peer
+  if track then
+    local ok_track, wanted = pcall(track, message)
+    if ok_track and wanted == false then return end
+  end
   state.peers[sender] = state.peers[sender] or {}
   local peer = state.peers[sender]
   peer.last_seen = now_ms()
@@ -421,6 +433,16 @@ local function retry_inflight()
   end
 end
 
+-- Quittungen gehen an den Absender des Kommandos. MASTER quittiert auf dem
+-- Downlink (control), jede andere Rolle auf dem Uplink (status) -- dort
+-- hoert MASTER immer mit, die uebrigen Nodes ab v822 nicht mehr (siehe
+-- services/comms_service.lua, handle_event). Bis v821 lag jede Quittung
+-- auf control, und jede Node hoerte jede Quittung jeder anderen.
+local function is_master_role(role)
+  if role == nil then return false end
+  return tostring(role):upper():gsub("_", "-") == constants.roles.MASTER
+end
+
 local function send_ack(message, msg_type, payload)
   if not message or not message.message_id then return end
   local ack = build_message(message.src, msg_type, payload or {})
@@ -429,8 +451,13 @@ local function send_ack(message, msg_type, payload)
   ack.dst = message.src
   ack.src = state.node_id
   local channels = state.network and state.network.channels or {}
-  local control_channel = channels.control or constants.channels.CONTROL
-  queue_entry(ack, control_channel, { priority = 1 })
+  local channel
+  if is_master_role(state.role) then
+    channel = channels.control or constants.channels.CONTROL
+  else
+    channel = channels.status or constants.channels.STATUS
+  end
+  queue_entry(ack, channel, { priority = 1 })
 end
 
 local function dispatch_handlers(message)
@@ -681,6 +708,9 @@ function comms.init(opts)
   -- Optional, je Rolle: function(raw) -> false, wenn von dieser Nachricht nur
   -- der Absender zaehlt (siehe receive_peer_only()). Ohne: alles wie bisher.
   state.payload_filter = type(opts.payload_filter) == "function" and opts.payload_filter or nil
+  -- Optional, je Rolle: function(message) -> false, wenn diese Rolle den
+  -- Absender nicht als Peer fuehrt (siehe update_peer()). Ohne: alle.
+  state.track_peer = type(opts.track_peer) == "function" and opts.track_peer or nil
   state.initialized = true
   return comms
 end

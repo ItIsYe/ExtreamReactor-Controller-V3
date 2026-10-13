@@ -93,6 +93,12 @@ function comms_service.new(opts)
     -- Optional: von welchen Nachrichten diese Rolle den INHALT braucht
     -- (core/comms.lua, comms.init / receive_peer_only). Ohne: alle.
     payload_filter = opts.payload_filter,
+    -- Funk-Hygiene v822: false = diese Rolle braucht die Meldungen der
+    -- anderen Nodes nicht und schliesst den Uplink-Kanal (status, 6501),
+    -- sobald MASTER nachweislich auf dem Downlink (control, 6500) sendet.
+    -- Ohne Angabe: offen wie bisher (MASTER, FUEL, alles Unbekannte).
+    listen_uplink = opts.listen_uplink ~= false,
+    uplink = { closed = false, master_downlink_ms = nil, closes = 0, reopens = 0 },
     network = nil,
     comms = nil,
     rx_diag_seen = {},
@@ -132,6 +138,27 @@ function comms_service:trace_master_rx(message)
   ), "INFO")
 end
 
+local function now_ms()
+  return os.epoch("utc")
+end
+
+-- MASTER sendet alles auf dem Downlink (control), jede andere Rolle ihre
+-- Lebenszeichen, Status, Alarme, Hello und Quittungen auf dem Uplink
+-- (status). Siehe comms_service:handle_event().
+local function master_role()
+  return normalize_role((constants.roles or {}).MASTER or "MASTER")
+end
+
+function comms_service:is_master()
+  return normalize_role(self.network and self.network.role or self.role or self.config.role)
+    == master_role()
+end
+
+function comms_service:_broadcast_channel()
+  if self:is_master() then return control_channel(self.config) end
+  return status_channel(self.config)
+end
+
 local function command_target(message)
   local payload = type(message) == "table" and message.payload or nil
   local command = type(payload) == "table" and payload.command or nil
@@ -169,6 +196,7 @@ end
 
 function comms_service:init()
   sanitize_channels(self.config)
+  self.uplink = { closed = false, master_downlink_ms = nil, closes = 0, reopens = 0 }
   self.config.comms = comms_lib.sanitize_config(self.config.comms or {})
   self.network = network_lib.init(self.config)
   local normalized_id = utils.normalize_node_id(self.network.id)
@@ -184,7 +212,13 @@ function comms_service:init()
     proto_ver = constants.proto_ver,
     log_prefix = self.log_prefix,
     config = self.config.comms or {},
-    payload_filter = self.payload_filter
+    payload_filter = self.payload_filter,
+    -- Wer den Uplink nicht braucht, fuehrt nur MASTER als Peer: die anderen
+    -- Nodes hoert er nach dem Schliessen nicht mehr und wuerde jeden davon
+    -- als "Peer down" melden (Funk-Hygiene v822).
+    track_peer = (not self.listen_uplink) and function(message)
+      return normalize_role(message.role) == master_role()
+    end or nil
   })
 
   self.comms.on(constants.message_types.STATUS, function(message)
@@ -296,11 +330,17 @@ function comms_service:send_command(target, command, opts)
   })
 end
 
+-- Rundrufe (Status, Heartbeat, Alarm, Hello): MASTER auf dem Downlink
+-- (control, 6500), jede andere Rolle auf dem Uplink (status, 6501) --
+-- Funk-Hygiene v822, siehe comms_service:handle_event(). Bis v821 lagen
+-- Status/Heartbeat/Alarm aller Rollen auf 6501 und Hello auf 6500; jede
+-- Node hoerte damit jede Meldung jeder anderen. Aeltere Gegenstellen
+-- hoeren beide Kanaele und verstehen beides.
 function comms_service:publish_status(payload, opts)
   return self.comms.send(nil, constants.message_types.STATUS, payload, {
     priority = 2,
     require_ack = false,
-    channel = status_channel(self.config)
+    channel = self:_broadcast_channel()
   })
 end
 
@@ -313,7 +353,7 @@ function comms_service:send_heartbeat(state)
   return self.comms.send(nil, constants.message_types.HEARTBEAT, payload, {
     priority = 3,
     require_ack = false,
-    channel = status_channel(self.config)
+    channel = self:_broadcast_channel()
   })
 end
 
@@ -321,7 +361,7 @@ function comms_service:send_alert(severity, message)
   return self.comms.send(nil, constants.message_types.ALERT, { severity = severity, message = message }, {
     priority = 1,
     require_ack = false,
-    channel = status_channel(self.config)
+    channel = self:_broadcast_channel()
   })
 end
 
@@ -329,7 +369,7 @@ function comms_service:send_hello(capabilities)
   return self.comms.send(nil, constants.message_types.HELLO, { capabilities = capabilities or {} }, {
     priority = 2,
     require_ack = false,
-    channel = control_channel(self.config)
+    channel = self:_broadcast_channel()
   })
 end
 
@@ -354,16 +394,91 @@ end
 -- pipeline). Filtering by message.type (as already done for LOG_* above)
 -- doesn't scale to every sideband protocol a role might add -- filter by
 -- channel instead: only control/status traffic belongs on this pipeline.
+--
+-- DOWNLINK UND UPLINK (Funk-Hygiene v822). CC:Tweaked stellt eine
+-- Funkmeldung jedem Computer zu, der ihren Kanal offen hat; was ankommt,
+-- belegt Platz in seiner Ereignis-Warteschlange (256), auch wenn es danach
+-- sofort verworfen wird. Bis v821 hatte jede Node control UND status offen
+-- und hoerte jede Meldung jeder anderen Node -- auf einer grossen Anlage
+-- der Grund fuer verlorene Meldungen. Seit v822:
+--   control (6500) = Downlink: MASTER -> alle. Jede Node hoert ihn.
+--   status  (6501) = Uplink:   Nodes -> MASTER. Nur, wer die anderen Nodes
+--                    braucht (MASTER, FUEL), hoert ihn dauerhaft.
+-- Eine Rolle mit listen_uplink=false schliesst den Uplink erst, wenn sie
+-- MASTERs Heartbeat oder Status AUF DEM DOWNLINK gehoert hat -- ein MASTER
+-- bis v821 sendet beides auf 6501 und bleibt so erreichbar. Hoert sie das
+-- UPLINK_REOPEN_MS lang nicht mehr, oeffnet sie den Uplink wieder.
+comms_service.UPLINK_REOPEN_MS = 30 * 1000
+
+-- Nur Heartbeat und Status beweisen einen MASTER ab v822: Kommandos und
+-- Hello sendet auch ein aelterer MASTER auf dem Downlink.
+local function is_downlink_proof(message_type)
+  local types = constants.message_types or {}
+  return message_type ~= nil
+    and (message_type == types.HEARTBEAT or message_type == types.STATUS)
+end
+
+function comms_service:_set_uplink_open(open, reason)
+  local status = status_channel(self.config)
+  if status == control_channel(self.config) then return false end
+  local modem = self.network and self.network.modem
+  local method = open and "open" or "close"
+  if type(modem) ~= "table" or type(modem[method]) ~= "function" then return false end
+  local ok = pcall(modem[method], status)
+  if not ok then return false end
+  self.uplink.closed = not open
+  if open then
+    self.uplink.reopens = self.uplink.reopens + 1
+  else
+    self.uplink.closes = self.uplink.closes + 1
+  end
+  utils.log(self.log_prefix, ("Uplink-Kanal %s %s: %s"):format(
+    tostring(status), open and "wieder offen" or "geschlossen", tostring(reason)), "INFO")
+  return true
+end
+
+function comms_service:_note_downlink(message)
+  if type(message) ~= "table" or not is_downlink_proof(message.type) then return end
+  if normalize_role(message.role) ~= master_role() then return end
+  self.uplink.master_downlink_ms = now_ms()
+  if not self.listen_uplink and not self.uplink.closed then
+    self:_set_uplink_open(false, "MASTER sendet auf dem Downlink "
+      .. tostring(control_channel(self.config)) .. "; die anderen Nodes braucht diese Rolle nicht")
+  end
+end
+
+function comms_service:_check_uplink()
+  if not self.uplink.closed then return end
+  local seen = self.uplink.master_downlink_ms
+  local age = seen and (now_ms() - seen) or nil
+  if age == nil or age < 0 or age > comms_service.UPLINK_REOPEN_MS then
+    self:_set_uplink_open(true, ("MASTER seit %d s nicht auf dem Downlink gehoert")
+      :format(math.floor(comms_service.UPLINK_REOPEN_MS / 1000)))
+  end
+end
+
+function comms_service:get_uplink_state()
+  return {
+    listen = self.listen_uplink,
+    closed = self.uplink.closed,
+    master_downlink_ms = self.uplink.master_downlink_ms,
+    closes = self.uplink.closes,
+    reopens = self.uplink.reopens,
+  }
+end
+
 function comms_service:handle_event(event)
   if not self.comms then return end
   if event[1] == "modem_message" then
     local channel, message = event[3], event[5]
-    if utils.handle_remote_log_message and utils.handle_remote_log_message(message) then
+    if utils.handle_remote_log_message and utils.handle_remote_log_message(message, channel) then
       return true
     end
-    if channel ~= control_channel(self.config) and channel ~= status_channel(self.config) then
+    local control = control_channel(self.config)
+    if channel ~= control and channel ~= status_channel(self.config) then
       return true
     end
+    if channel == control then self:_note_downlink(message) end
     self.comms.receive(message)
   end
 end
@@ -371,6 +486,7 @@ end
 function comms_service:tick()
   if not self.comms then return end
   if utils.flush_remote_logs then utils.flush_remote_logs() end
+  self:_check_uplink()
   self.comms.tick()
 end
 

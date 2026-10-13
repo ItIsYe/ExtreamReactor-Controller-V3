@@ -482,6 +482,8 @@ local function init()
     config = config, log_prefix = "WATER", on_command = handle_command,
     -- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821).
     payload_filter = comms_service.follower_payload_filter(),
+    -- Funk-Hygiene v822: Meldungen anderer Nodes braucht diese Rolle nicht.
+    listen_uplink = false,
     on_message = function(message)
       if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then devices.proto_mismatch = true; return end
       if message.role == constants.roles.MASTER then

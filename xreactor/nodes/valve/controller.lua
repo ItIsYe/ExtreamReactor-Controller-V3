@@ -61,6 +61,9 @@ function M.new(opts)
     pairing_persisted = opts.config.trusted_source ~= nil,
     last_pairing_error = nil,
     last_failsafe_attempt_ts = 0,
+    -- Antwortkanal zu FUEL, aus der letzten vertrauenswuerdigen SET_VALVE
+    -- gelernt (siehe reply_channel()). nil = noch keine: 6504.
+    learned_reply_channel = nil,
   }, M)
   return self
 end
@@ -266,12 +269,33 @@ function M:_remember_command(id, src, high)
   end
 end
 
-function M:_send_ack(reply_side, command_id, applied, high, err, dst, persisted)
+-- Antwortkanal fuer eine SET_VALVE (Funk-Hygiene v822): FUEL ab v822 nennt
+-- VALVE_REPLY (6506), den nur FUEL offen hat -- die anderen Ventile hoeren
+-- die Antwort dann nicht mehr mit. Alles andere (FUEL bis v821, ein
+-- unbekannter Kanal) heisst: wie bisher auf 6504.
+function M:_reply_channel_for(message)
+  local channels = self.constants.channels
+  local reply = type(message) == "table" and message.reply_channel or nil
+  if reply ~= nil and channels.VALVE_REPLY ~= nil and reply == channels.VALVE_REPLY then
+    return channels.VALVE_REPLY
+  end
+  return channels.VALVE
+end
+
+-- Der zuletzt von FUEL (vertrauenswuerdige SET_VALVE) gelernte
+-- Antwortkanal -- auch fuer HOP_SCAN und ROUTE_TEACH_PULSE (main.lua).
+-- Vor der ersten SET_VALVE: 6504, den hoert jede FUEL-Version.
+function M:reply_channel()
+  return self.learned_reply_channel or self.constants.channels.VALVE
+end
+
+function M:_send_ack(reply_side, command_id, applied, high, err, dst, persisted, channel)
   if not command_id or not reply_side or not self.peripheral
       or type(self.peripheral.wrap) ~= "function" then return end
   local ok, modem = pcall(self.peripheral.wrap, reply_side)
   if not ok or not modem or type(modem.transmit) ~= "function" then return end
-  pcall(modem.transmit, self.constants.channels.VALVE, self.constants.channels.VALVE, {
+  channel = channel or self.constants.channels.VALVE
+  pcall(modem.transmit, channel, channel, {
     type = "VALVE_ACK", command_id = command_id, applied = applied == true,
     high = high, error = err, src = self.node_id, dst = dst, persisted = persisted,
   })
@@ -282,6 +306,7 @@ function M:handle_event(event)
   local reply_side, channel, message = event[2], event[3], event[5]
   if channel ~= self.constants.channels.VALVE then return false end
   if type(message) ~= "table" or message.type ~= "SET_VALVE" or message.dst ~= self.node_id then return false end
+  local reply_channel = self:_reply_channel_for(message)
   if not valid_string(message.src) then
     self:_log("SET_VALVE without valid src ignored", "WARN")
     return false
@@ -298,13 +323,17 @@ function M:handle_event(event)
     self:_log("SET_VALVE from untrusted source ignored: " .. tostring(message.src), "WARN")
     return false
   end
+  if self.learned_reply_channel ~= reply_channel then
+    self.learned_reply_channel = reply_channel
+    self:_log("Antwortkanal zu FUEL: " .. tostring(reply_channel), "INFO")
+  end
 
   local seen = self.seen_commands[message.command_id]
   if seen and (seen.src ~= message.src or seen.high ~= message.high) then
     self:_log("SET_VALVE command_id reuse with different payload rejected: "
       .. tostring(message.command_id), "WARN")
     self:_send_ack(reply_side, message.command_id, false, self.current_high,
-      "COMMAND_ID_REUSE", message.src, self.pairing_persisted)
+      "COMMAND_ID_REUSE", message.src, self.pairing_persisted, reply_channel)
     return false
   end
 
@@ -314,7 +343,7 @@ function M:handle_event(event)
   if not applied then
     self:_send_ack(reply_side, message.command_id, false, self.current_high,
       self.last_write_error, message.src,
-      self.config.trusted_source ~= nil and self.pairing_persisted or false)
+      self.config.trusted_source ~= nil and self.pairing_persisted or false, reply_channel)
     return false
   end
 
@@ -329,7 +358,7 @@ function M:handle_event(event)
       self:_log("trusted_source pairing was not persisted (" .. self.last_pairing_error
         .. "); fail-safe BLOCKED=" .. tostring(blocked_ok), "ERROR")
       self:_send_ack(reply_side, message.command_id, false, self.current_high,
-        "PAIRING_PERSIST_FAILED:" .. self.last_pairing_error, message.src, false)
+        "PAIRING_PERSIST_FAILED:" .. self.last_pairing_error, message.src, false, reply_channel)
       return false
     end
     self.pairing_persisted = true
@@ -339,7 +368,7 @@ function M:handle_event(event)
 
   self:_remember_command(message.command_id, message.src, message.high)
   self:_send_ack(reply_side, message.command_id, true, self.current_high, nil,
-    message.src, self.pairing_persisted)
+    message.src, self.pairing_persisted, reply_channel)
   return true
 end
 

@@ -21,12 +21,18 @@ if not ok_utils or type(utils) ~= "table" then utils = nil end
 
 local ok_const, constants = pcall(require, "shared.constants")
 if not ok_const or type(constants) ~= "table" then
-  -- Muss zu shared.constants.channels.LOG (6503) passen.
-  constants = { channels = { LOG = 6503 } }
+  -- Muss zu shared.constants.channels.LOG (6503) / LOG_REPLY (6505) passen.
+  constants = { channels = { LOG = 6503, LOG_REPLY = 6505 } }
 end
 
 -- ── Configuration ───────────────────────────────────────────────────────────
 local CHANNEL          = constants.channels and constants.channels.LOG or 6503
+-- Funk-Hygiene v822: Antworten (LOG_ACK, LOG_PING) gehen auf einen eigenen
+-- Kanal. Eine Node ab v822 schreibt ihn als reply_channel in jede Log-Zeile
+-- und schliesst 6503, sobald sie den Collector dort hoert -- dann hoert sie
+-- die Log-Zeilen der anderen Nodes nicht mehr mit. Nodes bis v821 bekommen
+-- ihre Quittung weiter auf 6503.
+local REPLY_CHANNEL    = constants.channels and constants.channels.LOG_REPLY or 6505
 local MAX_LOG_BYTES    = 524288   -- 512 KB per active log file; leaves headroom on 1 MB CC disk
 local MIN_FREE_BYTES   = 8192    -- 8 KB; triggers wipe before disk fills completely
 local DEDUPE_LIMIT     = 512
@@ -608,6 +614,7 @@ end
 local flush_bucket
 local flush_due
 local send_ack
+local send_acks
 local FLUSH_LINES = 8
 local FLUSH_INTERVAL_MS = 200
 local MAX_PENDING_LINES_PER_PATH = 128
@@ -729,10 +736,10 @@ flush_bucket = function(path)
 
   for _, payload in ipairs(bucket.payloads) do
     stats.written = stats.written + 1
-    send_ack(payload, "written")
     stats.node_last_written = stats.node_last_written or {}
     stats.node_last_written[tostring(payload.node_id or "?")] = { ts = now_s(), role = tostring(payload.role or "?") }
   end
+  send_acks(bucket.payloads, "written")
   if bucket.disk then
     stats.last_write_index = bucket.disk.id
     stats.last_write_mount = bucket.disk.mount
@@ -854,20 +861,10 @@ local function refresh_modems(force)
   stats.modem_refreshes = stats.modem_refreshes + 1
 end
 
-send_ack = function(payload, status)
-  if not payload.ack or not payload.event_id then return end
-  local ack = {
-    type = "LOG_ACK",
-    proto = "xreactor-log-v2",
-    event_id = payload.event_id,
-    to_node = payload.node_id,
-    collector_node = computer_node_id(),
-    status = status or "written",
-    ts = now_ms(),
-  }
-  -- Bevorzugtes Wireless-Modem wird einmal versucht, weitere Modems
-  -- (Fallback) nur bei tatsaechlichem Sendefehler -- sonst kommen bei
-  -- Wireless+Wired mehrere identische ACKs beim Sender an.
+-- Ein LOG_ACK ueber das bevorzugte Wireless-Modem senden; weitere Modems
+-- (Fallback) nur bei tatsaechlichem Sendefehler -- sonst kommen bei
+-- Wireless+Wired mehrere identische ACKs beim Sender an.
+local function transmit_ack(ack, channel)
   local entries = stats.modems or {}
   local ordered = {}
   for _, entry in ipairs(entries) do
@@ -876,11 +873,72 @@ send_ack = function(payload, status)
   for _, entry in ipairs(ordered) do
     local modem = entry.modem
     if modem and type(modem.transmit) == "function" then
-      local ok = pcall(modem.transmit, CHANNEL, CHANNEL, ack)
+      local ok = pcall(modem.transmit, channel, channel, ack)
       if ok then
         stats.ack_sent = stats.ack_sent + 1
-        return
+        return true
       end
+    end
+  end
+  return false
+end
+
+send_ack = function(payload, status)
+  if not payload.ack or not payload.event_id then return end
+  -- Nur der bekannte Antwortkanal: ein beliebiger Kanal aus einer
+  -- Funkmeldung wird nie uebernommen.
+  local reply = (REPLY_CHANNEL ~= nil and payload.reply_channel == REPLY_CHANNEL) and REPLY_CHANNEL or CHANNEL
+  transmit_ack({
+    type = "LOG_ACK",
+    proto = "xreactor-log-v2",
+    event_id = payload.event_id,
+    to_node = payload.node_id,
+    collector_node = computer_node_id(),
+    status = status or "written",
+    ts = now_ms(),
+  }, reply)
+end
+
+-- Quittungen fuer mehrere geschriebene Zeilen (flush_bucket). Funk-Hygiene
+-- v822: bis v821 ging je Log-ZEILE ein LOG_ACK raus, an jeden Rechner der
+-- Anlage -- ein Vielfaches der Log-Sendungen selbst, denn eine Node buendelt
+-- bis zu 8 Zeilen in eine Sendung. Nodes ab v822 (erkennbar an
+-- reply_channel) bekommen EIN LOG_ACK mit allen event_ids auf dem
+-- Antwortkanal; aeltere wie bisher eines je Zeile auf 6503.
+local ACK_IDS_MAX = 32
+send_acks = function(payloads, status)
+  local groups, order = {}, {}
+  for _, payload in ipairs(payloads or {}) do
+    if payload.ack and payload.event_id and REPLY_CHANNEL ~= nil
+        and payload.reply_channel == REPLY_CHANNEL then
+      local key = tostring(payload.node_id)
+      local group = groups[key]
+      if not group then
+        group = { node_id = payload.node_id, ids = {} }
+        groups[key] = group
+        order[#order + 1] = key
+      end
+      group.ids[#group.ids + 1] = payload.event_id
+    else
+      send_ack(payload, status)
+    end
+  end
+  for _, key in ipairs(order) do
+    local group = groups[key]
+    for first = 1, #group.ids, ACK_IDS_MAX do
+      local chunk = {}
+      for index = first, math.min(first + ACK_IDS_MAX - 1, #group.ids) do
+        chunk[#chunk + 1] = group.ids[index]
+      end
+      transmit_ack({
+        type = "LOG_ACK",
+        proto = "xreactor-log-v2",
+        event_ids = chunk,
+        to_node = group.node_id,
+        collector_node = computer_node_id(),
+        status = status or "written",
+        ts = now_ms(),
+      }, REPLY_CHANNEL)
     end
   end
 end
@@ -901,11 +959,13 @@ local function broadcast_ping()
   for _, entry in ipairs(entries) do
     if entry.wireless then table.insert(ordered, 1, entry) else table.insert(ordered, entry) end
   end
+  -- Auf beiden Kanaelen: Nodes ab v822 hoeren 6505, aeltere 6503.
   for _, entry in ipairs(ordered) do
     local modem = entry.modem
     if modem and type(modem.transmit) == "function" then
       local ok = pcall(modem.transmit, CHANNEL, CHANNEL, ping)
       if ok then
+        pcall(modem.transmit, REPLY_CHANNEL, REPLY_CHANNEL, ping)
         stats.ping_sent = stats.ping_sent + 1
         return
       end

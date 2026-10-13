@@ -527,10 +527,19 @@ local function init()
   -- Der dedizierte Ventilkanal (6504) laeuft ausserhalb von comms_service --
   -- roher Event-Listener, der modem_message auf Kanal 6504 direkt an
   -- redstone_router.lua's handle_valve_ack() weiterreicht.
+  --
+  -- Funk-Hygiene v822: Ventile ab v822 antworten (VALVE_ACK, HOP_SCAN,
+  -- ROUTE_TEACH_PULSE) auf dem Antwortkanal VALVE_REPLY (6506), den nur FUEL
+  -- offen hat -- die anderen Ventile hoeren das nicht mehr mit. Ventile bis
+  -- v821 antworten weiter auf 6504; beides wird angenommen.
+  local function is_valve_reply_channel(channel)
+    return channel ~= nil and (channel == constants.channels.VALVE
+      or channel == constants.channels.VALVE_REPLY)
+  end
   services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
-    if channel ~= constants.channels.VALVE then return end
+    if not is_valve_reply_channel(channel) then return end
     if type(message) == "table" and message.type == "VALVE_ACK" then
       local rs = get_rs_router()
       rs:handle_valve_ack(message)
@@ -552,7 +561,7 @@ local function init()
   services:add({ name = "hop_scan_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
-    if channel ~= constants.channels.VALVE then return end
+    if not is_valve_reply_channel(channel) then return end
     if type(message) == "table" and message.type == "HOP_SCAN" then
       get_rs_router():handle_hop_scan(message)
     end
@@ -571,7 +580,7 @@ local function init()
   services:add({ name = "valve_teach_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
-    if channel ~= constants.channels.VALVE then return end
+    if not is_valve_reply_channel(channel) then return end
     if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
       router_ui_instance:handle_teach_pulse(message.src)
     end

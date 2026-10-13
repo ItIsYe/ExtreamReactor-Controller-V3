@@ -41,16 +41,21 @@ end
 
 -- inputs: Tabelle { [side] = true/false }. has_modem=false simuliert ein
 -- fehlendes Funkmodem (valve_modem == nil).
-local function make_instance(inputs, has_modem)
+-- reply_channel: was controller:reply_channel() liefert (seit v822 sendet
+-- der Puls auf dem von FUEL gelernten Antwortkanal, Funk-Hygiene).
+local function make_instance(inputs, has_modem, reply_channel)
   if has_modem == nil then has_modem = true end
   local transmitted = {}
+  local channels = {}
 
-  local preamble = has_modem and [[
+  local preamble = (has_modem and [[
 local node_id = "VALVE-1"
-local valve_modem = { transmit = function(_channel, _reply, message) __record(message) end }
+local valve_modem = { transmit = function(channel, _reply, message) __record(message, channel) end }
 ]] or [[
 local node_id = "VALVE-1"
 local valve_modem = nil
+]]) .. [[
+local controller = { reply_channel = function() return __reply_channel end }
 ]]
 
   local footer = [[
@@ -68,7 +73,11 @@ return {
       getInput = function(side) return inputs[side] == true end,
     },
     constants = { channels = { VALVE = 6504 } },
-    __record = function(message) transmitted[#transmitted + 1] = message end,
+    __reply_channel = reply_channel or 6504,
+    __record = function(message, channel)
+      transmitted[#transmitted + 1] = message
+      channels[#channels + 1] = channel
+    end,
     pcall = pcall, ipairs = ipairs, type = type,
   }
   env._G = env
@@ -76,6 +85,7 @@ return {
   local fn = assert(load(chunk, 'valve_teach_input_test_chunk', 't', env))
   local instance = fn()
   instance.transmitted = transmitted
+  instance.channels = channels
   return instance
 end
 
@@ -123,6 +133,20 @@ do
   inputs.right = true
   inst.check_teach_input() -- Puls 2
   assert_eq(#inst.transmitted, 2, 'releasing and re-triggering the input must send a second pulse')
+end
+
+-- 4b. Funk-Hygiene v822: der Puls geht auf den Antwortkanal, den das
+--     Ventil von FUEL gelernt hat (6506) -- vorher fest auf 6504, wo jedes
+--     andere Ventil ihn mithoerte. Ohne gelernten Kanal: 6504.
+do
+  local inputs = {}
+  local inst = make_instance(inputs, true, 6506)
+  inputs.front = true
+  inst.check_teach_input()
+  assert_eq(inst.channels[1], 6506, 'pulse goes out on the learned reply channel')
+  local plain = make_instance({ top = true })
+  plain.check_teach_input()
+  assert_eq(plain.channels[1], 6504, 'without a learned channel: the valve channel as before')
 end
 
 -- 5. Ohne verfuegbares Funkmodem: kein Crash, einfach kein Puls.

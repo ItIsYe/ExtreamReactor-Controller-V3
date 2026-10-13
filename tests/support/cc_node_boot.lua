@@ -132,19 +132,41 @@ end
 -- Ein drahtloses Modem. Alles, was die Node sendet, landet in
 -- env.transmitted; alles, was der Test in env.received legt, kommt als
 -- modem_message-Event zurueck.
+--
+-- Das Modem merkt sich seine offenen Kanaele (open/close/closeAll/isOpen)
+-- wie in CC:Tweaked: eine Funkmeldung erreicht einen Computer nur, wenn
+-- eines seiner Modems ihren Kanal offen hat. support/node_message_bus.lua
+-- stellt danach zu (env:listening_modem) -- sonst bliebe unpruefbar, ob
+-- eine Rolle einen Kanal wirklich nicht mehr hoert (Funk-Hygiene v822).
 function Env:add_modem(name, wireless)
   local env = self
+  local open_channels = {}
+  self.modem_channels = self.modem_channels or {}
+  self.modem_channels[name] = open_channels
   return self:add_peripheral(name, 'modem', {
     isWireless = function() return wireless ~= false end,
-    open = function() end,
-    close = function() end,
-    closeAll = function() end,
-    isOpen = function() return true end,
+    open = function(channel) open_channels[channel] = true end,
+    close = function(channel) open_channels[channel] = nil end,
+    closeAll = function() for key in pairs(open_channels) do open_channels[key] = nil end end,
+    isOpen = function(channel) return open_channels[channel] == true end,
     transmit = function(channel, reply, message)
       env.transmitted[#env.transmitted + 1] =
         { channel = channel, reply = reply, message = message, at_ms = env.clock_ms }
     end,
   })
+end
+
+-- Welches Modem dieser Node den Kanal offen hat (Name), sonst nil. Ein
+-- Modem, das nicht ueber add_modem kam (ohne Kanalbuch), gilt als offen
+-- fuer alles -- so verhielt sich der Bus vorher fuer jedes Modem.
+function Env:listening_modem(channel)
+  for _, name in ipairs(self.names) do
+    if self.types[name] == 'modem' then
+      local book = self.modem_channels and self.modem_channels[name]
+      if book == nil or book[channel] == true then return name end
+    end
+  end
+  return nil
 end
 
 function Env:advance(ms)
@@ -638,6 +660,10 @@ function Env:capture_logs()
 end
 
 function Env:boot(main_path)
+  -- Ein (Neu-)Start schliesst in CC:Tweaked jeden offenen Modemkanal.
+  for _, book in pairs(self.modem_channels or {}) do
+    for key in pairs(book) do book[key] = nil end
+  end
   self:capture_services()
   self:capture_logs()
   self:capture_loops()

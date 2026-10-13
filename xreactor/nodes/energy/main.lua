@@ -200,6 +200,8 @@ local function init()
     name = "COMMS", config = config, log_prefix = "ENERGY",
     -- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821).
     payload_filter = comms_service.follower_payload_filter(),
+    -- Funk-Hygiene v822: Meldungen anderer Nodes braucht diese Rolle nicht.
+    listen_uplink = false,
     on_message = function(m) return msg_handler.handle_message(m) end,
     on_command = handle_command
   })
