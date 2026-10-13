@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-13 | beta | manifest-v821 | HEAD `ffe7f03d`**
+**Stand: 2026-10-13 | beta | manifest-v822 | HEAD `a3054ba7`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `ffe7f03d` |
-| Fassung | `manifest-v821` / `beta-v821`, Prüfsumme `bdb73ba4` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 411 Lua + 45 Python, grün |
+| HEAD | `a3054ba7` |
+| Fassung | `manifest-v822` / `beta-v822`, Prüfsumme `bf27ebbd` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 413 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -632,7 +632,7 @@ Nodes nur MASTER und Kommandos) und ggf. weitere Rollen — entlastet den
 gemeinsamen Lua-Thread des Servers für alle. Je Rolle vorher prüfen,
 welche Handler fremde Status-Inhalte lesen (MASTER braucht alle!).
 
-### M) Funk-Hygiene — Konzept und Stufe 1 (v821, 2026-10-13)
+### M) Funk-Hygiene — Konzept, Stufe 1 (v821) und Stufe 2 (v822), 2026-10-13
 
 Betreiber: „Funk-Hygiene … alle Meldungen, die nicht nötig sind, raus …
 verschiedene Kanäle und Filter, so dass jeder PC nur noch verarbeitet, was
@@ -663,20 +663,72 @@ RT-Status direkt über den Mithörer und Ventil-Lebenszeichen).
 - **1d Filter** `comms_service.follower_payload_filter()` für alle Rollen
   außer MASTER.
 
-**Stufe 2 (geplant, eigene Version) — Kanäle aufteilen, selbstumschaltend:**
+**Stufe 2 (v822) — umgesetzt: Kanäle aufteilen, selbstumschaltend.**
 
 | Kanal | Inhalt | Wer hört |
 |---|---|---|
-| 6500 Abwärts | MASTER → alle: Kommandos, MASTER-Heartbeat/Status/Alarm | alle |
+| 6500 Abwärts | MASTER → alle: Kommandos, MASTER-Heartbeat/Status/Alarm/Hello | alle |
 | 6501 Aufwärts | Nodes → MASTER: Heartbeat/Status/Hello/Alarm/Quittungen | MASTER, FUEL, Pocket |
 | 6503 Log | Logzeilen | nur Log-Sammler |
 | 6505 Log-Antwort | Quittung/Ping des Sammlers | alle |
-| 6504 Ventil | FUEL → Ventile | Ventile (+FUEL) |
-| 6506 Ventil-Antwort | Ventile → FUEL | nur FUEL |
+| 6504 Ventil | FUEL → Ventile (SET_VALVE) | Ventile (+FUEL für alte Ventile) |
+| 6506 Ventil-Antwort | Ventile → FUEL (VALVE_ACK, HOP_SCAN, Teach) | nur FUEL |
 
-Mischbetrieb: eine Node schließt 6501 erst, wenn sie MASTER auf 6500
-gehört hat (30 s nichts → wieder öffnen); Logzeilen/SET_VALVE tragen die
-Antwortadresse mit; Node schließt 6503 erst nach Antwort auf 6505.
+- **Senden** (`services/comms_service.lua` `_broadcast_channel`): MASTER
+  Rundrufe auf 6500, alle anderen auf 6501. Quittungen
+  (`core/comms.lua` `send_ack`): Nodes auf 6501, MASTER auf 6500.
+- **Uplink schließen** (`listen_uplink = false` in RT, ENERGY, WATER,
+  REPROCESSOR, VALVE): erst wenn **Heartbeat oder Status von MASTER auf
+  6500** ankommt (`_note_downlink`; Kommandos/Hello zählen NICHT, die
+  sendet ein MASTER bis v821 auch dort). 30 s ohne → 6501 wieder offen
+  (`_check_uplink`, auch bei Uhr-Rücksprung). Wechsel als INFO
+  „Uplink-Kanal 6501 geschlossen / wieder offen". Zustand:
+  `comms:get_uplink_state()`.
+- **Peers:** dieselben Rollen führen nur MASTER als Peer (`comms.init`
+  `track_peer`) — sonst „Peer down" für jede Node, die sie nicht mehr
+  hören. Geprüft: alle diese Rollen lesen aus der Peer-Tabelle nur MASTER.
+- **Logs** (`core/utils.lua`): jede Zeile trägt `reply_channel = 6505`;
+  6505 immer offen, 6503 zu, sobald eine Antwort (Ping oder Quittung, auch
+  an eine andere Node) auf 6505 kommt; 60 s Stille auf 6505 → 6503 wieder
+  offen. Der Sammler selbst (Rolle LOG/LOG_COLLECTOR) schließt nie.
+  **Sammler** (`nodes/log_collector/main.lua` `send_acks`): für Nodes mit
+  `reply_channel` EIN LOG_ACK je Schreibvorgang mit `event_ids` (≤ 32) auf
+  6505 — bis v821 ging je Logzeile eine Quittung an jeden Rechner; ältere
+  Nodes wie bisher einzeln auf 6503. Ping auf 6503 und 6505.
+- **Ventile:** SET_VALVE trägt `reply_channel = 6506`; das Ventil
+  (`nodes/valve/controller.lua` `reply_channel()`) übernimmt nur 6506 und
+  nur von der vertrauten Quelle, quittiert dort und sendet HOP_SCAN/Teach
+  dort. FUEL öffnet 6504 und 6506, die drei rohen Hörer nehmen beides.
+- **Mischbetrieb** (Auto-Update rollt in beliebiger Reihenfolge): alter
+  MASTER → Nodes lassen 6501 offen; alter Sammler → 6503 bleibt offen;
+  altes FUEL → Ventile antworten auf 6504; alte Nodes/Ventile → bekommen
+  alles wie bisher. Abgesichert in `tests/radio_hygiene_stage2_test.lua`
+  (Anlage inkl. alter MASTER, Rückfall nach 30 s) und
+  `tests/radio_hygiene_stage2_unit_test.lua` (Randfälle); jede Regel per
+  Rückbau gegengeprüft (25 Rückbauten, alle erkannt).
+- **Test-Harness:** `cc_node_boot` add_modem merkt offene Kanäle
+  (`env:listening_modem`), `node_message_bus` stellt nur bei offenem Kanal
+  zu (`net.not_heard`; alt: `ignore_open_channels = true`). Ein Boot
+  schließt alle Kanäle. Alle 411 bisherigen Tests liefen damit unverändert.
+
+**Gemessen** (Harness, 3 RT + MASTER + FUEL + REPROC + ENERGY + 4 Ventile +
+nachgebildeter Sammler, Empfang je Minute, gleicher Harness für beide
+Stände):
+
+| | v821 | v822 |
+|---|---|---|
+| RT / ENERGY / REPROC / Ventil (je) | ~570 | 92 |
+| MASTER | 534 | 482 |
+| FUEL | 576 | 518 |
+| alle Rechner zusammen | 6236 | 1828 |
+
+**Mögliche Stufe 3 (NICHT umgesetzt, nur Vorschlag):** FUEL hört weiter
+den ganzen Uplink — jede Node sendet Heartbeat alle 2 s und Status alle
+5 s (≈ 42/min je Node; bei ~40 Nodes ≈ 1700/min an FUEL), gebraucht
+werden davon nur die Ventile (+ RT-Status, den MASTER ohnehin alle 10 s
+weiterreicht). Optionen: (a) Ventile senden auf einem eigenen Uplink, den
+MASTER und FUEL hören, FUEL schließt 6501; (b) Heartbeat-Takt der Ventile
+strecken. Beides nur auf ausdrückliche Freigabe.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
@@ -717,6 +769,15 @@ Antwortadresse mit; Node schließt 6503 erst nach Antwort auf 6505.
    festgehaltener Begründung angepasst, nicht passend gebogen: 15000 → 25000 ms
    in `rt_health_payload_test.lua`, das `getFluidFlowRate`-Rückfallversprechen
    in `turbine_adapter_capability_probe_test.lua`, der `shutdown`-Zustand.
+9. **Harness-Fallen der Funk-Hygiene (v822):** `env.logs` bleibt bei
+   gebooteten Rollen LEER (sie laden `core.utils` über ihren eigenen
+   Modulgraphen) — eine Prüfung „keine Zeile X im Log" darüber ist
+   wirkungslos. Gefunkte Logzeilen (LOG_EVENT auf 6503 in
+   `env.transmitted`) lesen; aber die Node bündelt nach `os.clock()`, das
+   im Harness echte Rechenzeit ist — die jüngsten Zeilen können noch im
+   Puffer liegen. Zählen also über Zustandszähler, nicht über Logzeilen.
+   MASTER sendet schon beim Boot Status/Heartbeat — wer einen alten
+   MASTER nachstellt, muss diese Boot-Meldungen überspringen.
 
 ## Arbeitsweise, die gilt
 
@@ -747,9 +808,17 @@ Antwortadresse mit; Node schließt 6503 erst nach Antwort auf 6505.
 ## Nächste Schritte
 
 1. **Im Betrieb beobachten** (sobald der Betreiber wieder im Spiel ist):
-   - MASTER, Seite **Updates**: alle Knoten auf v821? Spalte **DATEIEN**
+   - MASTER, Seite **Updates**: alle Knoten auf v822? Spalte **DATEIEN**
      nach dem ersten Update-Check „OK" (vorher „?").
-   - Startzeile jedes Knotens: `beta-v821 (Pruefsumme bdb73ba4)`.
+   - Startzeile jedes Knotens: `beta-v822 (Pruefsumme bf27ebbd)`.
+   - **Nach v822 (Funk-Hygiene Stufe 2):** RT/ENERGY/WATER/REPROC/VALVE
+     loggen einmal „Uplink-Kanal 6501 geschlossen: MASTER sendet auf dem
+     Downlink 6500 …", jede Node „Log-Kanal 6503 geschlossen: der
+     LOG_COLLECTOR antwortet auf 6505", jedes Ventil nach der ersten
+     Schaltung „Antwortkanal zu FUEL: 6506". Taucht „Uplink-Kanal 6501
+     wieder offen" öfter auf, war MASTER ≥ 30 s still (Neustart,
+     Chunk) — das ist harmlos, sollte aber selten sein. Seite VENTILE:
+     werden jetzt alle Ventile gehört, steht „FUEL-LAST" bei 0?
    - **FUEL nach dem Start (v818):** wenige Sekunden „Ventile melden sich
      noch", dann entweder bereit — oder „Ventil-Kennung unbekannt" mit den
      IDs, die nicht passen: dann ROUTER > Ventilkette neu einlernen (siehe J).
@@ -775,7 +844,7 @@ Antwortadresse mit; Node schließt 6503 erst nach Antwort auf 6505.
    - ENERGY kurz nach dem Start: eine Matrix ohne Kapazität steht auf
      „n/a", nicht auf 100 %; kein `MATRIX_NEAR_FULL` beim Hochfahren.
    - Auto-Updater-Statusdatei `/xreactor_config/auto_update_status.txt`:
-     „Dateipruefung ok: N Dateien passen zu manifest-v821 / Pruefsumme …".
+     „Dateipruefung ok: N Dateien passen zu manifest-v822 / Pruefsumme …".
    - Log nach einem Geräteausfall: dieselbe Warnung („Turbine call failed …")
      kommt nach einer Erholung beim NÄCHSTEN Ausfall wieder (seit v817),
      höchstens einmal je Minute.
