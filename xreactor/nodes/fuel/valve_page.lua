@@ -30,7 +30,8 @@ local CONTENT_W = 79           -- Spalten 2..80
 local LIST_FIRST_ROW = 11
 local ROWS_PER_PAGE = 20       -- Zeilen 11..30
 local ERROR_ROW = 32
-local PAGER_ROW = 33           -- Knoepfe 33..34, Zeilen 36..37 frei, Footer 38..40
+local PAGER_ROW = 33           -- Knoepfe 33..34, Footer 38..40
+local UPLINK_ROW = 36          -- Uplink 6501 offen/zu und warum (v824)
 
 -- Spalten (x, Breite), zusammen 79 Zeichen ab x=2.
 local COL = {
@@ -92,7 +93,12 @@ end
 -- dort Timer verloren, lief FUELs Ereignis-Warteschlange (256) ueber --
 -- dann verwirft CC:Tweaked auch Funkmeldungen still, und Ventile erscheinen
 -- "nie gehoert", obwohl sie senden.
-function M.collect(valve_status, now_ms, loop)
+--
+-- uplink (optional): comms_service:get_uplink_state() von FUEL. Hoert FUEL
+-- den Uplink 6501 (die Meldungen aller Nodes), und warum? Zu ist der
+-- Normalfall ab v823: alle Ventile antworten auf VALVE_PING. Offen steht
+-- der Grund dabei -- etwa ein Ventil der Routen, das nie antwortet.
+function M.collect(valve_status, now_ms, loop, uplink)
   local rows = {}
   local counts = { total = 0, online = 0, stale = 0, offline = 0, unknown = 0, waiting = 0, ack_error = 0 }
   local first_error = nil
@@ -145,7 +151,18 @@ function M.collect(valve_status, now_ms, loop)
   if type(loop) == "table" then
     load = { lost = tonumber(loop.lost) or 0, late = tonumber(loop.late) or 0 }
   end
-  return { rows = rows, counts = counts, worst = worst, first_error = first_error, load = load }
+  local uplink_view = nil
+  if type(uplink) == "table" then
+    local reason = uplink.reason ~= nil and tostring(uplink.reason) or nil
+    if uplink.closed == true then
+      uplink_view = { closed = true, text = "UPLINK 6501: ZU -- FUEL hoert nur MASTER und die Ventile" }
+    else
+      uplink_view = { closed = false,
+        text = "UPLINK 6501: OFFEN -- " .. (reason or "FUEL hoert alle Nodes") }
+    end
+  end
+  return { rows = rows, counts = counts, worst = worst, first_error = first_error, load = load,
+    uplink = uplink_view }
 end
 
 local function write_line(mon, y, text, key)
@@ -261,6 +278,11 @@ function M.new(_opts)
     end
 
     blank(mon, PAGER_ROW); blank(mon, PAGER_ROW + 1); blank(mon, PAGER_ROW + 2)
+    if view.uplink then
+      write_line(mon, UPLINK_ROW, view.uplink.text, view.uplink.closed and "muted" or "LIMITED")
+    else
+      blank(mon, UPLINK_ROW)
+    end
     state.prev, state.next = nil, nil
     if state.pages > 1 then
       if state.page > 1 then

@@ -103,7 +103,8 @@ function comms_service.new(opts)
     -- den Uplink gerade nicht und schliesst ihn wie eine Folge-Node --
     -- solange MASTER auf dem Downlink sendet. Ohne: offen wie bisher.
     uplink_close_check = opts.uplink_close_check,
-    uplink = { closed = false, master_downlink_ms = nil, opened_ms = nil, closes = 0, reopens = 0 },
+    uplink = { closed = false, master_downlink_ms = nil, opened_ms = nil, closes = 0, reopens = 0,
+      reason = nil, hold_since_ms = nil, hold_logged = false },
     network = nil,
     comms = nil,
     rx_diag_seen = {},
@@ -201,7 +202,8 @@ end
 
 function comms_service:init()
   sanitize_channels(self.config)
-  self.uplink = { closed = false, master_downlink_ms = nil, opened_ms = nil, closes = 0, reopens = 0 }
+  self.uplink = { closed = false, master_downlink_ms = nil, opened_ms = nil, closes = 0, reopens = 0,
+    reason = nil, hold_since_ms = nil, hold_logged = false }
   self.config.comms = comms_lib.sanitize_config(self.config.comms or {})
   self.network = network_lib.init(self.config)
   local normalized_id = utils.normalize_node_id(self.network.id)
@@ -427,6 +429,14 @@ end
 -- uebrigen still (kein "Peer down" fuer Nodes, die sie nicht mehr hoert).
 comms_service.UPLINK_REOPEN_MS = 30 * 1000
 comms_service.UPLINK_MIN_OPEN_MS = 60 * 1000
+-- Bleibt der Uplink einer Rolle mit uplink_close_check (FUEL) so lange aus
+-- DEMSELBEN Grund offen, steht der Grund einmal im Log (v824) -- vorher
+-- erfuhr man nie, warum FUEL 6501 nicht schliesst (etwa: ein Ventil der
+-- Routen meldet sich nie, falsche Kennung in der Kette). Kurze Gruende beim
+-- Start (Ketten noch nicht geladen, erste Antworten stehen aus) bleiben so
+-- aus dem Log. Den aktuellen Grund zeigt get_uplink_state().reason, auf
+-- FUELs Seite VENTILE.
+comms_service.UPLINK_HOLD_LOG_MS = 60 * 1000
 
 -- Nur Heartbeat und Status beweisen einen MASTER ab v822: Kommandos und
 -- Hello sendet auch ein aelterer MASTER auf dem Downlink.
@@ -465,8 +475,12 @@ end
 -- Braucht diese Rolle den Uplink gerade? Zweiter Wert: der Grund (fuers Log).
 function comms_service:_uplink_wanted()
   local seen = self.uplink.master_downlink_ms
-  local age = seen and (now_ms() - seen) or nil
-  if age == nil or age < 0 or age > comms_service.UPLINK_REOPEN_MS then
+  if seen == nil then
+    return true, "MASTER noch nicht auf dem Downlink "
+      .. tostring(control_channel(self.config)) .. " gehoert"
+  end
+  local age = now_ms() - seen
+  if age < 0 or age > comms_service.UPLINK_REOPEN_MS then
     return true, ("MASTER seit %d s nicht auf dem Downlink gehoert")
       :format(math.floor(comms_service.UPLINK_REOPEN_MS / 1000))
   end
@@ -481,16 +495,44 @@ function comms_service:_uplink_wanted()
   return true, reason
 end
 
-function comms_service:_check_uplink()
-  local wanted, reason = self:_uplink_wanted()
-  if wanted then
-    if self.uplink.closed then self:_set_uplink_open(true, reason) end
+-- Ein Grund, der sich ueber UPLINK_HOLD_LOG_MS haelt, einmal ins Log.
+function comms_service:_note_uplink_hold(reason)
+  local uplink = self.uplink
+  if uplink.hold_reason ~= reason then
+    uplink.hold_reason = reason
+    uplink.hold_since_ms = now_ms()
+    uplink.hold_logged = false
     return
   end
+  if uplink.hold_logged or reason == nil then return end
+  local held = now_ms() - (uplink.hold_since_ms or 0)
+  if held < 0 then uplink.hold_since_ms = now_ms(); return end
+  if held >= comms_service.UPLINK_HOLD_LOG_MS then
+    uplink.hold_logged = true
+    utils.log(self.log_prefix, ("Uplink-Kanal %s bleibt offen: %s")
+      :format(tostring(status_channel(self.config)), tostring(reason)), "INFO")
+  end
+end
+
+function comms_service:_check_uplink()
+  local wanted, reason = self:_uplink_wanted()
+  self.uplink.reason = reason
+  if wanted then
+    if self.uplink.closed then self:_set_uplink_open(true, reason) end
+    if self.listen_uplink and self.uplink_close_check ~= nil then
+      self:_note_uplink_hold(reason)
+    end
+    return
+  end
+  self.uplink.hold_reason = nil
   if self.uplink.closed then return end
   if self.listen_uplink and self.uplink.opened_ms ~= nil then
     local open_for = now_ms() - self.uplink.opened_ms
-    if open_for >= 0 and open_for < comms_service.UPLINK_MIN_OPEN_MS then return end
+    if open_for >= 0 and open_for < comms_service.UPLINK_MIN_OPEN_MS then
+      self.uplink.reason = ("wieder geoeffnet; schliesst fruehestens %d s danach")
+        :format(math.floor(comms_service.UPLINK_MIN_OPEN_MS / 1000))
+      return
+    end
   end
   self:_set_uplink_open(false, reason)
 end
@@ -508,6 +550,8 @@ function comms_service:get_uplink_state()
     closed = self.uplink.closed,
     master_downlink_ms = self.uplink.master_downlink_ms,
     opened_ms = self.uplink.opened_ms,
+    -- Warum der Uplink gerade offen (bzw. zu) ist -- fuer die Anzeige.
+    reason = self.uplink.reason,
     closes = self.uplink.closes,
     reopens = self.uplink.reopens,
   }

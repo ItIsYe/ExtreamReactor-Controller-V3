@@ -153,7 +153,7 @@ do
       assert_eq(t.message.src, 'fuel-1', 'Ping nennt FUEL')
     end
   end
-  assert_true(pings >= 2 and pings <= 4, '30 s: drei Pings (' .. pings .. ')')
+  assert_true(pings >= 5 and pings <= 7, '30 s: sechs Pings, alle 5 s (' .. pings .. ')')
 
   local vs = valve_summary(net)
   assert_eq(vs.total, 2, 'FUEL kennt beide Ventile')

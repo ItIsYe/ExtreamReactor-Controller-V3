@@ -52,11 +52,17 @@ local VALVE_UNKNOWN_GRACE_MS = 60 * 1000
 -- also die Meldungen ALLER Nodes. Jetzt fragt FUEL selbst: VALVE_PING alle
 -- VALVE_PING_INTERVAL_MS als Rundruf auf 6504, jedes Ventil ab v823
 -- antwortet mit VALVE_PONG auf 6506 (nodes/valve/controller.lua). Die
--- Heartbeats der Ventile an MASTER bleiben unveraendert. Eine Antwort gilt
--- als "ueberfaellig" (kein OPEN mehr) nach VALVE_PONG_STALE_MS -- also nach
--- einer verpassten Runde --, als "weg" nach VALVE_PONG_DOWN_MS.
-M.VALVE_PING_INTERVAL_MS = 10 * 1000
-M.VALVE_PONG_STALE_MS = 20 * 1000
+-- Heartbeats der Ventile an MASTER bleiben unveraendert.
+--
+-- Grenzen (v824): "ueberfaellig" (kein OPEN mehr) nach VALVE_PONG_STALE_MS
+-- -- zwei verlorene Antworten hintereinander schaden nicht --, "weg" nach
+-- VALVE_PONG_DOWN_MS -- fuenf verlorene. In v823 waren es 10 s Takt und
+-- 20 s: eine einzige verlorene Antwort machte ein Ventil kurz
+-- "ueberfaellig", eine Lieferung, die genau dann oeffnete, brach ab und
+-- setzte den Sicherheits-Riegel. Mit Heartbeats (2 s, 12 s) vertrug FUEL
+-- etwa fuenf verlorene Meldungen.
+M.VALVE_PING_INTERVAL_MS = 5 * 1000
+M.VALVE_PONG_STALE_MS = 17500
 M.VALVE_PONG_DOWN_MS = 30 * 1000
 
 local function epoch_ms()
@@ -326,6 +332,10 @@ function M.new(opts)
       -- die letzte Antwort dieses Ventils auf VALVE_PING (siehe
       -- handle_valve_pong()).
       valve_pong = {},
+      -- [id] = Zeitpunkt der letzten sonstigen Meldung dieses Ventils
+      -- (VALVE_ACK, HOP_SCAN) -- zaehlt fuer die Erreichbarkeit, aber nicht
+      -- fuers Schliessen des Uplinks (siehe valve_peers()).
+      valve_reply = {},
       last_ping_ms = nil,
       started_ms = os.epoch and os.epoch("utc") or 0,
       routes = {},
@@ -443,11 +453,20 @@ end
 -- und faellt ein Ventil nach einer Erholung erneut aus, wird das wieder
 -- gemeldet.
 -- Ventil-Lebenszeichen fuer alle Abfragen: die Peer-Tabelle von comms,
--- ergaenzt um die Antworten auf VALVE_PING (Eintraege in derselben Form wie
--- comms:get_peers(), mit via = "ping"). Hat ein Ventil beides, zaehlt das
--- Bessere (online vor ueberfaellig vor weg, bei Gleichstand das Juengere).
--- Eine Antwort mit Zeitstempel aus der Zukunft (Uhr zurueckgesprungen) gilt
--- als ueberfaellig, nicht als frisch: die naechste Runde heilt das.
+-- ergaenzt um das, was das Ventil selbst an FUEL schickt (Eintraege in
+-- derselben Form wie comms:get_peers(), mit via = "ping"): die Antwort auf
+-- VALVE_PING und -- seit v824, bei Ventilen, die auf den Ping antworten --
+-- jede Quittung (VALVE_ACK) und jeder HOP_SCAN; waehrend einer Lieferung
+-- kommen so laufend frische Zeichen.
+-- Hat ein Ventil Heartbeat und Antwort, zaehlt das Bessere (online vor
+-- ueberfaellig vor weg, bei Gleichstand das Juengere). Ein Zeitstempel aus
+-- der Zukunft (Uhr zurueckgesprungen) gilt als ueberfaellig, nicht als
+-- frisch: die naechste Runde heilt das.
+--
+-- Fuers Schliessen des Uplinks zaehlt dagegen NUR die Ping-Antwort
+-- (all_valves_answer_ping()): ein Ventil bis v822 quittiert auch, antwortet
+-- aber nie auf den Ping -- wuerden seine Quittungen zaehlen, ginge 6501 bei
+-- jeder Lieferung kurz zu und 30 s spaeter wieder auf.
 local function presence_rank(entry)
   if entry.down == true then return 2 end
   if entry.stale == true then return 1 end
@@ -456,18 +475,31 @@ end
 
 function M:valve_peers()
   local peers = self.comms and self.comms:get_peers() or {}
-  local pongs = self._state.valve_pong
+  local pongs, replies = self._state.valve_pong or {}, self._state.valve_reply or {}
   if next(pongs) == nil then return peers end
-  local now = epoch_ms()
+  -- Quittung und HOP_SCAN zaehlen nur bei Ventilen, die auf VALVE_PING
+  -- antworten (ab v823). Ein aelteres Ventil beurteilt FUEL wie bisher nur
+  -- ueber seinen Heartbeat -- erklaert comms es fuer weg, laeuft kein Export
+  -- mehr, auch wenn es eben noch quittiert hat
+  -- (redstone_router_refresh_transaction_race_test.lua).
+  local heard = {}
   for id, pong in pairs(pongs) do
-    local age_ms = now - (pong.last_ms or 0)
+    local last = pong.last_ms or 0
+    local reply = replies[id]
+    if reply ~= nil and reply > last then last = reply end
+    heard[id] = last
+  end
+  local now = epoch_ms()
+  for id, last_ms in pairs(heard) do
+    local pong = pongs[id]
+    local age_ms = now - last_ms
     local entry = {
-      last_seen = pong.last_ms,
+      last_seen = last_ms,
       age = math.max(0, age_ms) / 1000,
       stale = age_ms < 0 or age_ms > M.VALVE_PONG_STALE_MS,
       down = age_ms > M.VALVE_PONG_DOWN_MS,
       role = constants.roles.VALVE_NODE,
-      label = pong.label,
+      label = pong and pong.label or nil,
       via = "ping",
     }
     local current = peers[id]
@@ -498,6 +530,14 @@ function M:ping_valves(now)
     reply_channel = constants.channels.VALVE_REPLY,
   })
   return ok
+end
+
+-- Sonstige Meldung eines Ventils an FUEL (VALVE_ACK, HOP_SCAN): zaehlt fuer
+-- die Erreichbarkeit (valve_peers()), nicht fuers Schliessen des Uplinks.
+function M:_note_valve_reply(id)
+  if type(id) ~= "string" or id == "" then return end
+  self._state.valve_reply = self._state.valve_reply or {}
+  self._state.valve_reply[id] = epoch_ms()
 end
 
 -- Antwort eines Ventils auf VALVE_PING. Nur Antworten an DIESE FUEL-Node
@@ -1220,6 +1260,7 @@ function M:handle_valve_ack(message)
         return
       end
       pending[id] = nil
+      self:_note_valve_reply(message.src)
       self._state.confirmed_valve_state = self._state.confirmed_valve_state or {}
       self._state.confirmed_valve_state[id] = {
         command_id = message.command_id,
@@ -1240,8 +1281,10 @@ end
 -- aufrufenden Rolle aus ihrem comms-Message-Handler aufgerufen werden, wie
 -- handle_valve_ack() oben.
 function M:handle_hop_scan(message)
-  if not self.hop_timing then return end
   if type(message) ~= "table" or message.type ~= "HOP_SCAN" then return end
+  -- Lebenszeichen, auch ohne hop_timing (seit v824, siehe valve_peers()).
+  self:_note_valve_reply(message.src)
+  if not self.hop_timing then return end
   if type(message.src) ~= "string" or message.src == "" or type(message.items) ~= "table" then return end
   self.hop_timing:record_scan(message.src, message.items, message.ts)
 end

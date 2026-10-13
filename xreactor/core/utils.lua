@@ -12,8 +12,11 @@ local CONFIG = {
   -- Log-Zeile jeder anderen Node mit.
   REMOTE_LOG_REPLY_CHANNEL = 6505,
   -- So lange nichts vom Collector auf dem Antwortkanal (er pingt alle 20 s):
-  -- 6503 wieder oeffnen -- ein Collector bis v821 antwortet nur dort.
-  REMOTE_LOG_REPLY_STALE_MS = 60 * 1000,
+  -- 6503 wieder oeffnen -- ein Collector bis v821 antwortet nur dort. Gleich
+  -- LOG_ONLINE_TIMEOUT_S (v824; vorher 60 s): sonst hielte die Node einen
+  -- alten Collector 15 s lang fuer offline und schriebe lokal auf Disk,
+  -- bevor sie ihn auf 6503 wieder hoert.
+  REMOTE_LOG_REPLY_STALE_MS = 45 * 1000,
   REMOTE_LOG_PENDING_LIMIT = 16,  -- reduziert: weniger Retry-Last wenn Collector haengt
   REMOTE_LOG_RETRY_EVERY = 60,   -- seltener retrien: weniger Modem-Traffic bei Collector-Problemen
                                 -- node-52/55 with 25 turbines each + 7 nodes =

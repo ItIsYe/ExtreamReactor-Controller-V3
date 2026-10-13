@@ -11,7 +11,7 @@ package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?
 --      Uplink und Downlink derselbe Kanal sind; Uhr-Ruecksprung oeffnet
 --   3. core/utils.lua: Log-Zeilen nennen 6505; 6503 zu, sobald der
 --      Collector auf 6505 antwortet (auch eine Quittung an eine andere
---      Node); 60 s Stille auf 6505 -> 6503 wieder offen; nie beim
+--      Node); 45 s Stille auf 6505 -> 6503 wieder offen; nie beim
 --      LOG_COLLECTOR selbst; gebuendelte Quittung (event_ids)
 --   4. Collector: Quittungen fuer Nodes ab v822 gebuendelt auf 6505, fuer
 --      aeltere einzeln auf 6503; hoechstens 32 Kennungen je Quittung
@@ -268,13 +268,14 @@ do
   assert_eq(utils.remote_log_status().pending, pending_mid, 'fremde Quittung zaehlt nicht')
   local t_reply = now
 
-  -- 60 s nichts auf 6505: 6503 wieder offen.
-  now = t_reply + 60 * 1000
+  -- 45 s nichts auf 6505: 6503 wieder offen (v824; in v822 60 s -- laenger
+  -- als die 45 s, nach denen die Node den Collector fuer offline haelt).
+  now = t_reply + 45 * 1000
   utils.flush_remote_logs(false)
-  assert_eq(open[CH.LOG], nil, 'genau 60 s: noch zu')
-  now = t_reply + 60 * 1000 + 1
+  assert_eq(open[CH.LOG], nil, 'genau 45 s: noch zu')
+  now = t_reply + 45 * 1000 + 1
   utils.flush_remote_logs(false)
-  assert_true(open[CH.LOG], 'nach 60 s ohne Antwort auf 6505: 6503 wieder offen')
+  assert_true(open[CH.LOG], 'nach 45 s ohne Antwort auf 6505: 6503 wieder offen')
   assert_eq(utils.remote_log_status().log_channel_reopens, 1, 'einmal wieder geoeffnet')
 end
 
