@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-13 | beta | manifest-v824 | HEAD `bebb78d5`**
+**Stand: 2026-10-15 | beta | manifest-v825 | HEAD `d7682a09`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `bebb78d5` |
-| Fassung | `manifest-v824` / `beta-v824`, Prüfsumme `cd89c73c` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 415 Lua + 45 Python, grün |
+| HEAD | `d7682a09` |
+| Fassung | `manifest-v825` / `beta-v825`, Prüfsumme `6dedfbb9` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 416 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -798,6 +798,45 @@ per eigenem Kabelnetz an FUEL (baut auf Stufe 3 auf; eigenes Netz, nicht
 FUELs Peripherie-Kabel, sonst greift die Selbsterkennung der Ventile
 fremde Geräte; offene Frage: behalten Kabel-Ventile ihr Ender-Modem für
 MASTER?). Nur auf ausdrückliche Freigabe.
+
+### N) Umgesetzt am 2026-10-15 (v825): Blutonium raus aus FUEL
+
+Betreiber: Blutonium lag im Access Port und wurde nicht als Brennstoff
+genommen, Vermutung „Rezept in ATM10 8.1 geändert". Geprüft im Quellcode
+von Extreme Reactors (Zweig 1.21, 2.4.27) und ZeroCore 2:
+- Blutonium ist weiter Brennstoff (`c:ingots/blutonium`,
+  `c:ingots/plutonium`, `c:storage_blocks/blutonium|plutonium` →
+  Blutonium; Uran-Barren/-Blöcke → Yellorium). Der Access Port nimmt nur
+  erkannte Brennstoffe an — dass es drin lag, beweist das.
+- **Ursache:** der Brennstofftank des Reaktors hält **eine** Sorte
+  (`IndexedStackContainer.isStackCompatible`). Solange Yellorium drin
+  ist, wird Blutonium abgelehnt, bleibt im Port und belegt den Slot →
+  auch kein Uran mehr → Stau bis in die letzte Kiste (passt zum
+  Stau-Bericht vom 2026-10-13).
+- Auslöser war FUEL selbst: `pick_fuel_family()` nahm bei jeder
+  Lieferung die Sorte mit dem größeren ME-Bestand; REPROC macht laufend
+  Blutonium (2 Cyanit → 1), irgendwann kippte es.
+- Die Computer-API des Reaktors meldet den Brennstofftyp nicht
+  (`getFuelStats` ohne Typ) — FUEL kann ihn nicht prüfen.
+
+Betreiberentscheidung: **„wir nehmen blutonium komplett raus aus dem fuel
+system aber reprocessor bleibt"**. Umgesetzt:
+- `DEFAULT_CONFIG.reserve_items` (`nodes/fuel/main.lua`): nur Uran.
+- `nodes/fuel/config_normalizer.lua`: filtert Blutonium (element oder
+  Item-Name, ohne Groß/klein) auch aus **gespeicherten** Configs — FUEL
+  schreibt seine Config samt `reserve_items` zurück (Logistik-Schalter,
+  SET_RESERVE), alte Installationen tragen die v824-Liste. WARN-Zeile bei
+  jedem Start, bis die Config neu geschrieben ist; leert erst das Filtern
+  die Liste, gilt die ausgelieferte.
+- Reserveanzeige zählt nur noch Uran (Ziel/Minimum 2000 gelten jetzt für
+  Uran allein). REPROC unverändert, sein Blutonium bleibt im ME.
+
+Test `tests/fuel_reserve_items_no_blutonium_test.lua`; 6 Rückbauten, alle
+erkannt; mit der alten Liste liefert FUEL nachweislich Blutonium-Blöcke.
+
+Nicht umgesetzt (nur besprochen): eigener Blutonium-Reaktor (Brennstoff
+pro Reaktor), Weiterverarbeitung zu Ludicrit, Stau-Warnung „geliefert,
+Brennstoff steigt nicht".
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
