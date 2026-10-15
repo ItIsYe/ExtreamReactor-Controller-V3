@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-15 | beta | manifest-v826 | HEAD `23432068`**
+**Stand: 2026-10-15 | beta | manifest-v827 | HEAD `b2673034`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `23432068` |
-| Fassung | `manifest-v826` / `beta-v826`, Prüfsumme `86013b02` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 417 Lua + 45 Python, grün |
+| HEAD | `b2673034` |
+| Fassung | `manifest-v827` / `beta-v827`, Prüfsumme `87207644` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 418 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -877,6 +877,31 @@ Original), `tests/reprocessor_feed_pairs_test.lua` neu,
 `tests/logistical_sorter_adapter_test.lua` neu geschrieben, drei
 REPROC-Tests auf die strenge Attrappe umgestellt. 11 Rückbauten, alle
 erkannt.
+
+### P) Umgesetzt am 2026-10-15 (v827): Sorter einmalig einstellen
+
+Betreiber nach v826: „der Sorter schickt jetzt aber immer nur ein Item
+raus, obwohl 2 in der Kiste liegen" — Ursache „Single Item" an
+(Mekanism holt dann alle 0,5 s genau ein Item; `TileEntityLogisticalSorter.
+onUpdateServer`). Freigabe mit Änderung: „der Sorter soll nur beim
+Starten einmalig eingestellt werden, also Single Mode off etc."
+
+- `adapters/logistical_sorter.lua`: `prepare_for_feeding()` —
+  `setSingle(false)`, `setAutoMode(true)` (Standardfarbe gilt nur im
+  Auto-Modus), Rückleseprobe `isSingle()`/`getAutoMode()`.
+- `feed_router`: `ensure_sorter_setup()` einmal je gebundenem Sorter, erst
+  mit FEEDING an; danach nie wieder in diesem Lauf (auch nicht nach
+  Umstellen im Spiel). Fehlschlag → höchstens einmal je
+  Erkennungsintervall neu, bis einmal gelungen; Befüllen läuft weiter.
+- Diagnose-Seite: „SORTER-EINSTELLUNG: OK (Single aus, Auto an)" bzw.
+  FEHLT mit Grund. Round Robin und Redstone-Steuerung unberührt (für
+  Redstone gibt es keinen Computer-Befehl).
+
+Test `tests/reprocessor_sorter_setup_once_test.lua`; 8 Rückbauten, alle
+erkannt.
+
+**Offen:** Der Betreiber hat noch einen weiteren Punkt („ausserdem …"),
+den er nennt, sobald das paarweise Liefern im Spiel läuft.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
