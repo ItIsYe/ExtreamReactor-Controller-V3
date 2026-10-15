@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-15 | beta | manifest-v829 | HEAD `bf136630`**
+**Stand: 2026-10-15 | beta | manifest-v830 | HEAD `7cf1fd61`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `bf136630` |
-| Fassung | `manifest-v829` / `beta-v829`, Prüfsumme `716d6aa8` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 420 Lua + 45 Python, grün |
+| HEAD | `7cf1fd61` |
+| Fassung | `manifest-v830` / `beta-v830`, Prüfsumme `c1bbe0e7` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 421 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -952,13 +952,48 @@ der Feature-Datei geprüft: kommt mit, wenn bei der Installation gewählt).
   (7x17–21) bei Skala 1; beide nie Hauptmonitor, auch nicht an einer
   Rechnerseite.
 
-**Offen (nur Hinweis an den Betreiber):** Das Manifest bietet die Ampel
-auch WATER, REPROCESSING und LOG an, gemalt wird sie aber nur von RT,
-ENERGY und FUEL (plus MASTER-Ampel, VALVE-Statusmonitor). Für die anderen
-Rollen fehlt eine Statusregel — nur auf Freigabe.
+(Der offene Hinweis zu WATER/REPROCESSING/LOG ist mit v830 erledigt,
+siehe S.)
 
 Test `tests/ampel_selfheal_1x1_test.lua` (echte CC:Tweaked-Geometrie);
 10 Rückbauten, alle erkannt.
+
+### S) Umgesetzt am 2026-10-15 (v830): WATER raus, Ampel für REPROC und LOG
+
+Betreiber: „generell die Water-Node fliegt komplett raus. und ja es
+sollen alle Nodes eine Ampel bekommen, die muss aber nicht zwingend
+installiert sein, weil Zusatzmodul" — Freigabe: „ja setze beides um,
+Water-Rechner ist abgebaut".
+
+**WATER entfernt** (Commit `7e096f92`): `xreactor/nodes/water/` gelöscht;
+Rolle raus aus `shared/constants` (WATER_NODE, SET_TARGET), Installer-
+Menü, Erststart, `start.lua`, `plan_validator`, Manifest (Block + 16
+`required_for`). MASTER: Anlagenübersicht zeigt an der Stelle den REPROC;
+Ressourcen-Seite ohne Wasserkreislauf; Config-Editor ohne WATER TARGET;
+Alarmfilter ohne „WA"; Energie-Seite „Reproc"; keine Wasser-Trendkurve /
+-Statusauswertung / `set_water_target`. LOG: WATER raus aus `ROLE_ORDER` —
+**anders als im Konzept** („Reihenfolge bleibt"), weil die Disk-Zuordnung
+über das Label `XR-<ROLLE>-<slot>` läuft, nicht über die Position: andere
+Disks behalten ihre Rolle, eine alte `XR-WATER-n`-Disk wird als fremd
+beschriftet der nächsten Rolle mit Platz zugeteilt. Tests: WATER-eigene
+entfernt, allgemeine Prüfung von `finish(..., extra)` in
+`tests/command_finish_persisted_extra_test.lua`, MASTER-Tests über
+FUEL/RT, neu `tests/water_node_removed_test.lua`.
+
+**Ampel REPROC/LOG** (Commit `7cf1fd61`): `feed_router.ampel_status()` —
+grau FEEDING aus; rot ME-Bridge/Sorter/Sorter-Kiste fehlt oder Sorter
+nimmt Farbe/Einstellung nicht an; orange Lieferfehler oder kein Ziel;
+gelb Sorter-Kiste belegt oder zu wenig Cyanit; grün. Eigener Takt (1 s)
+in `nodes/reprocessor/main.lua`. LOG: `nodes/log_collector/ampel_status.lua`
+(rot keine Disk, orange Schreibfehler, gelb pausiert, grau nichts
+empfangen, grün), gemalt im Takt der Hauptschleife; die automatische
+Anzeigewahl überspringt Ampel-Monitore. Die Ampel bleibt optionales
+Feature (nur installiert, wenn bei der Installation gewählt).
+
+Beide Teile zusammen als v830 (Versionsfelder vor dem zweiten
+`manifest_sync --write` auf 829 zurückgesetzt). Test
+`tests/ampel_reproc_log_status_test.lua`; Rückbauten: WATER 3, Ampel 9 —
+alle erkannt.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
