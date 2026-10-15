@@ -8,7 +8,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 local config_edits = require('master.config_edits')
 
 local constants = {
-  roles = { FUEL_NODE = 'FUEL-NODE', WATER_NODE = 'WATER-NODE', RT_NODE = 'RT-NODE' },
+  roles = { FUEL_NODE = 'FUEL-NODE', RT_NODE = 'RT-NODE' },
 }
 
 local function assert_eq(actual, expected, message)
@@ -41,7 +41,7 @@ do
   local nodes = {
     ['FUEL-1'] = { role = constants.roles.FUEL_NODE },
     ['FUEL-2'] = { role = constants.roles.FUEL_NODE },
-    ['WATER-1'] = { role = constants.roles.WATER_NODE },
+    ['RT-1'] = { role = constants.roles.RT_NODE },
   }
   local edits_state = {}
   local t1 = config_edits.cycle_target(edits_state, 'fuel_reserve', nodes, constants)
@@ -59,7 +59,7 @@ do
   local nodes = {
     ['FUEL-1'] = { role = constants.roles.FUEL_NODE },
     ['FUEL-2'] = { role = constants.roles.FUEL_NODE },
-    ['WATER-1'] = { role = constants.roles.WATER_NODE },
+    ['RT-1'] = { role = constants.roles.RT_NODE },
   }
   local comms = make_comms()
   local edits_state = {}
@@ -78,12 +78,12 @@ do
   assert_eq(st.pending.value, 4200, 'pending value must match')
   assert_eq(st.pending.targets['FUEL-1'].status, 'QUEUED', 'each target starts as QUEUED')
   assert_eq(st.pending.targets['FUEL-2'].status, 'QUEUED', 'each target starts as QUEUED')
-  assert_true(st.pending.targets['WATER-1'] == nil, 'a WATER node must not receive the FUEL command')
+  assert_true(st.pending.targets['RT-1'] == nil, 'an RT node must not receive the FUEL command')
 end
 
 -- 3. send_edit: no matching node -> failure, nothing sent.
 do
-  local nodes = { ['WATER-1'] = { role = constants.roles.WATER_NODE } }
+  local nodes = { ['RT-1'] = { role = constants.roles.RT_NODE } }
   local comms = make_comms()
   local edits_state = {}
   local ok, err = config_edits.send_edit(edits_state, 'fuel_reserve', 1000, { nodes = nodes, comms = comms, constants = constants })
@@ -141,7 +141,7 @@ do
 
   -- Derselbe Fall mit gewechselter Rolle.
   local nodes2 = {
-    ['FUEL-1'] = { role = constants.roles.WATER_NODE },
+    ['FUEL-1'] = { role = constants.roles.RT_NODE },
     ['FUEL-2'] = { role = constants.roles.FUEL_NODE },
   }
   local comms2 = make_comms()

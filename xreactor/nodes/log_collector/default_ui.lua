@@ -44,7 +44,7 @@ function M.render(ctx)
   line_ui(2, 3, "Display: " .. tostring(stats.display_name or "term"), color("lightGray", 256))
   ctx.draw_pause_button(2, 4)
 
-  line_ui(2, 6, "Disk Ring (" .. disks_per_role .. "x pro Rolle: RT/MASTER/ENERGY/WATER/FUEL/REPROC/LOG)", color("cyan", 2048))
+  line_ui(2, 6, "Disk Ring (" .. disks_per_role .. "x pro Rolle: RT/MASTER/ENERGY/FUEL/REPROC/LOG)", color("cyan", 2048))
   local dx = 2
   for _, disk in ipairs(stats.disks) do
     local free = free_space(disk.mount)

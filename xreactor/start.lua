@@ -10,7 +10,6 @@ local ROLE_ENTRY = {
   MASTER        = INSTALL_ROOT .. "/master/main.lua",
   RT            = INSTALL_ROOT .. "/nodes/rt/main.lua",
   ENERGY        = INSTALL_ROOT .. "/nodes/energy/main.lua",
-  WATER         = INSTALL_ROOT .. "/nodes/water/main.lua",
   FUEL          = INSTALL_ROOT .. "/nodes/fuel/main.lua",
   -- Eigenstaendiger Redstone-Valve-Controller.
   VALVE         = INSTALL_ROOT .. "/nodes/valve/main.lua",

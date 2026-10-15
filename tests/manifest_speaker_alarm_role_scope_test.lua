@@ -25,7 +25,7 @@ local manifest_mod = dofile("xreactor/installer/manifest.lua")
 -- directly (nodes/*/main.lua, nodes/rt/monitor_ui.lua) or indirectly via
 -- services/alert_service.lua (enabled by default, opt-out only) which
 -- every one of these roles instantiates.
-local ROLES_NEEDING_IT = { "RT", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG", "MASTER" }
+local ROLES_NEEDING_IT = { "RT", "ENERGY", "FUEL", "REPROCESSING", "LOG", "MASTER" }
 
 for _, role_label in ipairs(ROLES_NEEDING_IT) do
   local expected = manifest_mod.files_for_role(manifest, role_label, { speaker_alarm = true })

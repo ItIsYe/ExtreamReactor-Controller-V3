@@ -25,7 +25,6 @@ M.ROLE_ENTRYPOINTS = {
   MASTER        = "master/main.lua",
   RT            = "nodes/rt/main.lua",
   ENERGY        = "nodes/energy/main.lua",
-  WATER         = "nodes/water/main.lua",
   FUEL          = "nodes/fuel/main.lua",
   VALVE         = "nodes/valve/main.lua",
   REPROCESSING  = "nodes/reprocessor/main.lua",

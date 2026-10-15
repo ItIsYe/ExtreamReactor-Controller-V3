@@ -5,7 +5,6 @@ constants.roles = {
   RT_NODE = "RT-NODE",
   ENERGY_NODE = "ENERGY-NODE",
   FUEL_NODE = "FUEL-NODE",
-  WATER_NODE = "WATER-NODE",
   REPROCESSOR_NODE = "REPROCESSOR-NODE",
   LOG = "LOG",
   LOG_COLLECTOR = "LOG_COLLECTOR",
@@ -71,8 +70,6 @@ constants.command_targets = {
   MODE = "MODE",
   REQUEST_STATUS = "REQUEST_STATUS",
   SET_RESERVE = "SET_RESERVE",
-  -- WATER-Ziel-Fuellmenge fernsteuerbar, analog zu SET_RESERVE bei FUEL.
-  SET_TARGET = "SET_TARGET",
   -- Loest den Hand-Riegel eines SCRAM wieder (nodes/rt/rt2_command_handler).
   REQUEST_STARTUP_MODULE = "REQUEST_STARTUP_MODULE",
   -- Master leitet den per RT-Status gesammelten Reaktor-Fuellstand an FUEL

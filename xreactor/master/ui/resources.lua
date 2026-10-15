@@ -22,22 +22,21 @@ local function render(mon, model)
   ui.panel(mon, 1, 1, w, h, "RESOURCES", "OK")
 
   -- Defensiv auf leere Tabellen defaulten, damit die Seite auch ohne
-  -- FUEL/WATER-Nodes (Sub-Model sonst nil) sauber rendert.
+  -- FUEL-Node (Sub-Model sonst nil) sauber rendert. (Der Wasser-Teil ist
+  -- mit der WATER-Node in v830 entfallen.)
   model.fuel = model.fuel or {}
-  model.water = model.water or {}
 
   -- BEKANNTE LUECKE: ui_controller.build_models()/build_models_safe() liefern
-  -- model.resources aktuell als {} -- model.fuel/.water/.node_details/.comms
+  -- model.resources aktuell als {} -- model.fuel/.node_details/.comms
   -- werden nirgends im Code befuellt (siehe Kommentar dort). Ohne diesen
-  -- Frueh-Ausstieg wuerden die Berechnungen unten mit lauter Nullen einen
-  -- aktiv falschen "Water Loop EMERGENCY"-Badge anzeigen, obwohl schlicht
-  -- keine Daten verkabelt sind -- das saehe fuer einen Bediener wie ein
-  -- echter Störfall aus. Lieber ehrlich "keine Daten" anzeigen.
-  local no_data = next(model.fuel) == nil and next(model.water) == nil
+  -- Frueh-Ausstieg zeigten die Berechnungen unten lauter Nullen, obwohl
+  -- schlicht keine Daten verkabelt sind -- das saehe fuer einen Bediener
+  -- wie ein echter Störfall aus. Lieber ehrlich "keine Daten" anzeigen.
+  local no_data = next(model.fuel) == nil
     and next(model.node_details or {}) == nil and next(model.comms or {}) == nil
   if no_data then
     ui.text(mon, 2, 3, "Keine Resource-Daten verkabelt", colorset.get("text"), colorset.get("background"))
-    ui.text(mon, 2, 4, "(Fuel/Water/Node-Diagnose fuer diese Ansicht", colorset.get("text"), colorset.get("background"))
+    ui.text(mon, 2, 4, "(Fuel/Node-Diagnose fuer diese Ansicht", colorset.get("text"), colorset.get("background"))
     ui.text(mon, 2, 5, "noch nicht implementiert)", colorset.get("text"), colorset.get("background"))
     return
   end
@@ -52,33 +51,6 @@ local function render(mon, model)
   if fuel_total <= (model.fuel.reserve or 0) then
     ui.badge(mon, 18, 5, "RESERVE", "WARNING")
   end
-
-  local water_total = model.water.total or 0
-  local water_target = model.water.target or water_total
-  local water_ratio = water_target > 0 and water_total / water_target or 0
-  local water_status = "OK"
-  if water_ratio < 0.7 then
-    water_status = "EMERGENCY"
-  elseif water_ratio < 0.9 then
-    water_status = "LIMITED"
-  end
-  ui.text(mon, 2, 7, "Water Loop", colorset.get("text"), colorset.get("background"))
-  ui.badge(mon, 14, 7, water_status, water_status)
-  ui.text(mon, 2, 8, string.format("Target %.0f  Actual %.0f", water_target, water_total), colorset.get("text"), colorset.get("background"))
-  ui.progress(mon, 2, 9, w - 4, math.min(1, water_ratio), water_status)
-
-  local rows = {}
-  local buffer_names = {}
-  for name in pairs(model.water.buffers or {}) do
-    table.insert(buffer_names, name)
-  end
-  table.sort(buffer_names)
-  for _, name in ipairs(buffer_names) do
-    local buf = model.water.buffers[name]
-    table.insert(rows, { text = string.format("%s %.0f", name, buf.level or 0), status = water_status })
-  end
-  local next_y = 11
-  ui.list(mon, 2, next_y, w - 2, rows, { max_rows = math.max(1, h - next_y - 8) })
 
   local diagnostics = {}
   local details = model.node_details or {}
@@ -132,8 +104,8 @@ local function render(mon, model)
   local node_rows = math.min(7, #diagnostics)
   local comms_rows_count = #comms_rows
   local comms_title_y = h - node_rows - comms_rows_count - 3
-  if comms_title_y < 12 then
-    comms_title_y = 12
+  if comms_title_y < 7 then
+    comms_title_y = 7
   end
   ui.text(mon, 2, comms_title_y, "Comms Diagnostics", colorset.get("text"), colorset.get("background"))
   ui.list(mon, 2, comms_title_y + 1, w - 2, comms_rows, { max_rows = comms_rows_count })

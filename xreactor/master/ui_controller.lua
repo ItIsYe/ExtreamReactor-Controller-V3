@@ -347,7 +347,6 @@ function M.new(opts)
         if stale then energy.support_stale = (energy.support_stale or 0) + 1 else energy.support_online = (energy.support_online or 0) + 1 end
       end
       if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0); energy.resources.fuel_sources = (energy.resources.fuel_sources or 0) + 1 end
-      if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
       if node.role == c.constants.roles.REPROCESSOR_NODE then energy.resources.reprocessing_state = (node.reprocessor and (node.reprocessor.state or node.reprocessor.mode)) or '-' end
       end)
       if not ok_node then
@@ -414,7 +413,7 @@ function M.new(opts)
     rt.display_mode = 'Node/Assignment/Control getrennt'
     rt.fleet_summary = string.format("RT nodes=%d active=%d startup=%d shutdown=%d stale=%d", #(rt.rt_nodes or {}), rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0)
     rt.queue_summary = string.format("Queue=%d ramp=%s seq=%s", #(rt.queue or {}), tostring(rt.ramp_profile or '-'), tostring(rt.sequence_state or '-'))
-    energy.resource_summary = string.format("Fuel %.1f | Water %.1f | Reproc %s", energy.resources.fuel_total or 0, energy.resources.water_total or 0, tostring(energy.resources.reprocessing_state or "-"))
+    energy.resource_summary = string.format("Fuel %.1f | Reproc %s", energy.resources.fuel_total or 0, tostring(energy.resources.reprocessing_state or "-"))
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold
 
@@ -608,7 +607,6 @@ function M.new(opts)
       return { target = "ALL", confirmed_value = fallback, pending = nil }
     end
     local fuel_reserve_edit = edit_model("fuel_reserve", 2000)
-    local water_target_edit = edit_model("water_target", 0)
     local reactor_fill_edit = edit_model("reactor_fill_target", 0.5)
     local config_editor_model = {
       peak_threshold_pct = tonumber(c.state.peak_threshold_pct) or 30,
@@ -617,9 +615,6 @@ function M.new(opts)
       fuel_reserve_pct = tonumber(fuel_reserve_edit.confirmed_value) or 2000,
       fuel_reserve_target = fuel_reserve_edit.target,
       fuel_reserve_pending = fuel_reserve_edit.pending,
-      water_target_pct = tonumber(water_target_edit.confirmed_value) or 0,
-      water_target_target = water_target_edit.target,
-      water_target_pending = water_target_edit.pending,
       auto_update_enabled = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled(),
       -- Zielwert fuer Pro-Reaktor-Regelung, als Prozent (0-100) fuer die UI;
       -- config_edits speichert den rohen Wert (0.0-1.0), hier zurueck in
@@ -630,8 +625,8 @@ function M.new(opts)
     }
 
     -- BEKANNTE LUECKE: resources bleibt bewusst {} -- ui/resources.lua
-    -- erwartet model.fuel/.water/.node_details/.comms, aber diese Aggregation
-    -- wurde nie implementiert (Fuel/Water-Summary lebt stattdessen unter
+    -- erwartet model.fuel/.node_details/.comms, aber diese Aggregation
+    -- wurde nie implementiert (die Fuel-Summary lebt stattdessen unter
     -- energy.resources mit einem viel schmaleren Feld-Layout, siehe oben).
     -- ui/resources.lua zeigt bei leerem Model einen expliziten "keine Daten"-
     -- Hinweis statt irrefuehrender Nullwerte/Fehlerbadges.
@@ -752,7 +747,7 @@ function M.new(opts)
       persist_master_settings({ idle_threshold_pct = c.state.idle_threshold_pct })
       return true
     end
-    -- Config-Editor am Monitor: Fuel-Reserve/Water-Target in festen
+    -- Config-Editor am Monitor: Fuel-Reserve/Fuellziel in festen
     -- Schritten anpassen. Der neue Wert wird NICHT optimistisch in
     -- c.state.*_pct geschrieben -- der angezeigte Wert kommt ausschliesslich
     -- aus get_config_edit_model() und aktualisiert sich erst, wenn ALLE
@@ -774,15 +769,6 @@ function M.new(opts)
       local cur_pct = cur_ratio * 100
       local new_pct = math.max(0, math.min(100, cur_pct + action.delta))
       c.calc.set_reactor_fill_target(new_pct / 100)
-      return true
-    end
-    if action.type == "water_target_adjust" and action.delta and c.calc.set_water_target then
-      local cur = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("water_target", 0).confirmed_value) or 0
-      local new_val = math.max(0, cur + action.delta)
-      local ok, err = c.calc.set_water_target(new_val)
-      if not ok and c.calc.add_alarm then
-        c.calc.add_alarm("MASTER", "WARN", "Water-Target-Anpassung fehlgeschlagen: " .. tostring(err))
-      end
       return true
     end
     -- Zielauswahl (ALLE -> konkrete Node-ID -> ... -> ALLE) je Config-

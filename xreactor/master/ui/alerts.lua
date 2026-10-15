@@ -21,7 +21,6 @@ local role_filters = {
   { key = constants.roles.RT_NODE, label = "RT" },
   { key = constants.roles.ENERGY_NODE, label = "EN" },
   { key = constants.roles.FUEL_NODE, label = "FU" },
-  { key = constants.roles.WATER_NODE, label = "WA" },
   { key = constants.roles.REPROCESSOR_NODE, label = "RP" }
 }
 
@@ -56,7 +55,6 @@ local function ensure_state(mon)
         [constants.roles.RT_NODE] = true,
         [constants.roles.ENERGY_NODE] = true,
         [constants.roles.FUEL_NODE] = true,
-        [constants.roles.WATER_NODE] = true,
         [constants.roles.REPROCESSOR_NODE] = true
       }
     }

@@ -2,11 +2,11 @@ from pathlib import Path
 
 support_runtime = Path('xreactor/nodes/support/runtime.lua').read_text(encoding='utf-8')
 support_discovery = Path('xreactor/nodes/support/discovery.lua').read_text(encoding='utf-8')
-for node in ('fuel', 'water', 'reprocessor'):
+for node in ('fuel', 'reprocessor'):  # WATER ist seit v830 raus
     source = Path(f'xreactor/nodes/{node}/main.lua').read_text(encoding='utf-8')
     assert 'config_normalizer' in source, f'{node}: expected dedicated config_normalizer wiring'
     assert 'role_descriptor' in source, f'{node}: expected role_descriptor wiring'
-    # 2026-09-06: fuel/water/reprocessor use the decoupled fast/slow loop
+    # 2026-09-06: fuel/reprocessor use the decoupled fast/slow loop
     # split (nodes/support/runtime.lua's run_fast_loop()/run_slow_loop())
     # instead of the single-coroutine run_event_loop(), so a slow
     # discovery/export call can no longer block UI/touch/valve safety.
@@ -18,9 +18,8 @@ for node in ('fuel', 'water', 'reprocessor'):
     # (an opt-in list of real Reprocessor-machine peripherals) was removed
     # in the clean rebuild -- ME-Bridge/Sorter/Sorter-Kiste are detected
     # directly inside feed_router.lua via peripheral method signatures,
-    # never through the shared registry classification helper. FUEL/WATER
-    # still classify real registry-tracked peripherals (waste outlets/
-    # tanks) this way.
+    # never through the shared registry classification helper. FUEL still
+    # classifies real registry-tracked peripherals (waste outlets) this way.
     if node != 'reprocessor':
         assert 'collect_devices_by_methods' in source, f'{node}: expected shared support discovery classification helper usage'
 

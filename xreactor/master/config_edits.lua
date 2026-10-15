@@ -24,7 +24,6 @@ local M = {}
 -- haelt selbst keine Abhaengigkeit zu core/comms.lua o.ae.).
 M.SETTINGS = {
   fuel_reserve = { role_key = "FUEL_NODE", command_target = "SET_RESERVE", requires_persistence = true },
-  water_target = { role_key = "WATER_NODE", command_target = "SET_TARGET", requires_persistence = true },
   reactor_fill_target = { role_key = "RT_NODE", command_target = "SET_REACTOR_FILL_TARGET", requires_persistence = true },
 }
 

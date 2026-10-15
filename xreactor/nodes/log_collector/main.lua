@@ -63,7 +63,12 @@ local MONITOR_CFG_FILE = "/xreactor_config/log_monitor.txt"
 -- die naechsten 4 = MASTER usw. (siehe disk_for_role() fuer die Rotation
 -- innerhalb einer Rollen-Gruppe).
 local DISKS_PER_ROLE   = 4
-local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
+-- WATER ist seit v830 raus. Die Zuordnung Disk -> Rolle laeuft ueber das
+-- Disk-Label (parse_label: "XR-<ROLLE>-<slot>"), nicht ueber die Position in
+-- dieser Liste -- FUEL/REPROCESSING/LOG-Disks behalten ihr Label. Eine noch
+-- als WATER beschriftete Disk gilt jetzt als fremd beschriftet und wird wie
+-- eine leere der naechsten Rolle mit freiem Platz zugeteilt.
+local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "FUEL", "REPROCESSING", "LOG" }
 
 -- ── Runtime state ───────────────────────────────────────────────────────────
 local stats = {

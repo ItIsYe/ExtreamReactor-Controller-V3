@@ -91,9 +91,8 @@ function M.reject_unsupported(devices)
   return result
 end
 
--- Optionales drittes `extra`-Argument, damit Aufrufer wie WATER's
--- SET_TARGET dem ACK_APPLIED-Ergebnis zusaetzliche, ehrliche Felder
--- mitgeben koennen (z.B. `persisted = false` nach einem fehlgeschlagenen
+-- Optionales drittes `extra`-Argument, damit Aufrufer dem ACK_APPLIED-
+-- Ergebnis zusaetzliche, ehrliche Felder mitgeben koennen (z.B. `persisted = false` nach einem fehlgeschlagenen
 -- Config-Write) ohne `ok=true` zu verfaelschen.
 -- quiet: Erfolg nur als DEBUG (Routine-Kommando, siehe is_routine()).
 function M.finish(devices, ok, extra, quiet)

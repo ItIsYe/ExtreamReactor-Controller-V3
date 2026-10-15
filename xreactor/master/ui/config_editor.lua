@@ -45,10 +45,9 @@ local function render(mon, model)
     { label = "PEAK THRESHOLD", value = model.peak_threshold_pct or 30, suffix = "%", min = 0, max = 100, delta = 5, type = "peak_threshold_adjust", status = "LIMITED", icon = "energy" },
     { label = "IDLE THRESHOLD", value = model.idle_threshold_pct or 90, suffix = "%", min = 0, max = 100, delta = 5, type = "idle_threshold_adjust", status = "LIMITED", icon = "energy" },
     { label = "RT GLOBAL HOLD", value = model.rt_global_off_hold and 1 or 0, display = model.rt_global_off_hold and "ON" or "OFF", min = 0, max = 1, type = "rt_hold", toggle = true, status = model.rt_global_off_hold and "WARNING" or "OK", icon = "reactor" },
-    -- edit_key/target/pending: diese drei Karten unterstuetzen
+    -- edit_key/target/pending: diese Karten unterstuetzen
     -- Zielauswahl (ALLE/Node-ID) und Applied-ACK-Fortschritt (render()).
     { label = "FUEL RESERVE", value = model.fuel_reserve_pct or 2000, suffix = "", min = 0, max = 50000, delta = 250, type = "fuel_reserve_adjust", status = "LIMITED", icon = "fuel", edit_key = "fuel_reserve", target = model.fuel_reserve_target, pending = model.fuel_reserve_pending },
-    { label = "WATER TARGET", value = model.water_target_pct or 0, suffix = "", min = 0, max = 500000, delta = 250, type = "water_target_adjust", status = "LIMITED", icon = "water", edit_key = "water_target", target = model.water_target_target, pending = model.water_target_pending },
     { label = "AUTO UPDATE", value = model.auto_update_enabled ~= false and 1 or 0, display = model.auto_update_enabled ~= false and "ON" or "OFF", min = 0, max = 1, type = "auto_update_toggle", toggle = true, status = model.auto_update_enabled ~= false and "OK" or "WARNING", icon = "network" },
     { label = "REACTOR FILL TARGET", value = model.reactor_fill_target_pct or 50, suffix = "%", min = 10, max = 90, delta = 5, type = "reactor_fill_target_adjust", status = "LIMITED", icon = "reactor", edit_key = "reactor_fill_target", target = model.reactor_fill_target_target, pending = model.reactor_fill_target_pending },
   }

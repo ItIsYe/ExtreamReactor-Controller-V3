@@ -173,7 +173,6 @@ def main():
         ("MASTER", XREACTOR_ROOT / "master" / "main.lua"),
         ("RT", XREACTOR_ROOT / "nodes" / "rt" / "main.lua"),
         ("ENERGY", XREACTOR_ROOT / "nodes" / "energy" / "main.lua"),
-        ("WATER", XREACTOR_ROOT / "nodes" / "water" / "main.lua"),
         ("FUEL", XREACTOR_ROOT / "nodes" / "fuel" / "main.lua"),
         ("REPROCESSING", XREACTOR_ROOT / "nodes" / "reprocessor" / "main.lua"),
         # Fix (2026-07-17): VALVE was missing from this list entirely, so its

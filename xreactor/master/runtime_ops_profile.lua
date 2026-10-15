@@ -156,7 +156,7 @@ function M.sample_trends(runtime)
   local now = os.epoch("utc")
   if now - runtime.state.last_trend_sample < 1000 then return end
   runtime.state.last_trend_sample = now
-  local power, stored, capacity, water_total = 0, 0, 0, 0
+  local power, stored, capacity = 0, 0, 0
   local seen_energy_nodes, fresh_energy_nodes = 0, 0
   local constants = runtime.libs.constants
 
@@ -173,8 +173,6 @@ function M.sample_trends(runtime)
         stored = stored + (number_or(node.stored, 0) or 0)
         capacity = capacity + (number_or(node.capacity, 0) or 0)
       end
-    elseif node.role == constants.roles.WATER_NODE then
-      if node_available(node, constants) then water_total = node.total_water or water_total end
     end
   end
 
@@ -193,7 +191,6 @@ function M.sample_trends(runtime)
       runtime.state.trend_cache.energy_arrow = "→"
     end
   end
-  runtime.refs.trends:push("water", water_total)
 
   local auto_profile_has_trustworthy_energy = not (seen_energy_nodes > 0 and fresh_energy_nodes == 0)
   if runtime.state.auto_profile and auto_profile_has_trustworthy_energy then

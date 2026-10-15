@@ -57,7 +57,8 @@ end
 -- 2. Der MASTER-Heartbeat darf nicht langsamer sein als der jeder anderen
 --    Rolle -- er war bisher der einzige Ausreisser.
 do
-  for _, role in ipairs({ 'nodes.water.config', 'nodes.energy.config' }) do
+  -- (Die WATER-Konfiguration stand hier bis v829 mit drin -- WATER ist raus.)
+  for _, role in ipairs({ 'nodes.energy.config' }) do
     local node_config = require(role)
     assert_true(master_config.heartbeat_interval <= node_config.heartbeat_interval, string.format(
       'MASTER heartbeat (%s) must not be slower than %s (%s)',

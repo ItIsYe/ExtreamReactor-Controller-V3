@@ -185,10 +185,6 @@ local function run_master()
       return config_edits.send_edit(runtime.state.config_edits, "fuel_reserve", amount,
         { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
     end,
-    set_water_target = function(amount)
-      return config_edits.send_edit(runtime.state.config_edits, "water_target", amount,
-        { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
-    end,
     -- Zielwert (0.0-1.0) fuer den internen Dampf-Fuellstand bei
     -- individueller Pro-Reaktor-Regelung.
     set_reactor_fill_target = function(value)
@@ -288,7 +284,7 @@ end
 function M.run()
   local ok, err = xpcall(run_master, function(e) return e end)
   if ok or is_terminate(err) then return end
-  -- Gemeinsame Crash-Screen-Logik wie FUEL/WATER/REPROCESSOR/RT/ENERGY/
+  -- Gemeinsame Crash-Screen-Logik wie FUEL/REPROCESSOR/RT/ENERGY/
   -- LOG_COLLECTOR (begrenzte Wartezeit, automatischer Reboot, Crash-Loop-
   -- Erkennung). dofile() statt require(), da die Bootstrap-konfigurierte
   -- require-Funktion nur innerhalb von run_master() lokal verfuegbar ist.

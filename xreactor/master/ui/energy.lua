@@ -156,7 +156,7 @@ local function render(mon, model)
   local resources = widgets.panel_box(mon, right_x, content_y, right_w, resources_h, "Ressourcen", "OK")
   local r = model.resources or {}
   widgets.stat_card(mon, resources.x, resources.y, resources.w, "Fuel", string.format("%.1f Reserve", r.fuel_total or 0), string.format("%d Quellen", r.fuel_sources or 0), "LIMITED")
-  widgets.stat_card(mon, resources.x, resources.y + 6, resources.w, "Water / Reproc", string.format("Water %.1f", r.water_total or 0), "Reproc " .. tostring(r.reprocessing_state or "-"), "OK")
+  widgets.stat_card(mon, resources.x, resources.y + 6, resources.w, "Reproc", tostring(r.reprocessing_state or "-"), nil, "OK")
   if model.matrix_only then
     ui.text(mon, resources.x, resources.y + math.max(0, resources.h - 1), widgets.fit("Payload: Matrix-Only", resources.w), colors.get("LIMITED"), colors.get("background"))
   end

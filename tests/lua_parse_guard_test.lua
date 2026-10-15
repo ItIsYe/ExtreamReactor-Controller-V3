@@ -9,7 +9,6 @@ local files = {
   'xreactor/nodes/rt/status_snapshot.lua',
   'xreactor/nodes/rt/reactor_control.lua',
   'xreactor/nodes/rt/turbine_control.lua',
-  'xreactor/nodes/water/main.lua',
   'xreactor/services/alert_service.lua',
   'xreactor/master/ui/alerts.lua'
 }

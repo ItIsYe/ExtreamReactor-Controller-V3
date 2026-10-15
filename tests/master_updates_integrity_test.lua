@@ -96,7 +96,7 @@ do
   local captured
   local controller = ui_controller.new({
     constants = {
-      roles = { ENERGY_NODE = 'ENERGY_NODE', RT_NODE = 'RT_NODE', WATER_NODE = 'WATER_NODE', FUEL_NODE = 'FUEL_NODE', REPROCESSOR_NODE = 'REPROCESSOR_NODE' },
+      roles = { ENERGY_NODE = 'ENERGY_NODE', RT_NODE = 'RT_NODE', FUEL_NODE = 'FUEL_NODE', REPROCESSOR_NODE = 'REPROCESSOR_NODE' },
       status_levels = { OK = 'OK', WARNING = 'WARNING', EMERGENCY = 'EMERGENCY', LIMITED = 'LIMITED', OFFLINE = 'OFFLINE', MANUAL = 'MANUAL' },
       node_states = { OFF = 'OFF' },
     },
@@ -105,7 +105,7 @@ do
     nodes = {
       F = { id = 'F', role = 'FUEL_NODE', status = 'OK', manifest_version = 815,
         meta = { build = { manifest_version = 815, integrity = { ok = false, bad = 2, version = 815 } } } },
-      W = { id = 'W', role = 'WATER_NODE', status = 'OK', manifest_version = 815 },
+      R = { id = 'R', role = 'REPROCESSOR_NODE', status = 'OK', manifest_version = 815 },
     },
     alarms = {},
     comms = { get_diagnostics = function() return {} end },
@@ -124,7 +124,7 @@ do
   for _, n in ipairs(captured.nodes) do by_id[n.id] = n end
   assert_true(by_id.F and type(by_id.F.integrity) == 'table', 'Knoten F traegt seine Dateipruefung')
   assert_eq(by_id.F.integrity.bad, 2, 'unveraendert durchgereicht')
-  assert_eq(by_id.W.integrity, nil, 'Knoten ohne Ergebnis: nichts')
+  assert_eq(by_id.R.integrity, nil, 'Knoten ohne Ergebnis: nichts')
 end
 
 -- ══ 5./6. Die Seite ═══════════════════════════════════════════════════════

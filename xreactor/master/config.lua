@@ -182,7 +182,6 @@ return {
     [constants.roles.RT_NODE] = {},
     [constants.roles.ENERGY_NODE] = {},
     [constants.roles.FUEL_NODE] = {},
-    [constants.roles.WATER_NODE] = {},
     [constants.roles.REPROCESSOR_NODE] = {}
   }
 }

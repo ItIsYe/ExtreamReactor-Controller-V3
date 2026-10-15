@@ -1,8 +1,8 @@
--- ui/resources.lua rechnete mit einem komplett leeren Model (model.fuel/
--- .water bleiben in ui_controller.lua bewusst {} -- diese Aggregation ist
--- eine bekannte, nicht implementierte Luecke) trotzdem seine normalen
--- Fuel/Water-Badges aus. water_ratio wird dabei 0/0 -> 0, was einen aktiv
--- falschen "EMERGENCY"-Badge fuer den Water Loop anzeigte, obwohl schlicht
+-- ui/resources.lua rechnete mit einem komplett leeren Model (model.fuel
+-- bleibt in ui_controller.lua bewusst {} -- diese Aggregation ist eine
+-- bekannte, nicht implementierte Luecke) trotzdem seine normalen Badges
+-- aus; bis v829 kam dabei ein aktiv falscher "EMERGENCY"-Badge fuer den
+-- (mit der WATER-Node entfallenen) Wasserkreislauf heraus, obwohl schlicht
 -- keine Daten verkabelt sind. Muss stattdessen einen ehrlichen
 -- "keine Daten"-Hinweis zeigen und dabei nicht in die irrefuehrende
 -- Berechnung laufen.
@@ -52,7 +52,6 @@ calls = {}
 local mon_data = { getSize = function() return 40, 30 end }
 resources.render(mon_data, {
   fuel = { total = 5000, reserve = 2000, minimum = 1000, mix_status = 'SINGLE' },
-  water = { total = 9000, target = 10000, buffers = { TANK1 = { level = 9000 } } },
   node_details = {},
   comms = {},
 })

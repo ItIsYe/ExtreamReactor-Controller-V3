@@ -291,7 +291,6 @@ local ROLE_OPTIONS = {
   { label = "MASTER", role = "MASTER" },
   { label = "RT", role = "RT" },
   { label = "ENERGY", role = "ENERGY" },
-  { label = "WATER", role = "WATER" },
   { label = "FUEL", role = "FUEL" },
   { label = "REPROCESSING", role = "REPROCESSING" },
   { label = "LOG", role = "LOG" }

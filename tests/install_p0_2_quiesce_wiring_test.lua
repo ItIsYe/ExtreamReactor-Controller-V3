@@ -7,13 +7,13 @@
 -- heartbeat.lua) sind in eigenen Tests direkt getrieben (core_update_
 -- handshake_test.lua, support_runtime_quiesce_test.lua, energy_heartbeat_
 -- quiesce_test.lua). Dieser Test prueft strukturell direkt am Quelltext,
--- dass JEDE der acht Rollen tatsaechlich an den Handshake angeschlossen ist
--- -- fuer FUEL/REPROCESSOR/VALVE/WATER insbesondere, dass die physische
--- Sicherzustandsbestaetigung ueber die jeweilige physische Aktor-API laeuft:
+-- dass JEDE der sieben Rollen tatsaechlich an den Handshake angeschlossen
+-- ist (WATER ist seit v830 raus) -- fuer FUEL/REPROCESSOR/VALVE
+-- insbesondere, dass die physische Sicherzustandsbestaetigung ueber die
+-- jeweilige physische Aktor-API laeuft:
 --   VALVE:        controller:apply_valve(true, true) (frischer Sorter-Write)
 --   FUEL:         redstone_router:begin/poll_quiesce (BLOCKED-ACKs)
 --   REPROCESSOR:  enter_standby() + Router-BLOCKED-ACKs
---   WATER:        set_rs_output(..., false, ...)     (echtes true/false, pro Cluster)
 -- sowie dass start.lua/auto_update.lua/master/loop.lua/log_collector/
 -- main.lua/rt/main.lua tatsaechlich verdrahtet sind. Faellt automatisch
 -- durch, sobald der pre-fix-Code (git stash) wieder aktiv ist -- die
@@ -68,15 +68,6 @@ do
   assert_not_contains(src, "rs_router", "reprocessor/main.lua")
 end
 
--- ── WATER: alle Cluster ueber set_rs_output() erzwungen aus, echtes true/false
-do
-  local src = read("nodes/water/main.lua")
-  assert_contains(src, "_G.__xreactor_update_handshake", "water/main.lua")
-  assert_contains(src, "quiesce_all_clusters", "water/main.lua")
-  assert_contains(src, "set_rs_output(fill_side, false, integrator)", "water/main.lua")
-  assert_contains(src, "set_rs_output(drain_side, false, integrator)", "water/main.lua")
-end
-
 -- ── RT: Reaktoren und Turbinen physisch sicher + frischer Readback ─────────
 do
   local src = read("nodes/rt/main.lua")
@@ -105,7 +96,7 @@ do
 end
 
 -- ── nodes/support/runtime.lua: gemeinsamer Hook-Punkt fuer RT/VALVE/FUEL/
---    REPROCESSOR/WATER, rueckwaertskompatibel (5. Parameter optional) ──────
+--    REPROCESSOR, rueckwaertskompatibel (5. Parameter optional) ──────
 do
   local src = read("nodes/support/runtime.lua")
   assert_contains(src, "function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce_opts)", "support/runtime.lua")
