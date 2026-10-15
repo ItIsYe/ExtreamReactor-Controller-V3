@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-15 | beta | manifest-v825 | HEAD `d7682a09`**
+**Stand: 2026-10-15 | beta | manifest-v826 | HEAD `23432068`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `d7682a09` |
-| Fassung | `manifest-v825` / `beta-v825`, Prüfsumme `6dedfbb9` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 416 Lua + 45 Python, grün |
+| HEAD | `23432068` |
+| Fassung | `manifest-v826` / `beta-v826`, Prüfsumme `86013b02` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 417 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -837,6 +837,46 @@ erkannt; mit der alten Liste liefert FUEL nachweislich Blutonium-Blöcke.
 Nicht umgesetzt (nur besprochen): eigener Blutonium-Reaktor (Brennstoff
 pro Reaktor), Weiterverarbeitung zu Ludicrit, Stau-Warnung „geliefert,
 Brennstoff steigt nicht".
+
+### O) Umgesetzt am 2026-10-15 (v826): REPROC-Sorterfarben, Cyanit paarweise
+
+Betreiber: „der [REPROC] spricht aktuell den Sorter nicht an, es werden
+keine Farben durchgewechselt obwohl die angelegt sind. Zudem müssen fest
+min immer 2 Barren in die Chest exportiert werden" — Freigabe: „Ja setze
+beides um. aber ich habe schon Routen bzw. Prozessoren angelegt, die
+müssen bestehen bleiben".
+
+**Ursache Farben** (Mekanism-Quellcode, Zweig 1.21.x): `setDefaultColor`
+nimmt nur Konstantennamen aus `mekanism.api.text.EnumColor`
+(`SpecialConverters.sanitizeStringToEnum`). Im Spiel heißen sie anders:
+DARK_BLUE „Blue", DARK_GREEN „Green", DARK_AQUA „Cyan", GRAY „Light
+Gray", DARK_GRAY „Gray", INDIGO „Light Blue", BRIGHT_GREEN „Lime", PINK
+„Magenta", BRIGHT_PINK „Pink". Die Liste in
+`adapters/logistical_sorter.lua` wurde am 2026-09-17 auf die Namen aus
+dem Spiel umgestellt und ging unübersetzt raus: 7 Farben scheiterten
+(Feed übersprungen), GRAY setzte Hellgrau, PINK Magenta. Die
+Test-Attrappen nahmen jeden Namen an — deshalb fiel es nie auf.
+
+Umgesetzt:
+- Adapter neu: `MEKANISM_NAME` übersetzt beim Senden; NONE →
+  `clearDefaultColor`; Rückleseprobe per `getDefaultColor` (nicht
+  sicherheitsgebunden), sonst `color_not_applied`. UI, gespeicherte Ziele
+  und `migrate_legacy_color` unverändert (alte Konstantennamen landen über
+  die Übersetzung beim selben Sorter-Farbton).
+- `feed_router`: `normalize_feed_amount` (ganz, gerade, ≥ 2), auch im
+  Normalizer (mit Warnung); Farbwechsel nur bei leerer Sorter-Kiste
+  (`list()`), sonst wartet dasselbe Ziel; nicht auslesbare Kiste → einmal
+  Warnung, Feed läuft; Teil-Export einmal mit derselben Farbe
+  nachgeschoben, sonst „nur X von N" im Status.
+- Achtung für den Betreiber: Ziele mit GRAY/PINK setzen jetzt wirklich
+  Grau/Pink (vorher Hellgrau/Magenta). Sicherheit des Sorters muss
+  „Öffentlich" sein.
+
+Tests: `tests/support/fake_mekanism_sorter.lua` (streng wie das
+Original), `tests/reprocessor_feed_pairs_test.lua` neu,
+`tests/logistical_sorter_adapter_test.lua` neu geschrieben, drei
+REPROC-Tests auf die strenge Attrappe umgestellt. 11 Rückbauten, alle
+erkannt.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
