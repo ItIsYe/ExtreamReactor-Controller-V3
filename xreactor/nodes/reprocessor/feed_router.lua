@@ -19,7 +19,11 @@
 -- Fuellstand nicht abgefragt werden -- statt fuellstandsbasiertem
 -- Nachfuellen wird in zufaelligen Abstaenden reihum jeder konfigurierte
 -- Reprocessor mit genau feed_amount (Standard: 2) Cyanite befuellt, das
--- Minimum damit er ueberhaupt zu arbeiten beginnt.
+-- Minimum damit er ueberhaupt zu arbeiten beginnt. feed_amount ist immer
+-- gerade und mindestens 2 (normalize_feed_amount), die Farbe wechselt erst,
+-- wenn die Sorter-Kiste leer ist, und ein Teil-Export wird sofort mit
+-- derselben Farbe nachgeschoben -- jeder Reprocessor bekommt seine Barren
+-- paarweise.
 --
 -- Config (config.feed):
 --   enabled            = true/false  -- Router-UI "FEEDING"-Schalter
@@ -27,7 +31,7 @@
 --   sorter             = nil  -- Logistical Sorter, per Router-UI gewaehlt
 --   sorter_chest       = nil  -- die SORTER-KISTE, per Router-UI gewaehlt
 --   waste_item         = "bigreactors:cyanite_ingot"
---   feed_amount        = 2          -- Items pro Befuellung
+--   feed_amount        = 2          -- Items pro Befuellung (gerade, >= 2)
 --   interval_min_s     = 20         -- zufaelliges Intervall: min..max Sekunden
 --   interval_max_s     = 60
 --   discovery_interval = 60
@@ -57,6 +61,23 @@ local function random_interval(cfg)
   local hi = tonumber(cfg.interval_max_s) or 60
   if hi < lo then hi = lo end
   return lo + math.random() * (hi - lo)
+end
+
+-- Der Reprocessor verarbeitet Cyanit immer paarweise (Extreme Reactors:
+-- 2 Cyanit + 1000 mB Wasser -> 1 Blutonium); ein einzelner Barren bleibt in
+-- der Maschine liegen, bis ein zweiter kommt. Deshalb ist feed_amount immer
+-- eine ganze, gerade Zahl und mindestens 2: 1 -> 2, 3 -> 4, 2.5 -> 4.
+M.MIN_FEED_AMOUNT = 2
+
+function M.normalize_feed_amount(value)
+  local n = tonumber(value)
+  if not n or n ~= n or n == math.huge or n == -math.huge then
+    return M.MIN_FEED_AMOUNT
+  end
+  n = math.ceil(n)
+  if n < M.MIN_FEED_AMOUNT then n = M.MIN_FEED_AMOUNT end
+  if n % 2 ~= 0 then n = n + 1 end
+  return n
 end
 
 function M.new(opts)
@@ -195,6 +216,50 @@ end
 
 -- ---- feed cycle -------------------------------------------------------------
 
+-- Liest den Inhalt der Sorter-Kiste. Rueckgabe: Stueckzahl (0 = leer) und
+-- das erste gefundene Item -- oder nil plus Fehlertext, wenn die Kiste
+-- sich nicht auslesen laesst.
+local function chest_contents(chest_name)
+  local ok, items = pcall(peripheral.call, chest_name, "list")
+  if not ok or type(items) ~= "table" then
+    return nil, tostring(items)
+  end
+  local count, first = 0, nil
+  for _, stack in pairs(items) do
+    if type(stack) == "table" then
+      count = count + (tonumber(stack.count) or 1)
+      first = first or stack.name
+    end
+  end
+  return count, first
+end
+
+local function exported_count(result)
+  if type(result) == "table" then return me_bridge_compat.item_amount(result) end
+  return type(result) == "number" and result or 0
+end
+
+-- Exportiert `amount` Stueck in die Sorter-Kiste. Kommt beim ersten Mal
+-- weniger an (Kiste kurz voll, ME-Bridge liefert nur einen Teil), wird der
+-- Rest sofort nachgeschoben -- noch mit derselben Sorter-Farbe, also zum
+-- selben Reprocessor. Rueckgabe: bewegte Stueckzahl, letzter Fehler.
+local function export_amount(bridge, item, amount, chest_name)
+  local moved, last_err = 0, nil
+  for _ = 1, 2 do
+    local want = amount - moved
+    if want <= 0 then break end
+    local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = want }, chest_name)
+    if ok then
+      local n = exported_count(result)
+      moved = moved + n
+      if n <= 0 then last_err = "export moved nothing" end
+    else
+      last_err = result
+    end
+  end
+  return moved, last_err
+end
+
 -- Fuehrt eine Befuellung fuer genau EIN Target durch (Rotation durch die
 -- Liste): Sorter-Default-Farbe auf die des Ziels setzen, dann exportieren.
 -- Beide Schritte sind einzelne synchrone Peripherie-Calls -- ein Feed ist
@@ -206,7 +271,9 @@ local function feed_one(self, cfg)
     return
   end
 
-  -- Rotierend naechstes Target waehlen
+  -- Rotierend naechstes Target waehlen. Weitergeschaltet wird in jedem
+  -- Fall -- ausser die Sorter-Kiste ist noch belegt (siehe unten): dann
+  -- kam dieses Ziel gar nicht zum Zug und bleibt dran.
   local idx = self._state.target_index
   if idx > #targets then idx = 1 end
   local target = targets[idx]
@@ -244,8 +311,29 @@ local function feed_one(self, cfg)
     return
   end
 
+  -- Erst wenn die Sorter-Kiste leer ist, darf die Farbe wechseln. Liegt
+  -- dort noch etwas, ist die vorige Lieferung noch nicht durch den Sorter
+  -- -- ein Farbwechsel jetzt schickte den Rest zum NAECHSTEN Reprocessor,
+  -- und beide bekaemen nur einen Barren (der Reprocessor braucht immer 2).
+  local in_chest, chest_item = chest_contents(sorter_chest_name)
+  if in_chest == nil then
+    self.warn_once("sorter_chest_unreadable",
+      "FeedRouter: Sorter-Kiste " .. tostring(sorter_chest_name)
+        .. " laesst sich nicht auslesen (" .. tostring(chest_item)
+        .. ") -- Leer-Pruefung vor dem Farbwechsel entfaellt")
+  elseif in_chest > 0 then
+    self._state.target_index = idx
+    self._state.last_error = string.format(
+      "Sorter-Kiste nicht leer (%dx %s) -- vorige Lieferung noch unterwegs, %s wartet",
+      in_chest, tostring(chest_item), tostring(target.label))
+    self.warn_once("sorter_chest_busy",
+      "FeedRouter: " .. self._state.last_error
+        .. " (bleibt das so, haengt der Sorter/Transporter oder ein fremdes Item liegt in der Kiste)")
+    return
+  end
+
   local item   = cfg.waste_item or "bigreactors:cyanite_ingot"
-  local amount = tonumber(cfg.feed_amount) or 2
+  local amount = M.normalize_feed_amount(cfg.feed_amount)
 
   -- Verfuegbarkeit in ME pruefen
   local me_info = safe_call(bridge, "getItem", { name = item })
@@ -265,18 +353,20 @@ local function feed_one(self, cfg)
     return
   end
 
-  local ok, result = me_bridge_compat.export_to(bridge, { name = item, count = amount }, sorter_chest_name)
-  local err = nil
-  if not ok then err = result; result = nil end
-  local exported = type(result) == "table" and me_bridge_compat.item_amount(result)
-    or (type(result) == "number" and result or 0)
-  if exported and exported > 0 then
+  local exported, err = export_amount(bridge, item, amount, sorter_chest_name)
+  if exported >= amount then
     self._state.total_feeds = self._state.total_feeds + 1
     self._state.last_feed_ts = os.epoch("utc")
     self._state.last_target = target.label
     self._state.last_error = nil
     self.log("INFO", string.format(
       "FeedRouter: %s fed with %d/%d %s (color=%s)", target.label, exported, amount, item, tostring(target.color)))
+  elseif exported > 0 then
+    self._state.last_target = target.label
+    self._state.last_error = string.format("nur %d von %d %s exportiert (%s)",
+      exported, amount, item, tostring(target.label))
+    self.warn_once("feed_short:" .. tostring(target.label),
+      "FeedRouter: " .. self._state.last_error .. ": " .. tostring(err))
   else
     self._state.last_error = tostring(err or "export failed")
     self.warn_once("feed_fail:" .. tostring(target.label),
@@ -333,6 +423,7 @@ function M:get_summary()
     last_feed_age_s = self._state.last_feed_ts and math.floor((now - self._state.last_feed_ts) / 1000) or nil,
     next_feed_in_s = self._state.next_feed_ts > 0 and math.max(0, math.floor((self._state.next_feed_ts - now) / 1000)) or nil,
     last_error     = self._state.last_error,
+    feed_amount    = M.normalize_feed_amount(cfg.feed_amount),
     target_count   = #(cfg.targets or {}),
     targets        = cfg.targets or {},
     bridge_bound   = self._state.bridge ~= nil,

@@ -1,5 +1,6 @@
 local non_rt_config = require("core.non_rt_config")
 local logistical_sorter = require("adapters.logistical_sorter")
+local feed_router = require("nodes.reprocessor.feed_router")
 
 local M = {}
 
@@ -25,9 +26,20 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(fd.waste_item) ~= "string" then
     fd.waste_item = d.waste_item or "bigreactors:cyanite_ingot"
   end
-  if type(fd.feed_amount) ~= "number" or fd.feed_amount <= 0 then
-    fd.feed_amount = d.feed_amount or 2
+  -- Der Reprocessor braucht immer 2 Cyanit auf einmal: feed_amount ist eine
+  -- ganze, gerade Zahl, mindestens 2 (feed_router.normalize_feed_amount).
+  -- Ein fehlender/kaputter Wert faellt wie bisher auf die Vorgabe zurueck.
+  local raw_amount = fd.feed_amount
+  if type(raw_amount) ~= "number" or raw_amount <= 0 then
+    raw_amount = d.feed_amount or feed_router.MIN_FEED_AMOUNT
   end
+  local amount = feed_router.normalize_feed_amount(raw_amount)
+  if type(fd.feed_amount) == "number" and fd.feed_amount > 0 and amount ~= fd.feed_amount then
+    add_warning(string.format(
+      "feed.feed_amount %s -> %d (Reprocessor braucht immer 2 Cyanit: ganze, gerade Zahl, mindestens 2)",
+      tostring(fd.feed_amount), amount))
+  end
+  fd.feed_amount = amount
   if type(fd.interval_min_s) ~= "number" or fd.interval_min_s <= 0 then
     fd.interval_min_s = d.interval_min_s or 20
   end

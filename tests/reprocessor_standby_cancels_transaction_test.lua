@@ -1,4 +1,4 @@
-package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
+package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
 -- Regression coverage for the REPROCESSOR feed cycle after the Sorter-color
 -- routing rewrite (see nodes/reprocessor/feed_router.lua's module comment):
@@ -14,6 +14,8 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 package.loaded['adapters.logistical_sorter'] = nil
 package.loaded['nodes.reprocessor.feed_router'] = nil
 
+-- Streng wie der echte Mekanism-Sorter (tests/support/fake_mekanism_sorter.lua).
+local real_sorter = require('support.fake_mekanism_sorter').new()
 _G.peripheral = {
   isPresent = function() return true end,
   getMethods = function(name)
@@ -21,11 +23,12 @@ _G.peripheral = {
     return {}
   end,
   getType = function() return 'logisticalSorter' end,
-  call = function(name, method, color)
-    if name == 'sorter_0' and method == 'setDefaultColor' then
-      _G.__last_sorter_color = color
-      return true
+  call = function(name, method, ...)
+    if name == 'sorter_0' then
+      if method == 'setDefaultColor' then _G.__last_sorter_color = ... end
+      return real_sorter.call(method, ...)
     end
+    if method == 'list' then return {} end
     error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
   end,
 }

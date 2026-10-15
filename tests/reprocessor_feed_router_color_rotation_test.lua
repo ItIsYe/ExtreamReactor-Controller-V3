@@ -1,4 +1,4 @@
-package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
+package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
 -- End-to-end coverage for feed_router.lua's tick()-driven feed cycle after
 -- the Sorter-color routing rewrite: rotation across targets, the sorter
@@ -15,6 +15,10 @@ local export_calls = {}
 _G.os = _G.os or {}
 os.epoch = function() return now_ms end
 
+-- Streng wie der echte Mekanism-Sorter (nimmt nur EnumColor-Konstanten);
+-- die Sorter-Kiste ist zwischen zwei Feeds leer (der Sorter hat sie
+-- geleert).
+local real_sorter = require('support.fake_mekanism_sorter').new()
 _G.peripheral = {
   isPresent = function(name) return name == 'sorter_0' or name == 'me_bridge' or name == 'puffer_chest_0' end,
   getMethods = function(name)
@@ -22,11 +26,12 @@ _G.peripheral = {
     return {}
   end,
   getType = function() return 'logisticalSorter' end,
-  call = function(name, method, color)
-    if name == 'sorter_0' and method == 'setDefaultColor' then
-      sorter_calls[#sorter_calls + 1] = color
-      return
+  call = function(name, method, ...)
+    if name == 'sorter_0' then
+      if method == 'setDefaultColor' then sorter_calls[#sorter_calls + 1] = ... end
+      return real_sorter.call(method, ...)
     end
+    if name == 'puffer_chest_0' and method == 'list' then return {} end
     error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
   end,
 }

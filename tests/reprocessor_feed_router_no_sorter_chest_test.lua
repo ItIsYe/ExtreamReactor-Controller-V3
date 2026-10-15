@@ -1,4 +1,4 @@
-package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
+package.path = table.concat({ './tests/?.lua', './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
 -- Regression coverage for feed_router.lua's architecture: the ME-Bridge
 -- exports into the SORTER-KISTE (config.feed.sorter_chest) instead of a
@@ -10,6 +10,8 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 package.loaded['adapters.logistical_sorter'] = nil
 package.loaded['nodes.reprocessor.feed_router'] = nil
 
+-- Streng wie der echte Mekanism-Sorter (tests/support/fake_mekanism_sorter.lua).
+local real_sorter = require('support.fake_mekanism_sorter').new()
 _G.peripheral = {
   isPresent = function(name) return name == 'sorter_0' or name == 'sorter_chest_0' end,
   getMethods = function(name)
@@ -18,7 +20,8 @@ _G.peripheral = {
   end,
   getType = function() return 'logisticalSorter' end,
   call = function(name, method, ...)
-    if name == 'sorter_0' and method == 'setDefaultColor' then return end
+    if name == 'sorter_0' then return real_sorter.call(method, ...) end
+    if name == 'sorter_chest_0' and method == 'list' then return {} end
     error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
   end,
 }

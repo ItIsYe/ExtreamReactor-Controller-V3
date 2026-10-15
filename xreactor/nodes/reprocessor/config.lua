@@ -46,7 +46,7 @@ local CONFIG = {
     -- das Router-UI gewaehlt werden (siehe config_normalizer.lua's Warnung).
     sorter_chest       = nil,
     waste_item         = "bigreactors:cyanite_ingot",
-    feed_amount        = 2,      -- Items pro Befuellung (Minimum zum Arbeiten)
+    feed_amount        = 2,      -- Items pro Befuellung: ganze, gerade Zahl, mindestens 2 (Reprocessor braucht immer 2)
     interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befuellungen
     interval_max_s     = 60,     -- Hoechst-Wartezeit zwischen Befuellungen (zufaellig dazwischen)
     discovery_interval = 60,
