@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-15 | beta | manifest-v827 | HEAD `b2673034`**
+**Stand: 2026-10-15 | beta | manifest-v828 | HEAD `e3886761`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `b2673034` |
-| Fassung | `manifest-v827` / `beta-v827`, Prüfsumme `87207644` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 418 Lua + 45 Python, grün |
+| HEAD | `e3886761` |
+| Fassung | `manifest-v828` / `beta-v828`, Prüfsumme `84df3ddd` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 419 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -900,8 +900,31 @@ Starten einmalig eingestellt werden, also Single Mode off etc."
 Test `tests/reprocessor_sorter_setup_once_test.lua`; 8 Rückbauten, alle
 erkannt.
 
-**Offen:** Der Betreiber hat noch einen weiteren Punkt („ausserdem …"),
-den er nennt, sobald das paarweise Liefern im Spiel läuft.
+Betreiber danach: „klappt jetzt mit 2 Barren".
+
+### Q) Umgesetzt am 2026-10-15 (v828): REPROC-Stufen nach ME-Cyanit
+
+Betreiber: „wenn sehr viel Cyanit da ist, dann soll die Barrenanzahl
+erhöht werden von 2 auf 4, 6, 8, 10 etc. und die Zeit bis zum nächsten
+Push etwas verringert werden" — Zahlen freigegeben („ja passt erstmal").
+
+- Je volle **1000** Cyanit im ME eine Stufe: **+2 Barren** (höchstens
+  **16**), Pause **−10 %** (höchstens **−50 %**). Unter 1000 wie bisher.
+  Immer gerade, nie mehr als im ME; Paar-Regel und Leer-Prüfung der
+  Sorter-Kiste bleiben (Reprocessor kommt nicht nach → REPROC wartet).
+- `feed.boost` (enabled, stock_per_level, max_amount,
+  interval_cut_per_level, max_interval_cut); Vorgaben in
+  `feed_router.BOOST_DEFAULTS` — die REPROC-Config wird beim ersten Start
+  einmal nach `/xreactor_config/reprocessor.lua` kopiert, neue Felder in
+  `config.lua` erreichen bestehende Rechner nie (gilt für jede künftige
+  REPROC-Einstellung!). Normalizer ergänzt den Block, warnt bei
+  ungültigen Werten.
+- Stufe aus dem ME-Bestand, den `feed_one` ohnehin liest; die Pause
+  danach nutzt die Stufe der letzten Lesung. Übersicht: „NÄCHSTER FEED"
+  mit Barren und Stufe; Status-Felder `feed_amount`, `boost_level`,
+  `me_stock`.
+
+Test `tests/reprocessor_feed_boost_test.lua`; 9 Rückbauten, alle erkannt.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
