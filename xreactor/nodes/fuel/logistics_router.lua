@@ -598,11 +598,14 @@ local ORPHAN_DELIVERY_MS = 45000
 --               ihn galt jede neue Sekunde als neuer Grund und floss Zeile fuer
 --               Zeile auf den Bildschirm.
 -- opts.quiet -- Zustand nur fuer die UI festhalten, nicht melden.
+-- opts.stuck -- eine laufende Lieferung haengt (STUCK_DELIVERY_MS); die UI
+--               zeigt sie dann als Missstand statt als "Lieferung aktiv".
 local function note_block(self, code, detail, opts)
   opts = opts or {}
   local s = self._state
   local key = opts.key or (tostring(code) .. "|" .. tostring(detail or ""))
-  s.supply_block = code and { code = code, detail = detail, ts = os.epoch("utc") } or nil
+  s.supply_block = code and { code = code, detail = detail, ts = os.epoch("utc"),
+    stuck = opts.stuck == true or nil } or nil
   if key == s.supply_block_key then return end
   s.supply_block_key = key
   if opts.quiet then return end
@@ -720,7 +723,7 @@ function M:_run_supply(cycle_log)
     note_block(self, "LIEFERUNG_LAEUFT", string.format(
       "%s seit %.0fs in Phase %s%s -- der Router faehrt immer nur EINE Lieferung",
       tostring(req.label), elapsed_ms / 1000, tostring(req.phase), valve_note),
-      { key = key, quiet = not stuck })
+      { key = key, quiet = not stuck, stuck = stuck })
     return 0, 0
   end
   local exported, errors = 0, 0

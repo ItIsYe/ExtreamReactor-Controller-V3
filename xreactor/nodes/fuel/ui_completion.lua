@@ -114,8 +114,20 @@ function M.compute_view_state(model, devices, reserve, minimum)
   -- Warum gerade nichts geliefert wird -- der Grund kommt direkt aus
   -- logistics_router._run_supply(). Ohne ihn stand die Anlage still, ohne
   -- dass irgendwo ablesbar war, worauf sie wartet.
+  --
+  -- Drei Gruende sind kein Missstand (v831): NIEMAND_FORDERT_AN (Leerlauf --
+  -- kein Reaktor braucht gerade Brennstoff) und eine laufende, nicht
+  -- haengende Lieferung (LIEFERUNG_LAEUFT, ROUTER_BESCHAEFTIGT). Bis v830
+  -- standen alle drei hier als "Keine Lieferung" (WARNING): die FUEL-Ampel
+  -- war im Normalbetrieb dadurch fast immer orange, gruen nur kurz nach
+  -- einer Lieferung. Sie laufen jetzt durch die echten Pruefungen unten
+  -- und enden als IDLE (OK) bzw. DELIVERING (LIMITED).
   local block = logistics.supply_block
-  if type(block) == "table" and block.code then
+  local block_code = type(block) == "table" and block.code or nil
+  local delivering_block = (block_code == "LIEFERUNG_LAEUFT" or block_code == "ROUTER_BESCHAEFTIGT")
+    and block.stuck ~= true
+  local idle_block = block_code == "NIEMAND_FORDERT_AN"
+  if block_code and not delivering_block and not idle_block then
     return { code = "SUPPLY_BLOCKED", severity = "WARNING", title = "Keine Lieferung",
       detail = tostring(block.code) .. (block.detail and (": " .. tostring(block.detail)) or ""),
       action = "Grund oben beheben" }
@@ -167,6 +179,14 @@ function M.compute_view_state(model, devices, reserve, minimum)
     local request = logistics.current_request
     local detail = type(request) == "table" and tostring(request.label or request.reactor_id or request.state or "aktiv") or tostring(request)
     return { code = "DELIVERING", severity = "LIMITED", title = "Lieferung aktiv", detail = detail, action = nil }
+  end
+  if delivering_block then
+    return { code = "DELIVERING", severity = "LIMITED", title = "Lieferung aktiv",
+      detail = tostring(block.detail or block_code), action = nil }
+  end
+  if idle_block then
+    return { code = "IDLE", severity = "OK", title = "Bereit",
+      detail = tostring(block.detail or "kein Reaktor braucht gerade Brennstoff"), action = nil }
   end
   return { code = "READY", severity = "OK", title = "Bereit", detail = "Alle konfigurierten Reaktoren sind betriebsbereit", action = nil }
 end

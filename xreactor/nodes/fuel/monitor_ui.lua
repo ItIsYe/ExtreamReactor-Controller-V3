@@ -67,6 +67,8 @@ local VIEW_STATE_TO_AMPEL = {
   NO_FRESH_RT_DATA = "WARNING", DATA_STALE = "WARNING", DATA_MISSING = "WARNING",
   LOGISTICS_DISABLED = "muted", NO_ME_BRIDGE = "WARNING", LOGISTICS_BLOCKED = "WARNING",
   RESERVE_LOW = "WARNING", DELIVERING = "LIMITED", READY = "OK", LOADING = "LIMITED",
+  -- v831: Leerlauf ist gruen; ein echter Lieferstopp bleibt orange.
+  IDLE = "OK", SUPPLY_BLOCKED = "WARNING",
 }
 local function fuel_ampel_status(view_state, logistics)
   for _, r in ipairs((logistics or {}).reactors or {}) do
