@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-15 | beta | manifest-v828 | HEAD `e3886761`**
+**Stand: 2026-10-15 | beta | manifest-v829 | HEAD `bf136630`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `e3886761` |
-| Fassung | `manifest-v828` / `beta-v828`, Prüfsumme `84df3ddd` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 419 Lua + 45 Python, grün |
+| HEAD | `bf136630` |
+| Fassung | `manifest-v829` / `beta-v829`, Prüfsumme `716d6aa8` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 420 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -925,6 +925,40 @@ Push etwas verringert werden" — Zahlen freigegeben („ja passt erstmal").
   `me_stock`.
 
 Test `tests/reprocessor_feed_boost_test.lua`; 9 Rückbauten, alle erkannt.
+
+### R) Umgesetzt am 2026-10-15 (v829): Ampeln selbstheilend, 1x1
+
+Betreiber: „es scheint so als würden alle Ampeln nicht mehr
+funktionieren … alle Nodes sind betroffen, und mache die Ampel auch für
+1x1 Monitor kompatibel".
+
+Befund: `optional/ampel.lua` (RT, ENERGY, FUEL), `optional/master_ampel.lua`
+und der VALVE-Statusmonitor malten nur bei Farbwechsel. Monitor ohne
+Inhalt (Chunk neu geladen, Skala von anderer Stelle umgestellt — am
+MASTER z. B. `core/monitor_manager.lua`'s Auto-Skala —, neu gebaut) →
+Ampel bei ruhiger Anlage dauerhaft schwarz/teilweise gefärbt. Eine
+konkrete Code-Änderung, die alle Ampeln auf einmal abgeschaltet hätte,
+wurde nicht gefunden (Ampel-Module seit 2026-09 unverändert, Installation
+der Feature-Datei geprüft: kommt mit, wenn bei der Installation gewählt).
+
+- `optional/ampel.lua` neu: Neu-Malen spätestens alle 10 s
+  (`M.REPAINT_S`), verlorene Ampel sofort neu gesucht, sobald ihr Name
+  wieder da ist (`lost_name`), Terminalzeilen „[AMPEL] Ampel gefunden:
+  <name> (1x1|1x3)" / „… weg".
+- `optional/master_ampel.lua`: dieselbe Selbstheilung; `determine_color`
+  unverändert.
+- VALVE `render_status_monitor`: Neu-Malen spätestens alle 10 s.
+- `adapters/monitor.lua`: `is_ampel_shape(w, h)` — 1x1 (7x5) und 1x3
+  (7x17–21) bei Skala 1; beide nie Hauptmonitor, auch nicht an einer
+  Rechnerseite.
+
+**Offen (nur Hinweis an den Betreiber):** Das Manifest bietet die Ampel
+auch WATER, REPROCESSING und LOG an, gemalt wird sie aber nur von RT,
+ENERGY und FUEL (plus MASTER-Ampel, VALVE-Statusmonitor). Für die anderen
+Rollen fehlt eine Statusregel — nur auf Freigabe.
+
+Test `tests/ampel_selfheal_1x1_test.lua` (echte CC:Tweaked-Geometrie);
+10 Rückbauten, alle erkannt.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
