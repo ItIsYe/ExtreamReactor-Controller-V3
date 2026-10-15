@@ -59,6 +59,7 @@ function M.new(opts)
     sorter_resolved_name = nil,
     status_monitor = nil,
     status_monitor_last_color = nil,
+    status_monitor_painted_ts = nil,
     seen_commands = {},
     seen_order = {},
     pairing_persisted = opts.config.trusted_source ~= nil,
@@ -210,19 +211,33 @@ function M:_get_status_monitor()
   return self.status_monitor
 end
 
+-- Spaetestens so oft wird der Statusmonitor neu gemalt, auch ohne
+-- Farbwechsel (v829, wie optional/ampel.lua): verliert der Monitor seinen
+-- Inhalt (Chunk neu geladen, Skala umgestellt), bliebe er sonst schwarz,
+-- bis das Ventil das naechste Mal schaltet.
+M.STATUS_MONITOR_REPAINT_MS = 10000
+
 function M:render_status_monitor()
   local mon = self:_get_status_monitor()
   if not mon then return end
   local color
   if not self.initialized or self.last_write_error then color = self.colors.orange
   else color = self.current_high and self.colors.red or self.colors.green end
-  if self.status_monitor_last_color == color then return end
+  local now = now_ms(self.os)
+  if self.status_monitor_last_color == color and self.status_monitor_painted_ts
+      and now - self.status_monitor_painted_ts < M.STATUS_MONITOR_REPAINT_MS then
+    return
+  end
   local ok = pcall(function()
     mon.setBackgroundColor(color)
     mon.clear()
   end)
-  if ok then self.status_monitor_last_color = color
-  else self.status_monitor = nil; self.status_monitor_last_color = nil end
+  if ok then
+    self.status_monitor_last_color = color
+    self.status_monitor_painted_ts = now
+  else
+    self.status_monitor = nil; self.status_monitor_last_color = nil; self.status_monitor_painted_ts = nil
+  end
 end
 
 -- Menschenlesbare Kennung des aktuell aktiven Aktors, fuer Logs/get_state():

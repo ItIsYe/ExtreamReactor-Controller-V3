@@ -114,9 +114,18 @@ local function clear_name_cache(name)
   known_monitor_names[cache_name] = nil
 end
 
--- Lehnt 1x3-Ampel-Monitore als Hauptmonitor ab: mehr als 3 Zeilen ODER
--- mehr als 1 Spalte qualifiziert; ein reiner 1x3 (oder kleiner) wird
--- abgelehnt, auch wenn preferred_name darauf zeigt.
+-- Ampel-Form bei Skala 1 (optional/ampel.lua, optional/master_ampel.lua
+-- nutzen dieselbe Regel): 1 Block breit und 1 oder 3 Bloecke hoch.
+-- Geometrie (CC:Tweaked): ein Block = 7x5 Zeichen, breite(N) = 11*N-4,
+-- hoehe(M) = 7*M-2 -- also 1x1 = 7x5, 1x3 = 7x19 (Hoehe 17-21 als
+-- Toleranz fuer Bauabweichungen). 1x1 seit v829.
+function monitor.is_ampel_shape(w, h)
+  return w == 7 and (h == 5 or (h >= 17 and h <= 21))
+end
+
+-- Lehnt Ampel-Monitore (1x1, 1x3) als Hauptmonitor ab, auch wenn
+-- preferred_name darauf zeigt -- sonst landete die Oberflaeche auf der
+-- Ampel, und die Ampel selbst schliesst den Hauptmonitor aus.
 local function is_too_small_for_main(mon, name)
   local cache_name = tostring(name or "")
   if cache_name ~= "" and shape_cache_by_name[cache_name] ~= nil then
@@ -133,10 +142,7 @@ local function is_too_small_for_main(mon, name)
     pcall(function() mon.setTextScale(orig_scale) end)
   end
   if not ok or type(w) ~= "number" or type(h) ~= "number" then return false end
-  -- Verifizierte Formel (siehe optional/ampel.lua): 1 Block breit x 3
-  -- Bloecke hoch bei Skala 1 = exakt 7x19 Zeichen. Kleine Toleranz fuer
-  -- Hoehe (17-21), falls die tatsaechliche Bauhoehe leicht abweicht.
-  local too_small = w == 7 and h >= 17 and h <= 21
+  local too_small = monitor.is_ampel_shape(w, h)
   if cache_name ~= "" then
     shape_cache_by_name[cache_name] = too_small
     known_monitor_names[cache_name] = true
@@ -175,7 +181,7 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
     end
     if mon and too_small then
       log_once(log_prefix, "preferred_too_small:" .. tostring(preferred_name),
-        "Configured monitor " .. tostring(preferred_name) .. " is 1x3 (Ampel-sized) - refusing to use it as the main monitor, searching for another one")
+        "Configured monitor " .. tostring(preferred_name) .. " is Ampel-sized (1x1/1x3) - refusing to use it as the main monitor, searching for another one")
     end
   end
   local candidates = {}

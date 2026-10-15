@@ -1,8 +1,8 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 828,
-  manifest_id = "manifest-v828",
-  payload_digest = "84df3ddd",
+  manifest_version = 829,
+  manifest_id = "manifest-v829",
+  payload_digest = "716d6aa8",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,12 +16,12 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 376, hash = "aacee2b1", always = true },
+  { path = "release.lua", size_bytes = 376, hash = "728c3c23", always = true },
   { path = "start.lua", size_bytes = 12950, hash = "5deb95f8", always = true },
   { path = "shared/build_info.lua", size_bytes = 2897, hash = "440a6f12", always = true },
   { path = "shared/constants.lua", size_bytes = 3761, hash = "50d0b5d1", always = true },
   { path = "core/mockup_ui.lua", size_bytes = 11064, hash = "3a43c96d", always = true },
-  { path = "adapters/monitor.lua", size_bytes = 9549, hash = "039662f0", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
+  { path = "adapters/monitor.lua", size_bytes = 9770, hash = "ceb9fd50", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "52ca674c", always = true },
   { path = "core/update_handshake.lua", size_bytes = 4701, hash = "94353b43", always = true },
   { path = "core/sleep_guard.lua", size_bytes = 2174, hash = "655f7f67", always = true },
@@ -105,7 +105,7 @@ return {
     -- VALVE bewusst nicht in required_for: hat einen eigenen, fest
     -- eingebauten 1x1-Statusmonitor in nodes/valve/main.lua
     -- (render_status_monitor()), unabhaengig von diesem 1x3-Ampel-Modul.
-    { path = "optional/ampel.lua", size_bytes = 5997, hash = "57133720", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
+    { path = "optional/ampel.lua", size_bytes = 7621, hash = "6b61e427", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     -- required_for entspricht den tatsaechlichen
     -- require("optional.speaker_alarm")-Aufrufstellen (alle Node-main.lua
     -- ausser VALVE, plus services/alert_service.lua/MASTER); anders als
@@ -119,7 +119,7 @@ return {
     -- irgendeiner Rolle auftaucht; trotzdem im Manifest gefuehrt, damit
     -- Groesse/Hash bei gezieltem manuellem Download verifizierbar sind.
     { path = "optional/pocket_client.lua", size_bytes = 10477, hash = "bf1a75b4", optional=true, feature="pocket_client", required_for={} },
-    { path = "optional/master_ampel.lua", size_bytes = 7905, hash = "84d786cc", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 9872, hash = "ed84b487", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 52790, hash = "d257586f", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
@@ -214,7 +214,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 2788, hash = "a7168614", required_for={"VALVE"} },
-    { path = "nodes/valve/controller.lua", size_bytes = 18574, hash = "d0f704cb", required_for={"VALVE"} },
+    { path = "nodes/valve/controller.lua", size_bytes = 19146, hash = "bb554593", required_for={"VALVE"} },
     { path = "nodes/valve/hop_reporter.lua", size_bytes = 3527, hash = "bbf33dad", required_for={"VALVE"} },
     { path = "nodes/valve/local_ui.lua", size_bytes = 18638, hash = "8bafe164", required_for={"VALVE"} },
     { path = "nodes/valve/main.lua", size_bytes = 17448, hash = "bff6adb1", required_for={"VALVE"} },

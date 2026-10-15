@@ -22,9 +22,15 @@
 --   5. GRUEN  — alles normal
 --
 -- Nutzt dieselbe Monitor-Erkennung/-Rendering-Basis wie optional/ampel.lua
--- (1x3, auto-detected, pcall-isoliert), aber als eigenstaendiges Modul, da
--- die Statuslogik hier komplett anders ist (Gesamtanlage statt Einzelnode)
--- und am MASTER laeuft statt an einzelnen Nodes.
+-- (1x1 oder 1x3, auto-detected, pcall-isoliert), aber als eigenstaendiges
+-- Modul, da die Statuslogik hier komplett anders ist (Gesamtanlage statt
+-- Einzelnode) und am MASTER laeuft statt an einzelnen Nodes.
+--
+-- Selbstheilung (v829, wie optional/ampel.lua): spaetestens alle REPAINT_S
+-- Sekunden neu malen -- bis v828 nur bei Farbwechsel, ein Monitor ohne
+-- Inhalt (Chunk neu geladen, Skala von anderer Stelle umgestellt -- z.B.
+-- core/monitor_manager.lua's Auto-Skala) blieb sonst schwarz. Eine
+-- verschwundene Ampel wird sofort neu gesucht.
 
 local M = {}
 
@@ -38,7 +44,26 @@ local COLORS = {
   gray   = colors.gray,
 }
 
-local cache = { name = nil, last_color = nil, resolved = false, ampel_name = nil, next_probe = 0 }
+M.REPAINT_S = 10
+M.PROBE_S = 60
+
+-- Ampel-Form bei Skala 1: dieselbe Regel wie adapters/monitor.lua
+-- (1x1 = 7x5, 1x3 = 7x17-21).
+local function local_is_ampel_shape(w, h)
+  return w == 7 and (h == 5 or (h >= 17 and h <= 21))
+end
+local ok_adapter, monitor_adapter = pcall(require, "adapters.monitor")
+local is_ampel_shape = (ok_adapter and type(monitor_adapter) == "table"
+  and type(monitor_adapter.is_ampel_shape) == "function") and monitor_adapter.is_ampel_shape
+  or local_is_ampel_shape
+
+local function now_s()
+  return (os.clock and os.clock()) or 0
+end
+
+-- lost_name: zuletzt verlorene Ampel -- taucht sie wieder auf, wird sofort
+-- gesucht statt erst nach PROBE_S.
+local cache = { ampel_name = nil, painted_color = nil, painted_at = nil, next_probe = 0, lost_name = nil }
 
 -- Fix: anders als optional/ampel.lua (ein Node, EIN bekannter Hauptmonitor,
 -- per Name ausgeschlossen) hatte diese MASTER-Variante gar keinen
@@ -67,20 +92,16 @@ local function find_ampel_monitor(known_names)
         local ok_w, mon = pcall(peripheral.wrap, name)
         if ok_w and mon then
           local ok_orig, orig_scale = pcall(mon.getTextScale)
-          -- Geometrie bei Skala 1: einzelner Block = 7x5 Zeichen, 3x3-Cluster =
-          -- 29x19 -- daraus breite(N)=11N-4, hoehe(M)=7M-2. Fuer 1 breit x 3
-          -- hoch: w=7 (exakt), h=19 (Toleranz 17-21 fuer Bauabweichungen).
           local ok_scale = pcall(mon.setTextScale, 1)
           local ok_s, w, h = pcall(mon.getSize)
-          local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"
-            and w == 7 and h >= 17 and h <= 21
-          if is_ampel_shape then
+          if ok_scale and ok_s and type(w) == "number" and type(h) == "number" and is_ampel_shape(w, h) then
             seen_non_match[name] = nil
+            pcall(print, "[MASTER_AMPEL] Ampel gefunden: " .. tostring(name) .. " (" .. (h == 5 and "1x1" or "1x3") .. ")")
             return name, mon
           end
           if ok_s and type(w) == "number" and not seen_non_match[name] then
             seen_non_match[name] = true
-            pcall(print, "[MASTER_AMPEL] Kandidat " .. tostring(name) .. " bei Skala 1: w=" .. tostring(w) .. " h=" .. tostring(h) .. " (erwartet 7x17-21, kein Treffer)")
+            pcall(print, "[MASTER_AMPEL] Kandidat " .. tostring(name) .. " bei Skala 1: w=" .. tostring(w) .. " h=" .. tostring(h) .. " (erwartet 7x5 fuer 1x1 oder 7x17-21 fuer 1x3, kein Treffer)")
           end
           if ok_scale and ok_orig and type(orig_scale) == "number" then
             pcall(mon.setTextScale, orig_scale)
@@ -133,46 +154,80 @@ function M.determine_color(runtime, constants)
   return "green"
 end
 
+-- Ampel vergessen; retry_now: sofort neu suchen (abgezogen/umgebaut),
+-- sonst erst nach PROBE_S (Malen scheiterte -- nicht jeden Tick neu
+-- sondieren).
+local function forget(reason, retry_now)
+  if cache.ampel_name then
+    pcall(print, "[MASTER_AMPEL] Ampel " .. tostring(cache.ampel_name) .. " weg (" .. tostring(reason) .. ") -- suche neu")
+  end
+  cache.lost_name = cache.ampel_name or cache.lost_name
+  cache.ampel_name = nil
+  cache.painted_color = nil
+  cache.painted_at = nil
+  cache.next_probe = retry_now and 0 or (now_s() + M.PROBE_S)
+end
+
+-- Alle bereits als MASTER-Monitor gebundenen Peripherals (die 3 primaeren
+-- Displays plus jeder AUX-Monitor, siehe master/monitor_sessions.lua) --
+-- keiner von ihnen kann jemals die Ampel sein.
+local function known_monitor_names(runtime)
+  local known_names = {}
+  local sessions = runtime.refs and runtime.refs.view_manager and runtime.refs.view_manager.sessions
+  if sessions and sessions.get_sessions then
+    local ok_sessions, list = pcall(sessions.get_sessions, sessions)
+    if ok_sessions and type(list) == "table" then
+      for _, session in ipairs(list) do
+        if session and session.name then known_names[session.name] = true end
+      end
+    end
+  end
+  return known_names
+end
+
 -- update(runtime, constants): einmaliger Aufruf pro Tick vom Aufrufer
 -- (master/loop.lua), komplett fehlerisoliert.
 function M.update(runtime, constants)
   pcall(function()
-    local name, mon
-    if cache.resolved and cache.ampel_name then
-      local ok_w, cached_mon = pcall(peripheral.wrap, cache.ampel_name)
-      if ok_w and cached_mon then name, mon = cache.ampel_name, cached_mon end
-    end
-    if not name then
-      local now = (os.clock and os.clock()) or 0
-      if not cache.resolved or now >= cache.next_probe then
-        -- Alle bereits als MASTER-Monitor gebundenen Peripherals (die 3
-        -- primaeren Displays plus jeder AUX-Monitor, siehe
-        -- master/monitor_sessions.lua) vom Ampel-Scan ausschliessen --
-        -- keiner von ihnen kann jemals die Ampel sein.
-        local known_names = {}
-        local sessions = runtime.refs and runtime.refs.view_manager and runtime.refs.view_manager.sessions
-        if sessions and sessions.get_sessions then
-          local ok_sessions, list = pcall(sessions.get_sessions, sessions)
-          if ok_sessions and type(list) == "table" then
-            for _, session in ipairs(list) do
-              if session and session.name then known_names[session.name] = true end
-            end
-          end
-        end
-        name, mon = find_ampel_monitor(known_names)
-        cache.resolved = true
-        cache.ampel_name = name
-        cache.next_probe = now + 60
+    local now = now_s()
+    local mon
+    if cache.ampel_name then
+      if not peripheral.isPresent or peripheral.isPresent(cache.ampel_name) then
+        local ok_w, wrapped = pcall(peripheral.wrap, cache.ampel_name)
+        if ok_w and wrapped then mon = wrapped else forget("nicht mehr erreichbar", true) end
+      else
+        forget("nicht mehr angeschlossen", true)
       end
     end
-    if not name or not mon then return end
+    if not cache.ampel_name and cache.lost_name and peripheral.isPresent
+        and peripheral.isPresent(cache.lost_name) then
+      cache.next_probe = 0 -- die verlorene Ampel ist wieder angeschlossen
+      cache.lost_name = nil
+    end
+    if not cache.ampel_name and now >= cache.next_probe then
+      local name, found = find_ampel_monitor(known_monitor_names(runtime))
+      cache.next_probe = now + M.PROBE_S
+      if name and found then
+        cache.ampel_name = name
+        mon = found
+      end
+    end
+    if not mon then return end
     local color_key = M.determine_color(runtime, constants)
     local color = COLORS[color_key] or COLORS.gray
-    if cache.name == name and cache.last_color == color then return end
-    cache.name = name
-    cache.last_color = color
-    mon.setBackgroundColor(color)
-    mon.clear()
+    local due = cache.painted_color ~= color or cache.painted_at == nil
+      or now - cache.painted_at >= M.REPAINT_S
+    if not due then return end
+    local ok_paint = pcall(function()
+      mon.setBackgroundColor(color)
+      mon.clear()
+    end)
+    if ok_paint then
+      cache.painted_color = color
+      cache.painted_at = now
+    else
+      forget("Malen gescheitert", false)
+    end
   end)
 end
 
