@@ -215,6 +215,8 @@ local function build_requirements(feed_summary)
     me_bridge_name = feed_summary.bridge_name,
     sorter         = feed_summary.sorter_bound == true,
     sorter_name    = feed_summary.sorter_name,
+    sorter_setup_ok    = feed_summary.sorter_setup_ok,
+    sorter_setup_error = feed_summary.sorter_setup_error,
     sorter_chest_name    = sorter_chest_name,
     sorter_chest_present = sorter_chest_present,
   }

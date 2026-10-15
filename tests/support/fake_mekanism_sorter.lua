@@ -8,6 +8,8 @@
 --                           Fehler; braucht Sicherheit "Oeffentlich".
 --   clearDefaultColor()     keine Farbe; braucht Sicherheit "Oeffentlich".
 --   getDefaultColor()       Konstantenname oder nil (keine Farbe).
+--   setSingle(b)/setAutoMode(b)  brauchen Sicherheit "Oeffentlich".
+--   isSingle()/getAutoMode()     nicht sicherheitsgebunden.
 --
 -- Bis v825 nahmen die Attrappen der REPROC-Tests JEDEN Farbnamen an -- so
 -- blieb unbemerkt, dass der echte Sorter BLUE, GREEN, CYAN, LIGHT_GRAY,
@@ -33,12 +35,16 @@ end
 -- opts.public = false  -> Sicherheit nicht oeffentlich (setzen scheitert)
 -- opts.ignore_set = true -> nimmt den Aufruf an, aendert aber nichts
 --                           (fuer die Rueckleseprobe)
+-- opts.single / opts.auto -> Ausgangszustand "Single Item" / "Auto"
+--                           (Mekanism-Vorgabe: beide aus)
 function M.new(opts)
   opts = opts or {}
   local self = {
     color = opts.color,  -- Konstantenname oder nil
     public = opts.public ~= false,
     ignore_set = opts.ignore_set == true,
+    single = opts.single == true,
+    auto = opts.auto == true,
     calls = {},
   }
 
@@ -65,6 +71,19 @@ function M.new(opts)
       return
     elseif method == "getDefaultColor" then
       return self.color
+    elseif method == "setSingle" or method == "setAutoMode" then
+      require_public()
+      if type(args[1]) ~= "boolean" then
+        error("bad argument #1 (expected boolean)", 0)
+      end
+      if not self.ignore_set then
+        if method == "setSingle" then self.single = args[1] else self.auto = args[1] end
+      end
+      return
+    elseif method == "isSingle" then
+      return self.single
+    elseif method == "getAutoMode" then
+      return self.auto
     end
     error("unexpected sorter call: " .. tostring(method), 0)
   end

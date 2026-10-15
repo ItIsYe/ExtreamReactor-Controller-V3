@@ -98,6 +98,13 @@ function M.new(opts)
       total_feeds     = 0,
       last_feed_ts    = nil,
       last_error      = nil,
+      -- Einmalige Sorter-Einstellung (ensure_sorter_setup): fuer welchen
+      -- Sorter sie gelungen ist, ob der letzte Versuch klappte, wann er war.
+      sorter_setup_done_for = nil,
+      sorter_setup_for      = nil,
+      sorter_setup_ok       = nil,
+      sorter_setup_error    = nil,
+      sorter_setup_ts       = 0,
     },
   }
   return setmetatable(self, { __index = M })
@@ -381,6 +388,44 @@ end
 function M:cancel(_reason)
 end
 
+-- Stellt den gebundenen Sorter EINMAL ein (Betreiber 2026-10-15: "der
+-- Sorter soll nur beim Starten einmalig eingestellt werden"): Single Item
+-- aus, Auto an -- siehe prepare_for_feeding() in adapters/
+-- logistical_sorter.lua. Erst wenn FEEDING an ist (ein Sorter im Auto-
+-- Modus zieht sofort, was in der Kiste liegt). Gelungen ist gelungen: fuer
+-- diesen Sorter nie wieder in diesem Lauf, auch wenn jemand im Spiel
+-- umstellt. Misslingt es (Sicherheit nicht "Oeffentlich", Sorter noch nicht
+-- geladen), wird hoechstens einmal je Erkennungsintervall neu versucht,
+-- bis es einmal klappt; befuellt wird trotzdem -- die Leer-Pruefung der
+-- Sorter-Kiste haelt beide Barren auch im Einzel-Modus beim selben Ziel.
+local function ensure_sorter_setup(self, cfg, now)
+  local sorter = self._state.sorter
+  if not sorter or type(sorter.prepare_for_feeding) ~= "function" then return end
+  local sorter_name = self._state.sorter_name
+  if self._state.sorter_setup_done_for == sorter_name then return end
+  local retry_ms = (tonumber(cfg.discovery_interval) or 60) * 1000
+  if self._state.sorter_setup_ok == false and self._state.sorter_setup_for == sorter_name
+      and now - self._state.sorter_setup_ts < retry_ms then
+    return
+  end
+  self._state.sorter_setup_ts = now
+  self._state.sorter_setup_for = sorter_name
+  local ok, err = sorter.prepare_for_feeding()
+  if ok then
+    self._state.sorter_setup_done_for = sorter_name
+    self._state.sorter_setup_ok = true
+    self._state.sorter_setup_error = nil
+    self.log("INFO", "FeedRouter: Sorter " .. tostring(sorter_name)
+      .. " eingestellt (Single Item aus, Auto an)")
+  else
+    self._state.sorter_setup_ok = false
+    self._state.sorter_setup_error = tostring(err)
+    self.warn_once("sorter_setup_fail:" .. tostring(sorter_name),
+      "FeedRouter: Sorter " .. tostring(sorter_name) .. " liess sich nicht einstellen ("
+        .. tostring(err) .. ") -- Sicherheit auf Oeffentlich? Neuer Versuch je Erkennungsintervall")
+  end
+end
+
 function M:tick()
   local cfg = self.config.feed or self.config or {}
   local now = os.epoch("utc")
@@ -395,6 +440,8 @@ function M:tick()
   end
 
   if cfg.enabled ~= true then return end
+
+  ensure_sorter_setup(self, cfg, now)
 
   -- Zufaelliges Intervall: beim ersten Tick sofort einen Timer setzen
   if self._state.next_feed_ts == 0 then
@@ -430,6 +477,9 @@ function M:get_summary()
     bridge_name    = self._state.bridge_name,
     sorter_bound   = self._state.sorter ~= nil,
     sorter_name    = self._state.sorter_name,
+    -- nil: noch nicht versucht (FEEDING aus / kein Sorter)
+    sorter_setup_ok    = self._state.sorter_setup_ok,
+    sorter_setup_error = self._state.sorter_setup_error,
   }
 end
 

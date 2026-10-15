@@ -168,6 +168,12 @@ function M.new(opts)
     end
     add("ME-BRIDGE", req.me_bridge, req.me_bridge_name)
     add("SORTER", req.sorter, req.sorter_name)
+    -- Einmalige Einstellung (Single Item aus, Auto an); nil = noch nicht
+    -- versucht (FEEDING aus).
+    if req.sorter_setup_ok ~= nil then
+      add("SORTER-EINSTELLUNG", req.sorter_setup_ok,
+        req.sorter_setup_ok and "Single aus, Auto an" or req.sorter_setup_error)
+    end
     add("SORTER-KISTE", req.sorter_chest_present, req.sorter_chest_name)
     add("WIRELESS-MODEM", req.wireless_modem)
     rows[#rows + 1] = { text = "MONITOR: " .. (req.monitor_is_term and "TERMINAL (Fallback)" or (req.monitor and "OK" or "FEHLT")),

@@ -234,6 +234,38 @@ function sorter.detect(name, log_prefix)
       end
       return true
     end,
+    -- Einmalig vor dem Befuellen (v827, nodes/reprocessor/feed_router.lua):
+    --   Single Item AUS -- sonst holt der Sorter alle 0,5 s genau EIN Item
+    --     aus der Kiste und die Barren gehen einzeln raus;
+    --   Auto AN -- nur im Auto-Modus schickt Mekanism Items ohne passenden
+    --     Filter mit der Standardfarbe los (TileEntityLogisticalSorter:
+    --     "if (!sentItems && autoEject)").
+    -- Beides braucht Sicherheit "Oeffentlich". Rueckleseprobe ueber
+    -- isSingle()/getAutoMode() (nicht sicherheitsgebunden).
+    prepare_for_feeding = function()
+      if not peripheral.isPresent(name) then
+        return false, "peripheral missing"
+      end
+      local ok_single, single_err = pcall(peripheral.call, name, "setSingle", false)
+      if not ok_single then
+        return false, "setSingle:" .. tostring(single_err)
+      end
+      local ok_auto, auto_err = pcall(peripheral.call, name, "setAutoMode", true)
+      if not ok_auto then
+        return false, "setAutoMode:" .. tostring(auto_err)
+      end
+      local ok_read_single, single = pcall(peripheral.call, name, "isSingle")
+      local ok_read_auto, auto = pcall(peripheral.call, name, "getAutoMode")
+      if not ok_read_single or not ok_read_auto then
+        return false, "settings_readback_failed:"
+          .. tostring(not ok_read_single and single or auto)
+      end
+      if single ~= false or auto ~= true then
+        return false, string.format("settings_not_applied: Single Item=%s, Auto=%s",
+          tostring(single), tostring(auto))
+      end
+      return true
+    end,
     -- Liefert den Namen im Spiel (COLORS), "NONE" ohne Farbe.
     getDefaultColor = function()
       if not peripheral.isPresent(name) then
