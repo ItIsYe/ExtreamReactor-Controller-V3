@@ -410,6 +410,24 @@ local function init()
     render = render_monitor,
     handle_input = function(event) handle_monitor_touch(event) end
   }))
+  -- Optionale Ampel (optional/ampel.lua, Zusatzmodul -- nicht installiert:
+  -- nichts zu tun). Eigener Takt wie bei FUEL, laeuft auch ohne
+  -- Hauptmonitor; Farbe nach feed_router.ampel_status().
+  local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
+  local ampel = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function"
+    and ampel_mod.new() or nil
+  if ampel then
+    local ampel_tick_acc = 0
+    services:add({ name = "ampel_render", tick = function(_self, dt)
+      ampel_tick_acc = ampel_tick_acc + (tonumber(dt) or 0.5)
+      if ampel_tick_acc < 1 then return end
+      ampel_tick_acc = 0
+      pcall(function()
+        local router = get_feed_router()
+        ampel.render(devices.monitor_name, router.ampel_status(router:get_summary()))
+      end)
+    end })
+  end
   services:init()
   slow_services:init()
   hello()

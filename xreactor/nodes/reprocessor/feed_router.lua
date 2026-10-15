@@ -567,6 +567,40 @@ end
 
 -- ---- status / introspection -------------------------------------------------
 
+local function chest_present(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local ok, present = pcall(peripheral.isPresent, name)
+  return ok and present == true
+end
+
+-- Farbe fuer die optionale Ampel (optional/ampel.lua), Regeln vom
+-- Betreiber freigegeben (2026-10-15) -- die erste zutreffende gilt:
+--   grau   (muted)     FEEDING aus
+--   rot    (EMERGENCY) FEEDING an, aber es kann nicht geliefert werden:
+--                      ME-Bridge, Sorter oder Sorter-Kiste fehlt, oder der
+--                      Sorter nimmt Farbe/Einstellung nicht an
+--   orange (WARNING)   letzte Lieferung mit Fehler (z.B. "nur 1 von 2"),
+--                      oder kein Ziel angelegt
+--   gelb   (LIMITED)   wartet: Sorter-Kiste noch belegt, oder zu wenig
+--                      Cyanit im ME
+--   gruen  (OK)        laeuft
+function M.ampel_status(summary)
+  local s = type(summary) == "table" and summary or {}
+  if s.enabled ~= true then return "muted" end
+  local err = s.last_error ~= nil and tostring(s.last_error) or nil
+  if not s.bridge_bound or not s.sorter_bound or s.sorter_chest_present ~= true
+      or s.sorter_setup_ok == false
+      or (err and err:find("sorter_color_failed", 1, true) == 1) then
+    return "EMERGENCY"
+  end
+  local waiting = err and err:find("Sorter-Kiste nicht leer", 1, true) == 1
+  if (tonumber(s.target_count) or 0) == 0 or (err and not waiting) then return "WARNING" end
+  if waiting then return "LIMITED" end
+  local stock, amount = tonumber(s.me_stock), tonumber(s.feed_amount)
+  if stock and amount and stock < amount then return "LIMITED" end
+  return "OK"
+end
+
 function M:get_summary()
   local cfg = self.config.feed or {}
   local now = os.epoch("utc")
@@ -588,6 +622,7 @@ function M:get_summary()
     bridge_name    = self._state.bridge_name,
     sorter_bound   = self._state.sorter ~= nil,
     sorter_name    = self._state.sorter_name,
+    sorter_chest_present = chest_present(cfg.sorter_chest),
     -- nil: noch nicht versucht (FEEDING aus / kein Sorter)
     sorter_setup_ok    = self._state.sorter_setup_ok,
     sorter_setup_error = self._state.sorter_setup_error,

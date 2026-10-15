@@ -1206,6 +1206,17 @@ local function draw()
 end
 
 -- ── Display selection ───────────────────────────────────────────────────────
+-- Ampel-Form bei Skala 1 (1x1 = 7x5, 1x3 = 7x17-21) -- dieselbe Regel wie
+-- adapters/monitor.lua, das auf dem LOG-Collector nicht installiert ist.
+-- Eine Ampel (optional/ampel.lua) darf nie zur Log-Anzeige werden.
+local function is_ampel_monitor(monitor)
+  local ok_orig, orig = pcall(monitor.getTextScale)
+  local ok_scale = pcall(monitor.setTextScale, 1)
+  local ok_size, w, h = pcall(monitor.getSize)
+  if ok_scale and ok_orig and type(orig) == "number" then pcall(monitor.setTextScale, orig) end
+  return ok_size and w == 7 and (h == 5 or (type(h) == "number" and h >= 17 and h <= 21))
+end
+
 local function find_display()
   local configured = trim(safe_read(MONITOR_CFG_FILE) or "")
   if configured ~= "" and peripheral and peripheral.wrap then
@@ -1221,13 +1232,33 @@ local function find_display()
         local ok_type, ptype = pcall(peripheral.getType, name)
         if ok_type and tostring(ptype or ""):lower():find("monitor", 1, true) then
           local ok_wrap, monitor = pcall(peripheral.wrap, name)
-          if ok_wrap and monitor then return name, monitor end
+          if ok_wrap and monitor and not is_ampel_monitor(monitor) then return name, monitor end
         end
       end
     end
   end
 
   return "term", term
+end
+
+-- ── Optionale Ampel ─────────────────────────────────────────────────────────
+-- optional/ampel.lua ist ein Zusatzmodul: ist es nicht installiert, passiert
+-- hier nichts. Farbe nach nodes/log_collector/ampel_status.lua.
+local ampel_instance = nil
+do
+  local ok_mod, ampel_mod = pcall(require, "optional.ampel")
+  if ok_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" then
+    local ok_new, instance = pcall(ampel_mod.new)
+    if ok_new then ampel_instance = instance end
+  end
+end
+local ok_ampel_status, ampel_status = pcall(require, "nodes.log_collector.ampel_status")
+
+local function render_ampel()
+  if not ampel_instance or not ok_ampel_status then return end
+  pcall(function()
+    ampel_instance.render(stats.display_name, ampel_status.status(stats))
+  end)
 end
 
 -- ── Packet handling ─────────────────────────────────────────────────────────
@@ -1402,6 +1433,7 @@ local function run()
         check_log_freshness()
         flush_due()
         if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
+        render_ampel()
         -- LOG_COLLECTOR hat keine physischen Aktoren zu quiescen -- der
         -- Handler bestaetigt sofort einen sicheren Zustand und verlaesst
         -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
