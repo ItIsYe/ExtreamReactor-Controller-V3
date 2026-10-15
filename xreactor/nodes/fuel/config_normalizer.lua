@@ -6,6 +6,19 @@ local function nonempty_string(value)
   return type(value) == "string" and value:match("%S") ~= nil
 end
 
+-- Blutonium ist aus dem FUEL-System heraus (siehe reserve_items in
+-- nodes/fuel/main.lua): ein Reaktor haelt nur eine Brennstoffsorte, und der
+-- Wechsel Uran <-> Blutonium nach ME-Bestand hat den Access Port verstopft.
+-- Bis v824 stand Blutonium in der ausgelieferten Liste, und FUEL schreibt
+-- seine Config samt reserve_items zurueck -- gespeicherte Configs enthalten
+-- es also noch und werden hier bereinigt.
+local function is_blutonium_entry(entry)
+  if type(entry.element) == "string" and entry.element:lower() == "blutonium" then
+    return true
+  end
+  return type(entry.item) == "string" and entry.item:lower():find("blutonium", 1, true) ~= nil
+end
+
 function M.normalize(config_values, defaults, add_warning, utils)
   non_rt_config.apply_common(config_values, defaults, add_warning, utils)
 
@@ -27,11 +40,30 @@ function M.normalize(config_values, defaults, add_warning, utils)
     add_warning("reserve_items invalid; defaulting to shipped item list")
   elseif type(config_values.reserve_items) == "table" then
     local cleaned = {}
+    local blutonium_dropped = 0
     for i, entry in ipairs(config_values.reserve_items) do
       if type(entry) == "table" and nonempty_string(entry.item) then
-        cleaned[#cleaned + 1] = entry
+        if is_blutonium_entry(entry) then
+          blutonium_dropped = blutonium_dropped + 1
+        else
+          cleaned[#cleaned + 1] = entry
+        end
       else
         add_warning(string.format("reserve_items[%d] invalid; ignoring", i))
+      end
+    end
+    if blutonium_dropped > 0 then
+      add_warning(string.format(
+        "reserve_items: %d Blutonium-Eintrag/-Eintraege ignoriert -- FUEL liefert nur noch Uran "
+          .. "(Reaktor haelt nur eine Brennstoffsorte)", blutonium_dropped))
+      -- Hat erst das Herausfiltern die Liste geleert, gilt die ausgelieferte
+      -- Liste -- sonst haette FUEL gar keinen Brennstoff mehr zu liefern.
+      if #cleaned == 0 and type(defaults.reserve_items) == "table" then
+        for _, entry in ipairs(defaults.reserve_items) do
+          if type(entry) == "table" and not is_blutonium_entry(entry) then
+            cleaned[#cleaned + 1] = entry
+          end
+        end
       end
     end
     config_values.reserve_items = cleaned

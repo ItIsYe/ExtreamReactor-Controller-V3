@@ -72,12 +72,17 @@ local DEFAULT_CONFIG = {
   -- Reserve ergibt. unit_multiplier erlaubt Bloecke (z.B. 9 Ingots/Block)
   -- im selben Ingot-Aequivalent wie target/minimum_reserve mitzuzaehlen.
   -- `element` gruppiert Ingot+Block derselben Fuel-Sorte -- dieselbe Liste
-  -- ist auch die austauschbare Fuel-Familien-Tabelle, aus der
-  -- logistics_router.lua bei jeder Lieferung automatisch die Sorte mit dem
-  -- groesseren ME-Bestand waehlt (siehe build_fuel_families() dort).
+  -- ist auch die Fuel-Familien-Tabelle, aus der logistics_router.lua bei
+  -- jeder Lieferung liefert (siehe build_fuel_families() dort).
+  -- Nur EINE Brennstoffsorte: ein Extreme-Reactors-Reaktor haelt immer nur
+  -- einen Brennstofftyp. Liefert FUEL eine zweite Sorte, solange noch die
+  -- erste drin ist, bleibt sie im Access Port liegen und blockiert dort den
+  -- Slot -- danach passt auch die richtige Sorte nicht mehr hinein, und die
+  -- Lieferkette staut sich. Deshalb kein Blutonium mehr (vorher wechselte
+  -- FUEL je nach ME-Bestand zwischen Uran und Blutonium);
+  -- config_normalizer.lua filtert es auch aus alten, gespeicherten Configs.
+  -- Das Blutonium aus dem REPROC bleibt einfach im ME.
   reserve_items = {
-    { item = "bigreactors:blutonium_ingot", element = "blutonium" },
-    { item = "bigreactors:blutonium_block", element = "blutonium", unit_multiplier = 9 },
     { item = "alltheores:uranium_ingot", element = "uranium" },
     { item = "alltheores:uranium_block", element = "uranium", unit_multiplier = 9 },
   },

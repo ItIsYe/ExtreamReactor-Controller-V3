@@ -7,9 +7,10 @@
 -- each entry carrying everything FUEL needs for that reactor: reactor_id/
 -- label (learned from the owning RT node's own broadcasts, never typed by
 -- hand), the valve path to it, and its resupply thresholds. There is no
--- `item` field anywhere -- logistics_router.lua decides Uranium vs
--- Blutonium and Ingot vs Block automatically on every delivery (see its
--- build_fuel_families()/pick_fuel_family()/pick_fuel_form()).
+-- `item` field anywhere -- logistics_router.lua delivers the fuel listed
+-- in config.reserve_items (Uranium only since v825) and decides Ingot vs
+-- Block automatically on every delivery (see its build_fuel_families()/
+-- pick_fuel_family()/pick_fuel_form()).
 --
 -- There is also no per-reactor delivery target: every reactor shares ONE
 -- export chest (u.export_chest / config.logistics.export_chest), the sole

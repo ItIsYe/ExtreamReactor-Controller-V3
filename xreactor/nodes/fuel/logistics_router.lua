@@ -65,11 +65,14 @@
 --     },
 --   },
 --
--- No `item` field: which fuel (Uranium vs Blutonium) and which form (ingot
--- vs block) to deliver is decided automatically, fresh on every delivery --
--- see pick_fuel_delivery() below. The interchangeable fuel families come
--- from config.reserve_items (shared with nodes/fuel/storage.lua's reserve
--- tally), grouped by their `element` field.
+-- No `item` field: which form (ingot vs block) to deliver is decided
+-- automatically, fresh on every delivery -- see pick_fuel_family()/
+-- pick_fuel_form() below. The fuel families come from config.reserve_items
+-- (shared with nodes/fuel/storage.lua's reserve tally), grouped by their
+-- `element` field. Since v825 that list holds Uranium only: a reactor
+-- keeps one fuel type at a time, so a second family (Blutonium) delivered
+-- while the first is still inside stays stuck in the access port and
+-- blocks it (see reserve_items in nodes/fuel/main.lua).
 --
 -- redstone_tree (the VALVE routing topology redstone_router.lua actually
 -- consumes) is never hand-maintained here: refresh_peripherals() builds it
@@ -870,7 +873,7 @@ function M:_run_supply(cycle_log)
   local family = #candidates > 0 and pick_fuel_family(bridge, families) or nil
   if #candidates > 0 and not family then
     note_block(self, "KEIN_BRENNSTOFF_IM_ME",
-      "kein Uran/Blutonium im ME gefunden, obwohl " .. #candidates .. " Reaktor(en) anfordern")
+      "kein Uran im ME gefunden, obwohl " .. #candidates .. " Reaktor(en) anfordern")
     return exported, errors
   end
   if #candidates == 0 then

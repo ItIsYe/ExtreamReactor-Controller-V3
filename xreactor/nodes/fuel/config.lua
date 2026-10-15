@@ -91,10 +91,11 @@ local CONFIG = {
     --                   piles up in the chest before the reactor. Tune per
     --                   reactor to roughly match its transport distance.
     --
-    -- No `item` field: FUEL decides Uranium vs Blutonium, and Ingot vs
-    -- Block, automatically on every delivery, based on which currently has
-    -- more ME stock (see logistics_router.lua's build_fuel_families()/
-    -- pick_fuel_family()/pick_fuel_form(), fed by config.reserve_items).
+    -- No `item` field: FUEL delivers the fuel listed in reserve_items
+    -- (Uranium only since v825 -- a reactor holds one fuel type at a time)
+    -- and decides Ingot vs Block automatically on every delivery (see
+    -- logistics_router.lua's build_fuel_families()/pick_fuel_family()/
+    -- pick_fuel_form(), fed by config.reserve_items).
     --
     -- Example (export_chest + two reactors, RT-reported fuel level):
     -- export_chest = "mekanism:ultimate_logistical_transporter_0",
