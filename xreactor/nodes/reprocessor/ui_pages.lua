@@ -94,8 +94,16 @@ function M.new(opts)
 
     section_arrow(mon, 2, y_at(7), w - 3, "NAECHSTER FEED", key, "recycle")
     local next_in = tonumber(feed.next_feed_in_s)
+    -- Barren je Lieferung und Stufe nach ME-Bestand (feed_router v828)
+    local amount_text = ""
+    if feed_enabled and tonumber(feed.feed_amount) then
+      amount_text = "  " .. tostring(feed.feed_amount) .. " Barren"
+      if (tonumber(feed.boost_level) or 0) > 0 then
+        amount_text = amount_text .. ", Stufe " .. tostring(feed.boost_level)
+      end
+    end
     mux.data_row(mon, 2, y_at(9), w - 3, {
-      label = feed_enabled and (next_in and (tostring(next_in) .. "s") or "-") or "FEEDING AUS",
+      label = feed_enabled and ((next_in and (tostring(next_in) .. "s") or "-") .. amount_text) or "FEEDING AUS",
       value = "IN", status = feed_enabled and "text" or "OFFLINE", icon = "recycle",
     })
 

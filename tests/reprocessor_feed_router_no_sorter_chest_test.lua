@@ -52,7 +52,8 @@ local function make_feed(sorter_chest)
     log = function() end, warn_once = function() end,
   })
   feed._state.bridge = {
-    getItem = function() return { amount = 1000 } end,
+    -- 500: unter der ersten Stufe (1000 Cyanit, v828) -- es bleibt bei 2 Barren.
+    getItem = function() return { amount = 500 } end,
     exportItemToPeripheral = function() export_calls = export_calls + 1; return 2 end,
   }
   feed._state.sorter = logistical_sorter.detect('sorter_0', 'TEST')

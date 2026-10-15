@@ -1,8 +1,8 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 827,
-  manifest_id = "manifest-v827",
-  payload_digest = "87207644",
+  manifest_version = 828,
+  manifest_id = "manifest-v828",
+  payload_digest = "84df3ddd",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 376, hash = "2d9d71e2", always = true },
+  { path = "release.lua", size_bytes = 376, hash = "aacee2b1", always = true },
   { path = "start.lua", size_bytes = 12950, hash = "5deb95f8", always = true },
   { path = "shared/build_info.lua", size_bytes = 2897, hash = "440a6f12", always = true },
   { path = "shared/constants.lua", size_bytes = 3761, hash = "50d0b5d1", always = true },
@@ -206,11 +206,11 @@ return {
     },
     reprocessing = {
     { path = "nodes/reprocessor/color_router_ui.lua", size_bytes = 21290, hash = "28642bdf", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/config.lua", size_bytes = 3808, hash = "4dc6b90e", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 4546, hash = "7b012ecf", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/feed_router.lua", size_bytes = 20256, hash = "f6994e40", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/config.lua", size_bytes = 4292, hash = "b5b7166e", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 4742, hash = "d6c2386c", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/feed_router.lua", size_bytes = 25126, hash = "f863650a", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/main.lua", size_bytes = 23352, hash = "b25079d7", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 12588, hash = "817f924a", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 12976, hash = "285fe170", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 2788, hash = "a7168614", required_for={"VALVE"} },

@@ -34,7 +34,9 @@ local function reset_world(opts)
   world.sorter = fake_sorter.new({ ignore_set = opts.ignore_set })
   world.chest = opts.chest or {}           -- Inhalt der Sorter-Kiste (list())
   world.chest_unreadable = opts.chest_unreadable == true
-  world.me = opts.me or 1000               -- Cyanit im ME
+  -- Cyanit im ME; 500 liegt unter der ersten Stufe (1000, v828) -- hier
+  -- geht es um die Paar-Regel, nicht um die Stufen.
+  world.me = opts.me or 500
   world.export_plan = opts.export_plan     -- Stueck je Exportaufruf, sonst alles
   world.exports = {}                       -- { count=, color= (Mekanism) }
 end

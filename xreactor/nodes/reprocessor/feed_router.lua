@@ -80,6 +80,101 @@ function M.normalize_feed_amount(value)
   return n
 end
 
+-- Stufen nach ME-Bestand (v828; Betreiber 2026-10-15: "wenn sehr viel
+-- Cyanit da ist, die Barrenanzahl erhoehen von 2 auf 4, 6, 8, 10 ... und
+-- die Zeit bis zum naechsten Push etwas verringern"). Je volle
+-- stock_per_level Cyanit im ME eine Stufe: je Stufe 2 Barren mehr
+-- (hoechstens max_amount) und eine um interval_cut_per_level kuerzere
+-- Pause (hoechstens um max_interval_cut). Unter der ersten Stufe gilt
+-- feed_amount und die eingestellte Pause unveraendert.
+--
+-- Die Vorgaben stehen hier und nicht nur in config.lua: die REPROC-Config
+-- wird beim ersten Start einmal nach /xreactor_config/reprocessor.lua
+-- kopiert, spaetere Felder in config.lua erreichen bestehende Rechner nie.
+-- Kommt ein Reprocessor mit dem Verarbeiten nicht nach, bleibt die
+-- Sorter-Kiste belegt und feed_one() wartet -- mehr als die Maschinen
+-- schaffen, wird so nie nachgeschoben.
+M.BOOST_DEFAULTS = {
+  enabled                = true,
+  stock_per_level        = 1000,
+  max_amount             = 16,
+  interval_cut_per_level = 0.10,
+  max_interval_cut       = 0.50,
+}
+
+-- Hoechstens 90 % kuerzer -- eine Pause von null gibt es nicht.
+local MAX_INTERVAL_CUT_LIMIT = 0.9
+
+local function finite_number(value)
+  local n = tonumber(value)
+  if not n or n ~= n or n == math.huge or n == -math.huge then return nil end
+  return n
+end
+
+-- Bereinigte Kopie von cfg.boost; fehlende Felder bekommen die Vorgabe,
+-- ungueltige ebenfalls (mit warn(text), falls uebergeben).
+function M.normalize_boost(boost, warn)
+  local d = M.BOOST_DEFAULTS
+  local src = type(boost) == "table" and boost or {}
+  local function bad(field, value, fallback)
+    if warn and value ~= nil then
+      warn(string.format("feed.boost.%s %s ungueltig; nehme %s", field, tostring(value), tostring(fallback)))
+    end
+    return fallback
+  end
+  local out = {}
+  if src.enabled == nil then
+    out.enabled = d.enabled
+  elseif type(src.enabled) == "boolean" then
+    out.enabled = src.enabled
+  else
+    out.enabled = bad("enabled", src.enabled, d.enabled)
+  end
+  local per = finite_number(src.stock_per_level)
+  out.stock_per_level = (per and per >= 1) and math.floor(per)
+    or bad("stock_per_level", src.stock_per_level, d.stock_per_level)
+  local max_amount = finite_number(src.max_amount)
+  out.max_amount = max_amount and M.normalize_feed_amount(max_amount)
+    or bad("max_amount", src.max_amount, d.max_amount)
+  local cut = finite_number(src.interval_cut_per_level)
+  out.interval_cut_per_level = (cut and cut >= 0 and cut <= 1) and cut
+    or bad("interval_cut_per_level", src.interval_cut_per_level, d.interval_cut_per_level)
+  local max_cut = finite_number(src.max_interval_cut)
+  out.max_interval_cut = (max_cut and max_cut >= 0 and max_cut <= MAX_INTERVAL_CUT_LIMIT) and max_cut
+    or bad("max_interval_cut", src.max_interval_cut, d.max_interval_cut)
+  return out
+end
+
+-- Stufe zum ME-Bestand: 0 unter stock_per_level, dann je volle Menge +1.
+function M.boost_level(stock, boost)
+  if not boost or boost.enabled == false then return 0 end
+  local s = finite_number(stock) or 0
+  if s <= 0 then return 0 end
+  return math.floor(s / boost.stock_per_level)
+end
+
+-- Barren je Lieferung: feed_amount + 2 je Stufe, hoechstens max_amount
+-- (aber nie unter feed_amount), nie mehr als gerade im ME liegt, immer
+-- gerade.
+function M.boosted_amount(base, level, boost, stock)
+  local amount = base + 2 * (level or 0)
+  local cap = math.max(base, boost and boost.max_amount or base)
+  if amount > cap then amount = cap end
+  local s = finite_number(stock)
+  if s and amount > s then
+    amount = math.max(base, s - s % 2)
+  end
+  return M.normalize_feed_amount(amount)
+end
+
+-- Faktor fuer die Pause: 1 - Stufe * Kuerzung, hoechstens um max_interval_cut.
+function M.interval_factor(level, boost)
+  if not boost or boost.enabled == false then return 1 end
+  local cut = (level or 0) * boost.interval_cut_per_level
+  if cut > boost.max_interval_cut then cut = boost.max_interval_cut end
+  return 1 - cut
+end
+
 function M.new(opts)
   opts = opts or {}
   local self = {
@@ -98,6 +193,10 @@ function M.new(opts)
       total_feeds     = 0,
       last_feed_ts    = nil,
       last_error      = nil,
+      -- Stufe nach ME-Bestand (v828), aus der letzten ME-Lesung in feed_one
+      me_stock        = nil,
+      boost_level     = 0,
+      current_amount  = nil,
       -- Einmalige Sorter-Einstellung (ensure_sorter_setup): fuer welchen
       -- Sorter sie gelungen ist, ob der letzte Versuch klappte, wann er war.
       sorter_setup_done_for = nil,
@@ -340,11 +439,18 @@ local function feed_one(self, cfg)
   end
 
   local item   = cfg.waste_item or "bigreactors:cyanite_ingot"
-  local amount = M.normalize_feed_amount(cfg.feed_amount)
+  local base   = M.normalize_feed_amount(cfg.feed_amount)
 
-  -- Verfuegbarkeit in ME pruefen
+  -- ME-Bestand: entscheidet, ob genug da ist, und die Stufe (Barren je
+  -- Lieferung, Pause bis zur naechsten -- siehe M.BOOST_DEFAULTS).
   local me_info = safe_call(bridge, "getItem", { name = item })
   local in_me = me_bridge_compat.item_amount(me_info)
+  local boost = M.normalize_boost(cfg.boost)
+  local level = M.boost_level(in_me, boost)
+  local amount = M.boosted_amount(base, level, boost, in_me)
+  self._state.me_stock = in_me
+  self._state.boost_level = level
+  self._state.current_amount = amount
   if in_me < amount then
     self.warn_once("me_low:" .. tostring(target.label),
       string.format("FeedRouter: ME hat nur %d %s (brauche %d) — uebersprungen", in_me, item, amount))
@@ -453,8 +559,10 @@ function M:tick()
 
   feed_one(self, cfg)
 
-  -- Naechstes zufaelliges Intervall planen
-  self._state.next_feed_ts = now + random_interval(cfg) * 1000
+  -- Naechstes zufaelliges Intervall planen -- je Stufe etwas kuerzer
+  -- (Stufe aus der letzten ME-Lesung in feed_one).
+  local factor = M.interval_factor(self._state.boost_level, M.normalize_boost(cfg.boost))
+  self._state.next_feed_ts = now + random_interval(cfg) * factor * 1000
 end
 
 -- ---- status / introspection -------------------------------------------------
@@ -470,7 +578,10 @@ function M:get_summary()
     last_feed_age_s = self._state.last_feed_ts and math.floor((now - self._state.last_feed_ts) / 1000) or nil,
     next_feed_in_s = self._state.next_feed_ts > 0 and math.max(0, math.floor((self._state.next_feed_ts - now) / 1000)) or nil,
     last_error     = self._state.last_error,
-    feed_amount    = M.normalize_feed_amount(cfg.feed_amount),
+    -- Barren der letzten/naechsten Lieferung (mit Stufe), Stufe, ME-Bestand
+    feed_amount    = self._state.current_amount or M.normalize_feed_amount(cfg.feed_amount),
+    boost_level    = self._state.boost_level or 0,
+    me_stock       = self._state.me_stock,
     target_count   = #(cfg.targets or {}),
     targets        = cfg.targets or {},
     bridge_bound   = self._state.bridge ~= nil,

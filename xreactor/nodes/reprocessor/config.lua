@@ -49,6 +49,17 @@ local CONFIG = {
     feed_amount        = 2,      -- Items pro Befuellung: ganze, gerade Zahl, mindestens 2 (Reprocessor braucht immer 2)
     interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befuellungen
     interval_max_s     = 60,     -- Hoechst-Wartezeit zwischen Befuellungen (zufaellig dazwischen)
+    -- Stufen nach ME-Bestand: je volle stock_per_level Cyanit im ME eine
+    -- Stufe -- je Stufe 2 Barren mehr (hoechstens max_amount) und eine um
+    -- interval_cut_per_level kuerzere Pause (hoechstens um
+    -- max_interval_cut). Vorgaben auch in feed_router.BOOST_DEFAULTS.
+    boost = {
+      enabled                = true,
+      stock_per_level        = 1000,
+      max_amount             = 16,
+      interval_cut_per_level = 0.10,
+      max_interval_cut       = 0.50,
+    },
     discovery_interval = 60,
     --
     -- targets: ein Eintrag pro Reprocessor

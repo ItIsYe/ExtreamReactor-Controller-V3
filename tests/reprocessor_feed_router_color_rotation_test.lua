@@ -72,7 +72,8 @@ local feed = feed_router_lib.new({
 -- function values (pcall(bridge.exportItemToPeripheral, filter, target) --
 -- no colon-call, no implicit self), so these must NOT take a leading self.
 feed._state.bridge = {
-  getItem = function(_query) return { amount = 1000 } end,
+  -- 500: unter der ersten Stufe (1000 Cyanit, v828) -- es bleibt bei 2 Barren.
+  getItem = function(_query) return { amount = 500 } end,
   exportItemToPeripheral = function(_query, inlet)
     export_calls[#export_calls + 1] = { inlet = inlet }
     return 2

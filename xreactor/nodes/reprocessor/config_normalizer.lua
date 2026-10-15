@@ -40,6 +40,9 @@ function M.normalize(config_values, defaults, add_warning, utils)
       tostring(fd.feed_amount), amount))
   end
   fd.feed_amount = amount
+  -- Stufen nach ME-Bestand (v828): fehlt der Block in einer alten Config,
+  -- gelten die Vorgaben aus feed_router.BOOST_DEFAULTS.
+  fd.boost = feed_router.normalize_boost(fd.boost, add_warning)
   if type(fd.interval_min_s) ~= "number" or fd.interval_min_s <= 0 then
     fd.interval_min_s = d.interval_min_s or 20
   end
