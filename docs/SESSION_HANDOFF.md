@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-15 | beta | manifest-v830 | HEAD `7cf1fd61`**
+**Stand: 2026-10-15 | beta | manifest-v831 | HEAD `89fb707b`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `7cf1fd61` |
-| Fassung | `manifest-v830` / `beta-v830`, Prüfsumme `c1bbe0e7` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 421 Lua + 45 Python, grün |
+| HEAD | `89fb707b` |
+| Fassung | `manifest-v831` / `beta-v831`, Prüfsumme `2d7e4d2d` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 422 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -994,6 +994,32 @@ Beide Teile zusammen als v830 (Versionsfelder vor dem zweiten
 `manifest_sync --write` auf 829 zurückgesetzt). Test
 `tests/ampel_reproc_log_status_test.lua`; Rückbauten: WATER 3, Ampel 9 —
 alle erkannt.
+
+### T) Umgesetzt am 2026-10-15 (v831): FUEL-Ampel im Normalbetrieb
+
+Auf die Frage „FUEL-Ampel und MASTER-Ampel — wann welche Farbe" kam beim
+Nachlesen heraus: `ui_completion.compute_view_state()` meldete jeden
+`supply_block` als „Keine Lieferung" (WARNING), auch Leerlauf
+(`NIEMAND_FORDERT_AN`) und laufende Lieferung (`LIEFERUNG_LAEUFT`,
+`ROUTER_BESCHAEFTIGT`) → FUEL-Ampel fast immer orange. Betreiber: „an
+FUEL-Ampel müssen wir dran".
+
+- Leerlauf → `IDLE` (OK, grün), erst nach den echten Prüfungen (Lieferweg,
+  Reaktordaten, Reserve); Schirm zeigt „SYSTEM BEREIT – <Grund>".
+- Laufende Lieferung / Router beschäftigt → `DELIVERING` (gelb).
+- Hängend (≥ 30 s, `STUCK_DELIVERY_MS`) → Router setzt
+  `supply_block.stuck`, dann „Keine Lieferung" (orange).
+- Alle echten Gründe orange; < 10 % Brennstoff rot (unverändert).
+- `monitor_ui.VIEW_STATE_TO_AMPEL`: `IDLE = "OK"`, `SUPPLY_BLOCKED =
+  "WARNING"` ausdrücklich.
+
+MASTER-Gesamtampel unverändert (grau Anlage aus/Ziel 0 → rot CRITICAL
+oder RT SAFE/EMERGENCY → orange WARN → gelb RT lernt Kapazität → grün).
+Ihr Kopfkommentar nennt zusätzlich „kritische Node offline" — eine
+eigene Regel dafür gibt es nicht (nur über einen CRITICAL-Alarm).
+
+Test `tests/fuel_ampel_idle_delivering_test.lua`; 6 Rückbauten, alle
+erkannt.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
