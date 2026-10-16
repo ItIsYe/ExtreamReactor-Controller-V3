@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-16 | beta | manifest-v836 | HEAD `1b19815c`**
+**Stand: 2026-10-16 | beta | manifest-v837 | HEAD `54443918`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `1b19815c` |
-| Fassung | `manifest-v836` / `beta-v836`, Prüfsumme `e5de65eb` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 427 Lua + 45 Python, grün |
+| HEAD | `54443918` |
+| Fassung | `manifest-v837` / `beta-v837`, Prüfsumme `d5e62089` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 428 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -1134,6 +1134,30 @@ rot blinkend → grau → orange → gelb → grün. Bewusstes Abschalten macht
 nichts rot (RT-Hold = nur „nicht steuerbar“, SAFE nur bei echter
 Schutzauslösung); Warnungen und lernende RT-Nodes bleiben bei Grau grau.
 Test `master_ampel_critical_offline_test.lua`; 4 Mutationen gefangen.
+
+### X) Umgesetzt am 2026-10-16 (v837): Meldungen gehen wieder, Tipps sofort
+
+Bei der Prüfung „ob alles sauber ist“ zwei Fehler gefunden, Betreiber: „Ja“.
+
+1. **Keine Meldung ging je von selbst** (schon vor v833). Die Regeln
+   melden „ist weg“ genau einmal; `alert_service._clear_alert()` merkte
+   sich nur den Zeitpunkt (Schonfrist `alert_clear_grace_s`, Standard 3 s)
+   und wurde nie wieder gefragt. Folge: keine Störung wurde WEG, keine
+   Warnung verschwand, keine automatische Quittung, MASTER-Ampel blieb
+   nach jedem Ausfall rot. Jetzt holt `tick()` wartende Auflösungen nach.
+2. **Tipps auf MELDUNGEN** (Auswahl, Reiter, Blättern) ändern das Modell
+   nicht und wurden erst nach bis zu 5 s sichtbar. `multiview` markiert
+   die Sitzung nach jedem Tipp als neu zu zeichnen.
+
+Warum die Tests das nicht sahen: sie liefen mit Schonfrist 0, und der
+Zeichen-Helfer der Seitentests erzwang jedes Mal Neuzeichnen. Neuer Test
+`alarm_defaults_v837_test.lua` nutzt die **echten** MASTER-Vorgaben
+(`master/config.lua` + `normalize_config`); der Seitentest erzwingt nichts
+mehr. 2 Mutationen, beide gefangen. **Lehre:** Zeitverhalten mindestens
+einmal mit den ausgelieferten Vorgaben testen, nicht nur mit Abkürzungen.
+
+**Noch offen (nur angeboten, nicht entschieden):** Orange (Warnungen) auch
+vor Grau stellen.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
