@@ -13,7 +13,7 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 
 | | |
 |---|---|
-| Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
+| Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht. `main` am 2026-10-16 auf v838 gebracht (`4942c54c`, Inhalt = `beta` `ab4bc408`), siehe Z |
 | HEAD | `c90cecd5` |
 | Fassung | `manifest-v838` / `beta-v838`, Prüfsumme `82620ef7` (aus `xreactor/release.lua`, nicht gezählt) |
 | Tests | 428 Lua + 45 Python, grün |
@@ -1186,6 +1186,31 @@ nur `xreactor/master/ui/alarms.lua`, sonst nichts.
 **Lehre:** Extern geänderte Dateien brauchen immer noch `manifest_sync
 --write` und grüne Tests, sonst kommen sie nicht auf die Anlage.
 
+### Z) Erledigt am 2026-10-16: `main` auf den Stand von `beta` (v838)
+
+Betreiber: „ok läuft alles pushe den jetzigen beta stand nach main“.
+
+- **Stand:** `main` = `4942c54c`, Inhalt Datei für Datei gleich `beta`
+  `ab4bc408` (manifest-v838). CI auf `main` grün (Offline CI,
+  deployment-gate).
+- **Wie:** Ein Fast-Forward ging nicht – auf `main` lagen noch die alten
+  Merge-Commits und der Revert vom 2026-09-04, die in `beta` nicht vorkommen.
+  Statt Force-Push ein Merge-Commit mit dem Baum von `beta` und den Eltern
+  `main` + `beta`; die alte Geschichte von `main` bleibt erhalten:
+
+  ```
+  git fetch origin main beta
+  NEW=$(git commit-tree "origin/beta^{tree}" -p origin/main -p origin/beta -F msg.txt)
+  git diff origin/beta "$NEW"            # muss leer sein
+  git push origin "$NEW:refs/heads/main"
+  ```
+
+- **Anlage:** keine Wirkung. Alle Nodes und der Installer laden von `beta`
+  (`installer` Zeile 114, `xreactor/installer/auto_update.lua` `SOURCE_REF`).
+  `main` ist nur der gesicherte Stand.
+- Diese Übergabe-Ergänzung selbst liegt nur auf `beta`; `main` zieht sie
+  beim nächsten Abgleich mit.
+
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
 1. **Der Stab-Dirty-Check** (oben). Das war genau das, was der Betreiber
@@ -1313,7 +1338,8 @@ nur `xreactor/master/ui/alarms.lua`, sonst nichts.
 2. Selbstheilung Ebene 2 → 3 (Ebene 1 erledigt, siehe I), Ebene 3 nur auf
    ausdrückliche Ansage. Sinnvoll erst, wenn sich im Betrieb zeigt, dass
    Knoten nach dem Chunk-Laden trotz v812–v817 noch hängen.
-3. `beta` → `main`, sobald alles läuft (Betreiber).
+3. ~~`beta` → `main`, sobald alles läuft~~ – erledigt am 2026-10-16 mit v838
+   (siehe Z). Künftig wieder nur auf Ansage des Betreibers.
 
 Gestrichen am 2026-10-12 (Betreiber): das am 2026-10-04 angekündigte
 „weitere Thema, indirekt damit zusammenhängend" (er wusste es nicht mehr),
