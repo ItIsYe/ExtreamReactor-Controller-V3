@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-16 | beta | manifest-v837 | HEAD `54443918`**
+**Stand: 2026-10-16 | beta | manifest-v838 | HEAD `c90cecd5`**
 
 ---
 
@@ -14,8 +14,8 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `54443918` |
-| Fassung | `manifest-v837` / `beta-v837`, Prüfsumme `d5e62089` (aus `xreactor/release.lua`, nicht gezählt) |
+| HEAD | `c90cecd5` |
+| Fassung | `manifest-v838` / `beta-v838`, Prüfsumme `82620ef7` (aus `xreactor/release.lua`, nicht gezählt) |
 | Tests | 428 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
@@ -1158,6 +1158,33 @@ einmal mit den ausgelieferten Vorgaben testen, nicht nur mit Abkürzungen.
 
 **Noch offen (nur angeboten, nicht entschieden):** Orange (Warnungen) auch
 vor Grau stellen.
+
+### Y) Umgesetzt am 2026-10-16 (v838): Seite MELDUNGEN extern neu gestaltet
+
+Betreiber zur Seite MELDUNGEN: „die gui … ist mist“. Mein Entwurf (Skizzen
+als Artifact „Neue Meldungsseite“) wurde nicht genommen: „ich lass das
+Dashboard extern designen“. Ergebnis: Commit `76730da5` (Autor Dax1) ersetzt
+nur `xreactor/master/ui/alarms.lua`, sonst nichts.
+
+- **Aufbau:** schreibt ganze Zeilen per `mon.blit()` (kein Flackern), Zeile 1
+  bleibt der Statusleiste. Layouts nach nutzbarer Größe: kompakt (unter
+  52 breit oder unter 26 hoch, also jeder übliche AUX-Monitor: 3x2 = 57x22,
+  4x3 = 52x23), mittel, breit (ab 90x24). Unter 30x14 nur „Monitor zu klein“.
+- **Bedienung kompakt:** Liste mit Filter (ALLE/STOER./WARN./OFFEN) und
+  Verlauf; Antippen öffnet die Einzelheiten mit „<Node> QUITTIEREN“ und
+  „MEHR …“. Sperren 60 min, Entsperren, Vergessen, Alle quittieren nur über
+  MEHR und mit Rückfrage. Tasten prüfen beim Auslösen die Meldungsnummer.
+- **Schnittstelle unverändert:** `render`, `hit_test`/`handle_input`, dieselben
+  Aktionen und Modelldaten.
+- **Was fehlte (von mir nachgezogen):** Manifest (Prüfsumme/Größe, Fassung
+  stand auf v837 – MASTER holte die Seite nicht, Neuinstallation/Reparatur
+  des MASTER brach ab, CI rot) und die beiden Seitentests, die den alten
+  Aufbau prüften. Beide neu geschrieben; 9 Mutationen gefangen.
+- **Bekannt, kein Muss:** Mittel-Layout zeigt nur 4 Zeilen Einzelheiten
+  (RT-Zeilen blättern); 1 Block hohe Monitore zeigen die Seite nicht mehr.
+
+**Lehre:** Extern geänderte Dateien brauchen immer noch `manifest_sync
+--write` und grüne Tests, sonst kommen sie nicht auf die Anlage.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
