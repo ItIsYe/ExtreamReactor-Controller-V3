@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-16 | beta | manifest-v832 | HEAD `82187e57`**
+**Stand: 2026-10-16 | beta | manifest-v835 | HEAD `dda3c3c7`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `82187e57` |
-| Fassung | `manifest-v832` / `beta-v832`, Prüfsumme `d154dbfe` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 423 Lua + 45 Python, grün |
+| HEAD | `dda3c3c7` |
+| Fassung | `manifest-v835` / `beta-v835`, Prüfsumme `25325aed` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 427 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -1060,7 +1060,72 @@ Speicher im IDLE-Profil) überdeckt alles, auch eine ausgefallene Node und
 CRITICAL-Alarme. Nach einem MASTER-Neustart kennt MASTER nur Nodes, die
 sich melden; eine dauerhaft tote Node ist dann unsichtbar (keine Liste
 erwarteter Nodes). Alarme gelöschter Nodes werden nie aufgelöst und
-bleiben bis zum MASTER-Neustart aktiv.
+bleiben bis zum MASTER-Neustart aktiv. *(Seit v835: Taste VERGESSEN auf
+der Seite MELDUNGEN, siehe V.)*
+
+### V) Umgesetzt am 2026-10-16 (v833–v835): Meldungen, Quittierung, Seite MELDUNGEN
+
+Betreiber: „an die Meldungen, Warnungen, Störungen muss was dran. Ich kann
+die Meldungen auch nicht quittieren, oder die kommen so schnell wieder, dass
+es nichts bringt.“ Nach dem Konzept (Befund im Gespräch) seine Vorgaben:
+gegangene Störungen bis zur Quittierung stehen lassen **oder** automatisch
+quittieren, wenn sie in Zeit X nicht wiederkommen; Ampel blinkt, wenn nur
+noch etwas zu quittieren ist, rot solange akut; Drehzahlmeldungen raus —
+„das ist ein RT-Problem, dann muss angezeigt werden, dass die RT ein Problem
+hat … bzw. die Node anklicken, damit man weitere Infos bekommt“. Drei
+Versionen, zusammen gepusht (die Anlage spielt nur v835 ein).
+
+**v833 — Regeln (`core/alert_rules.lua` neu):** gestrichen TURBINE_RPM_LOW,
+COIL_EARLY (der Regler stellt Turbinen absichtlich ab, bremst per Spule und
+wechselt alle 5 min — `rt2_orchestrator.ROTATE_INTERVAL_MS`),
+TURBINE_OVERSPEED, MATRIX_NEAR_FULL (voller Speicher ist das Ziel),
+REACTOR_RODS_STUCK (unter rt2 tot: Dampf-Sollwert immer 0). Feste Klasse je
+Regel, keine Hochstufung: NODE_COMMS_DOWN nur aus MASTERs Sicht
+(`node.offline`), RT/ENERGY/FUEL Störung, sonst Warnung; NODE_DEGRADED nur
+echte Gründe im Klartext (ohne COMMS_DOWN/PROTO/TIMER_LOST), 10 s
+entprellt; ENERGY_LOW 10 % kommt / 15 % geht (neue Schlüssel
+`alarm_energy_low_pct`, `alarm_energy_low_clear_pct` — die alten stehen in
+`/xreactor_config/master.lua` fest); RT_NO_REDUNDANCY nach 60 s;
+UPDATE_RECOVERY = Meldung; neu **RT_PROBLEM** (Warnung). RT:
+`nodes/rt/rt2_problems.lua` (rein): Leistung < 85 % des Solls für 5 min
+(erst nach 60 s am Stück wieder gut — am Zwilling gemessen, sonst flackerte
+es bei jedem Turbinenwechsel), Drehzahl unlesbar 30 s, Überdrehzahl 30 s,
+dazu Turbinen unter Ziel als Hinweis; Zeilen in `payload.problems` (immer
+Liste), im RT-Banner, auf der Diagnoseseite, RT-Ampel orange.
+`coil_engaged` fällt aus dem Turbinenstatus.
+
+**v834 — Speicher (`core/alerts.lua` neu):** je Ursache ein Eintrag mit
+Zähler; Störung bleibt nach dem Gehen bis zur Quittung, sonst nach
+`alarm_auto_ack_min` (30) automatisch quittiert; Warnungen gehen von
+selbst; Flatterschutz `alarm_reack_window_min` (30): quittierte Ursache
+kommt quittiert zurück, außer schlimmer; Quittieren einseitig; Verlauf je
+Ereignis. Zähler: CRITICAL/WARN/INFO = steht an, dazu UNACKED,
+UNACKED_ACTIVE_CRITICAL, GONE_UNACKED_CRITICAL. Hupe nur bei anstehender
+unquittierter Störung; gesperrte Meldung einmal im Verlauf (vorher alle
+6 s). MASTER-Ampel: rot solange Störung ansteht, **rot blinkend** (Sekunde
+rot/aus) wenn nur noch zu quittieren; `master/loop.lua` ruft sie jede
+Sekunde.
+
+**v835 — Seite MELDUNGEN (`master/ui/alarms.lua` neu, `alerts.lua` weg):**
+Liste je Ursache, Antippen = Auswahl + Einzelheiten (RT-Zeilen), Tasten
+QUITT./ALLE QUITT./SPERREN 1h/VERGESSEN, Reiter LISTE/VERLAUF,
+ENTSPERREN. **Der eigentliche Grund, warum nichts quittierbar war:**
+`multiview.lua` zeichnete AUX-Monitore mit einem jedes Mal neuen
+Stellvertreter, gab `hit_test()` aber den echten Monitor — alle Views mit
+Touch-Zonen je Monitor (alarms, alerts, overview, rt_dashboard,
+maintenance, config_editor) fanden auf AUX nie ihre Zonen. Jetzt
+`hit_test(session.render_mon)`; Stellvertreter trägt `xr_session_mon`.
+VERGESSEN (nur ausgefallene Node): Node aus `state.nodes`, Meldungen,
+Regelzustand und Ampel-Gedächtnis weg.
+
+Tests: `alarm_rules_v833_test.lua`, `rt2_problems_test.lua` (Zwilling),
+`alarm_lifecycle_v834_test.lua`, `master_meldungen_page_v835_test.lua`,
+Touch-Isolation neu; Mutationen 30 + 29 + 18, alle gefangen bis auf eine
+gleichwertige.
+
+**Offen / für später (nur Befund):** Grau (Leistungsziel 0) überdeckt an
+der MASTER-Ampel weiter alles, auch Blinken und Störungen. Nach einem
+MASTER-Neustart gibt es keine Liste erwarteter Nodes.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
