@@ -68,14 +68,14 @@ function M.run(ctx)
       energy = { label = "Energy", render = ctx.energy_ui.render, interval = 1.0 },
       rt = { label = "RT", render = ctx.rt_ui.render, hit_test = ctx.rt_ui.hit_test, interval = 1.0 },
       resources = { label = "Resources", render = ctx.resources_ui.render, interval = 2.0 },
-      alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
-      alarms = { label = "Logs", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.handle_input, interval = 1.0 },
+      -- Seite MELDUNGEN (v835) -- ersetzt "Logs" und "Alerts".
+      alarms = { label = "Meldungen", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.hit_test, interval = 1.0 },
       maintenance = { label = "Maintenance", render = ctx.maintenance_ui.render, hit_test = ctx.maintenance_ui.hit_test, interval = 1.0 },
       updates = { label = "Updates", render = ctx.updates_ui.render, interval = 2.0 },
       system_map = { label = "System Map", render = ctx.system_map_ui.render, interval = 2.0 },
       config_editor = { label = "Config", render = ctx.config_editor_ui.render, hit_test = ctx.config_editor_ui.hit_test, interval = 1.0 },
     },
-    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms", "maintenance", "updates", "system_map", "config_editor" },
+    view_order = { "overview", "rt", "energy", "resources", "alarms", "maintenance", "updates", "system_map", "config_editor" },
     on_action = function(action)
       if ctx.refs.ui_controller then
         return ctx.refs.ui_controller.handle_action(action)

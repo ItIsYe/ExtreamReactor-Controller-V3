@@ -10,7 +10,8 @@ local files = {
   'xreactor/nodes/rt/reactor_control.lua',
   'xreactor/nodes/rt/turbine_control.lua',
   'xreactor/services/alert_service.lua',
-  'xreactor/master/ui/alerts.lua'
+  -- master/ui/alerts.lua ist seit v835 entfallen (Seite MELDUNGEN).
+  'xreactor/master/ui/alarms.lua'
 }
 
 for _, path in ipairs(files) do

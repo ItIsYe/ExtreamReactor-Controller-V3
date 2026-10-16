@@ -28,7 +28,7 @@ end
 -- Fallback-Liste falls self.view_order nicht gesetzt ist (sollte in der
 -- Praxis nicht vorkommen, master/init_runtime.lua übergibt immer eine
 -- vollständige Liste über bind_or_update()).
-local AUX_VIEWS_FALLBACK = { "alarms", "overview", "rt", "energy", "alerts" }
+local AUX_VIEWS_FALLBACK = { "alarms", "overview", "rt", "energy" }
 
 local function default_view(index, view_order)
   local role = resolve_role(index)

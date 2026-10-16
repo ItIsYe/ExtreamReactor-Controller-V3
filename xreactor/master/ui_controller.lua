@@ -434,55 +434,21 @@ function M.new(opts)
         and c.alert_service:get_history_filtered({ since_ms = since_ms })
         or c.alert_service:get_history())
       or {}
-    local alert_svc = c.alert_service
-    local function on_ack(id)
-      if alert_svc and type(alert_svc.ack) == "function" then
-        alert_svc:ack(id)
-      end
-    end
-    local alerts_model = {
-      counts = counts,
-      summary = summary,
-      active = alerts_active,
-      history = alerts_history,
-      history_window_key = history_window_key,
-      mutes = (c.alert_service and c.alert_service.state and c.alert_service.state.mutes) or { rules = {}, nodes = {} },
-      now_ms = now,
-      config = c.config or {},
-      on_ack = on_ack,
-    }
-
-    -- "alarms"-Model kombiniert beide Quellen: aktive alert_service-Alerts
-    -- zuerst (dringendste), danach die manuell via add_alarm() geloggten
-    -- Events. Severity wird auf das von alarms.lua erwartete Schema
-    -- EMERGENCY/WARNING/OK gemappt.
-    local function map_alert_severity(sev)
-      local s = tostring(sev or ""):upper()
-      if s == "CRITICAL" then return "EMERGENCY" end
-      if s == "WARN" or s == "WARNING" then return "WARNING" end
-      return "LIMITED"
-    end
-    local combined_alarms = {}
-    for _, a in ipairs(alerts_active) do
-      combined_alarms[#combined_alarms + 1] = {
-        severity = map_alert_severity(a.severity),
-        message = tostring(a.title or a.message or a.code or "Alert"),
-        detail = tostring(a.message or a.detail or a.source or ""),
-        timestamp = a.timestamp or overview.clock_label,
-      }
-    end
-    for _, a in ipairs(c.alarms or {}) do
-      combined_alarms[#combined_alarms + 1] = {
-        severity = a.severity,
-        message = a.message,
-        detail = a.sender_id,
-        timestamp = a.timestamp,
-      }
+    -- Seite MELDUNGEN (master/ui/alarms.lua, v835): die Liste je Ursache,
+    -- der Verlauf und die Zaehler. Die fruehere Seite "Alerts" ist
+    -- entfallen, ebenso ihr eigenes Model.
+    local muted_count = 0
+    local key_mutes = c.alert_service and c.alert_service.state and c.alert_service.state.mutes
+      and c.alert_service.state.mutes.keys or {}
+    for _, entry in pairs(key_mutes) do
+      local until_ts = type(entry) == "table" and tonumber(entry.until_ts) or tonumber(entry)
+      if until_ts and until_ts > now then muted_count = muted_count + 1 end
     end
     local alarms_model = {
       active = alerts_active,
-      header_blink = (counts.CRITICAL or 0) > 0,
-      on_ack = on_ack,
+      history = alerts_history,
+      counts = counts,
+      muted_count = muted_count,
     }
 
     -- UI-Redesign Schritt 2 (2026-07-01): Kompakte RT-Fleet-Zusammenfassung
@@ -630,7 +596,7 @@ function M.new(opts)
     -- energy.resources mit einem viel schmaleren Feld-Layout, siehe oben).
     -- ui/resources.lua zeigt bei leerem Model einen expliziten "keine Daten"-
     -- Hinweis statt irrefuehrender Nullwerte/Fehlerbadges.
-    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
+    return { overview = overview, rt = rt, energy = energy, resources = {}, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
   end
 
   -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
@@ -658,8 +624,7 @@ function M.new(opts)
       -- resources: siehe Kommentar in build_models() -- bekannte Luecke,
       -- ui/resources.lua zeigt bei leerem Model einen "keine Daten"-Hinweis.
       resources = {},
-      alerts = { counts = { INFO = 0, WARN = 0, CRITICAL = 0 }, summary = "Keine aktiven Meldungen", active = {}, history = {}, mutes = { rules = {}, nodes = {} }, now_ms = os.epoch('utc'), config = {} },
-      alarms = { alarms = {}, header_blink = false }
+      alarms = { active = {}, history = {}, counts = { INFO = 0, WARN = 0, CRITICAL = 0 }, muted_count = 0 }
     }
   end
 
@@ -800,10 +765,8 @@ function M.new(opts)
       c.alert_service:ack(action.alarm_id)
       return true
     end
-    -- Detaillierte Alerts-Ansicht (master/ui/alerts.lua, AUX-Monitor):
-    -- ACK/ACK VIS/ACK ALL/MUTE RULE/MUTE NODE erzeugen dieselben Action-
-    -- Tables wie alarm_ack oben, wurden hier aber bisher nicht behandelt --
-    -- die Buttons taten sichtbar nichts.
+    -- Seite MELDUNGEN (master/ui/alarms.lua) und die fruehere Seite
+    -- "Alerts" (bis v834): QUITT./ALLE QUITT. und die Sperren landen hier.
     if action.type == "alert_ack" and action.id and c.alert_service and type(c.alert_service.ack) == "function" then
       c.alert_service:ack(action.id)
       return true
@@ -830,6 +793,30 @@ function M.new(opts)
     end
     if action.type == "alert_unmute_node" and action.node_id and c.alert_service and type(c.alert_service.unmute_node) == "function" then
       c.alert_service:unmute_node(action.node_id)
+      return true
+    end
+    -- Seite MELDUNGEN (v835): einen Eintrag sperren / alle Sperren
+    -- aufheben / eine abgebaute Node vergessen.
+    if action.type == "alert_mute_key" and action.key and c.alert_service and type(c.alert_service.mute_key) == "function" then
+      c.alert_service:mute_key(action.key, action.minutes)
+      return true
+    end
+    if action.type == "alert_unmute_keys" and c.alert_service and type(c.alert_service.unmute_keys) == "function" then
+      c.alert_service:unmute_keys()
+      return true
+    end
+    if action.type == "alert_forget_node" and action.node_id then
+      local id = action.node_id
+      -- Nur eine Node, die MASTER als offline fuehrt (oder schon geloescht
+      -- hat) -- eine laufende Node zu vergessen hiesse nur, sie beim
+      -- naechsten Heartbeat neu anzulegen.
+      local node = c.nodes and c.nodes[id]
+      if node and node.offline ~= true then return true end
+      if node then c.nodes[id] = nil end
+      if c.alert_service and type(c.alert_service.forget_node) == "function" then c.alert_service:forget_node(id) end
+      local ok_ampel, ampel = pcall(require, "optional.master_ampel")
+      if ok_ampel and type(ampel) == "table" and type(ampel.forget_node) == "function" then pcall(ampel.forget_node, id) end
+      if c.log then c.log("Node vergessen: " .. tostring(id), "INFO") end
       return true
     end
     return false

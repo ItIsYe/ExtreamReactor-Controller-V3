@@ -216,6 +216,15 @@ do
   assert_eq(tick(rt), colors.red, 'FUEL fiel ohne Ampel aus und fehlt weiter')
   rt.state.nodes['FUEL-1'] = node('FUEL-1', 'FUEL-NODE')
   assert_eq(tick(rt), colors.green, 'alle zurueck: gruen')
+
+  -- Seite MELDUNGEN, "VERGESSEN" (v835): eine abgebaute Node haelt die
+  -- Ampel nicht mehr bis zum Neustart rot.
+  go_offline(rt.state.nodes['FUEL-1'])
+  tick(rt)
+  rt.state.nodes['FUEL-1'] = nil
+  assert_eq(tick(rt), colors.red, 'abgebaut: rot')
+  ampel.forget_node('FUEL-1')
+  assert_eq(tick(rt), colors.green, 'vergessen: gruen')
   _G.print = real_print
 
   -- Ins MASTER-Log, nur bei Aenderung.
@@ -226,10 +235,10 @@ do
     if ids then offline_lines[#offline_lines + 1] = ids end
     if entry.line == '[MASTER_AMPEL] kritische Nodes wieder da' then back_lines = back_lines + 1 end
   end
-  assert_eq(table.concat(offline_lines, ' | '), 'RT-1 | FUEL-1, RT-1 | FUEL-1',
+  assert_eq(table.concat(offline_lines, ' | '), 'RT-1 | FUEL-1, RT-1 | FUEL-1 | FUEL-1',
     'eine Meldung je Aenderung, nicht je Takt')
-  assert_eq(back_lines, 1, 'Entwarnung einmal')
-  assert_eq(#logged, 4, 'sonst nichts')
+  assert_eq(back_lines, 2, 'Entwarnung je Rueckkehr')
+  assert_eq(#logged, 6, 'sonst nichts')
 end
 
 -- ══ 7. Der Kopfkommentar verspricht nichts mehr, was fehlt ══════════════

@@ -1,4 +1,4 @@
--- Die detaillierte Alerts-Ansicht (master/ui/alerts.lua, AUX-Monitor) erzeugt
+-- Die Meldungsseiten (bis v834 master/ui/alerts.lua, seit v835 alarms.lua) erzeugen
 -- Action-Tables vom Typ alert_ack/alert_ack_visible/alert_ack_all/
 -- alert_mute_rule/alert_unmute_rule/alert_mute_node/alert_unmute_node --
 -- ui_controller.handle_action() kannte davon bislang nur den unabhaengigen

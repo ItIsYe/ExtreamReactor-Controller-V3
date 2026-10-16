@@ -13,7 +13,9 @@ local severity_level = {
 local state_defaults = {
   mutes = {
     rules = {},
-    nodes = {}
+    nodes = {},
+    -- je Eintrag (Schluessel einer Ursache), Seite MELDUNGEN "SPERREN"
+    keys = {}
   }
 }
 
@@ -25,6 +27,7 @@ local function normalize_mutes(state)
   state.mutes = type(state.mutes) == "table" and state.mutes or { rules = {}, nodes = {} }
   state.mutes.rules = type(state.mutes.rules) == "table" and state.mutes.rules or {}
   state.mutes.nodes = type(state.mutes.nodes) == "table" and state.mutes.nodes or {}
+  state.mutes.keys = type(state.mutes.keys) == "table" and state.mutes.keys or {}
 end
 
 local function is_expired(entry, now)
@@ -79,6 +82,11 @@ function alert_service.new(opts)
   for key, entry in pairs(state.mutes.nodes) do
     if is_expired(entry, now) then
       state.mutes.nodes[key] = nil
+    end
+  end
+  for key, entry in pairs(state.mutes.keys) do
+    if is_expired(entry, now) then
+      state.mutes.keys[key] = nil
     end
   end
   -- Optionale akustische Alarmierung (Feature, 2026-07-01): standardmaessig
@@ -150,6 +158,11 @@ function alert_service:_is_muted(entry, now)
   local source = entry.source or {}
   local node_id = source.node_id
   local function until_of(e) return type(e) == "table" and (e.until_ts or e["until"]) or e end
+  local key = build_alert_key(entry)
+  local key_entry = key and self.state.mutes.keys and self.state.mutes.keys[key] or nil
+  if key_entry and not is_expired(key_entry, now) then
+    return "key", key, until_of(key_entry)
+  end
   local rule_entry = code and self.state.mutes.rules[code] or nil
   if rule_entry and not is_expired(rule_entry, now) then
     return "rule", code, until_of(rule_entry)
@@ -212,6 +225,12 @@ function alert_service:tick()
   for key, entry in pairs(self.state.mutes.nodes or {}) do
     if is_expired(entry, now) then
       self.state.mutes.nodes[key] = nil
+      mutes_changed = true
+    end
+  end
+  for key, entry in pairs(self.state.mutes.keys or {}) do
+    if is_expired(entry, now) then
+      self.state.mutes.keys[key] = nil
       mutes_changed = true
     end
   end
@@ -437,6 +456,32 @@ function alert_service:unmute_node(node_id)
     self.state.mutes.nodes[node_id] = nil
     self:save_state()
     self:log_mute("unmute_node", node_id, nil)
+  end
+  return true
+end
+
+-- Einen Eintrag sperren (Seite MELDUNGEN): er verschwindet aus der Liste,
+-- und dieselbe Ursache meldet sich `minutes` lang nicht. Steht sie danach
+-- noch an, kommt sie wieder.
+function alert_service:mute_key(key, minutes)
+  if not key then return false end
+  local duration = math.max(1, tonumber(minutes) or (self.config.alert_mute_default_minutes or 10))
+  local until_ts = now_ms() + duration * 60 * 1000
+  self.state.mutes.keys = self.state.mutes.keys or {}
+  self.state.mutes.keys[key] = { until_ts = until_ts, minutes = duration }
+  self.alerts:drop(key)
+  self:save_state()
+  self:log_mute("mute_key", key, until_ts)
+  return true
+end
+
+function alert_service:unmute_keys()
+  local had = next(self.state.mutes.keys or {}) ~= nil
+  self.state.mutes.keys = {}
+  self.muted_noted = {}
+  if had then
+    self:save_state()
+    self:log_mute("unmute_keys", "ALL", nil)
   end
   return true
 end

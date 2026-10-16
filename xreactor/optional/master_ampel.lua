@@ -254,6 +254,12 @@ local function forget(reason, retry_now)
   cache.next_probe = retry_now and 0 or (now_s() + M.PROBE_S)
 end
 
+-- Eine abgebaute Node vergessen (Seite MELDUNGEN, "VERGESSEN"): sonst
+-- bliebe die Ampel ihretwegen rot, bis MASTER neu startet.
+function M.forget_node(node_id)
+  cache.critical_memory[tostring(node_id)] = nil
+end
+
 -- Alle bereits als MASTER-Monitor gebundenen Peripherals (die 3 primaeren
 -- Displays plus jeder AUX-Monitor, siehe master/monitor_sessions.lua) --
 -- keiner von ihnen kann jemals die Ampel sein.

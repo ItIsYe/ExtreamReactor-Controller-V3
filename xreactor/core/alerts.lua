@@ -285,6 +285,18 @@ function alerts:ack_all(value)
   return self:set_ack_for_ids(ids, wanted)
 end
 
+-- Einen Eintrag ohne Quittung und ohne Flatterschutz entfernen (Sperre:
+-- services/alert_service.lua mute_key).
+function alerts:drop(key)
+  local alert = key and self.active_by_key[key]
+  if not alert then return false end
+  self.active_by_key[key] = nil
+  self.active_by_id[alert.id] = nil
+  self.recent[key] = nil
+  self:_mark_dirty()
+  return true
+end
+
 -- Alles zu einer Node vergessen (abgebaute Rechner, master "Node vergessen").
 function alerts:forget_node(node_id)
   local removed = {}

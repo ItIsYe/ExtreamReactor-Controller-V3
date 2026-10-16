@@ -56,7 +56,7 @@ do
   local config_edits = require('master.config_edits')
   assert_eq(config_edits.SETTINGS.water_target, nil, 'Config-Editor: kein Wasser-Ziel mehr')
   for _, path in ipairs({ 'xreactor/master/ui/system_map.lua', 'xreactor/master/ui/resources.lua',
-                          'xreactor/master/ui/config_editor.lua', 'xreactor/master/ui/alerts.lua',
+                          'xreactor/master/ui/config_editor.lua', 'xreactor/master/ui/alarms.lua',
                           'xreactor/master/ui/energy.lua', 'xreactor/master/ui_controller.lua',
                           'xreactor/master/support_status.lua', 'xreactor/master/runtime_ops_profile.lua',
                           'xreactor/master/runtime_loop.lua', 'xreactor/master/message_handlers.lua',

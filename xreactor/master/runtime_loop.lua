@@ -61,7 +61,6 @@ local function run_master()
   local energy_ui           = require("master.ui.energy")
   local resources_ui        = require("master.ui.resources")
   local alarms_ui           = require("master.ui.alarms")
-  local alerts_ui           = require("master.ui.alerts")
   local maintenance_ui      = require("master.ui.maintenance")
   local updates_ui          = require("master.ui.updates")
   local system_map_ui       = require("master.ui.system_map")
@@ -144,7 +143,7 @@ local function run_master()
     config_edits_state = runtime.state.config_edits, persist_config_edits = persist_config_edits,
     monitor_manager = monitor_manager, multiview_ui = multiview_ui,
     overview_ui = overview_ui, energy_ui = energy_ui, rt_ui = rt_ui,
-    resources_ui = resources_ui, alerts_ui = alerts_ui, alarms_ui = alarms_ui,
+    resources_ui = resources_ui, alarms_ui = alarms_ui,
     maintenance_ui = maintenance_ui, updates_ui = updates_ui, system_map_ui = system_map_ui,
     config_editor_ui = config_editor_ui,
     comms_service = comms_service, service_manager = service_manager,
