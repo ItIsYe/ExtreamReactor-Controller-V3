@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-15 | beta | manifest-v831 | HEAD `89fb707b`**
+**Stand: 2026-10-16 | beta | manifest-v832 | HEAD `82187e57`**
 
 ---
 
@@ -14,9 +14,9 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `89fb707b` |
-| Fassung | `manifest-v831` / `beta-v831`, Prüfsumme `2d7e4d2d` (aus `xreactor/release.lua`, nicht gezählt) |
-| Tests | 422 Lua + 45 Python, grün |
+| HEAD | `82187e57` |
+| Fassung | `manifest-v832` / `beta-v832`, Prüfsumme `d154dbfe` (aus `xreactor/release.lua`, nicht gezählt) |
+| Tests | 423 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
 | Ablauf | direkt auf `beta` committen und pushen, **kein PR** (Betreiberentscheidung 2026-10-04) |
@@ -797,7 +797,9 @@ erkannt. Gemessen (Harness wie oben): FUEL 151/min (v823: 128, v822:
 per eigenem Kabelnetz an FUEL (baut auf Stufe 3 auf; eigenes Netz, nicht
 FUELs Peripherie-Kabel, sonst greift die Selbsterkennung der Ventile
 fremde Geräte; offene Frage: behalten Kabel-Ventile ihr Ender-Modem für
-MASTER?). Nur auf ausdrückliche Freigabe.
+MASTER?). Nur auf ausdrückliche Freigabe. **Zurückgestellt am
+2026-10-16** (Betreiber: „Das mit dem Kabel ist außen vor, es
+funktioniert jetzt ja anscheinend").
 
 ### N) Umgesetzt am 2026-10-15 (v825): Blutonium raus aus FUEL
 
@@ -1020,6 +1022,45 @@ eigene Regel dafür gibt es nicht (nur über einen CRITICAL-Alarm).
 
 Test `tests/fuel_ampel_idle_delivering_test.lua`; 6 Rückbauten, alle
 erkannt.
+
+### U) Umgesetzt am 2026-10-16 (v832): MASTER-Ampel bei ausgefallener Node
+
+Betreiber: „Dann behebe das mit der MASTER-Ampel, aber an den MASTER
+müssen wir sowieso noch mal ran." Bisher wurde eine ausgefallene Node nur
+über den Alarm `NODE_COMMS_DOWN` rot: ~2 s nach der Offline-Markierung
+WARN (orange), ab ~12 s CRITICAL (rot), und gar nicht, wenn der Alarm
+stummgeschaltet war.
+
+- `optional/master_ampel.lua`, Stufe ROT: **RT, ENERGY oder FUEL
+  offline** → rot. REPROC, LOG, VALVE, MASTER zählen nicht (die laufen
+  weiter über den Alarm). Merkmal ist `node.offline` (gesetzt von
+  `runtime_ops_rt.check_timeouts()`, gelöscht von jeder Meldung der
+  Node), **nicht** `node.status`: der bleibt nach einer Rückkehr bis zur
+  nächsten STATUS-Meldung OFFLINE (der Heartbeat leitet ihn aus dem alten
+  `health.status = DOWN` ab).
+- **Gedächtnis** (`cache.critical_memory`): `check_timeouts()` löscht eine
+  Node nach `node_offline_purge_after_s` (120 s) offline aus
+  `state.nodes`. Zuletzt offline gesehene kritische Nodes bleiben rot, bis
+  sie sich melden oder MASTER neu startet. Verschwindet eine Node, die
+  zuletzt online war (Kennung umbenannt), zählt sie nicht.
+- Grau geht weiter vor. Das Gedächtnis lernt aber auch während Grau und
+  ohne angeschlossene Ampel mit (`update()` rechnet die Farbe jetzt vor der
+  Monitor-Abfrage).
+- Änderungen der Ausfall-Liste einmal ins MASTER-Log (WARN):
+  `[MASTER_AMPEL] kritische Node offline: <ids>` / `… wieder da`.
+- Kopfkommentar korrigiert (auch die nie vorhandene „leichte Abweichung"
+  bei Gelb). `determine_color()` liefert als zweiten Wert die Liste.
+
+Test `tests/master_ampel_critical_offline_test.lua`; 17 Rückbauten, alle
+erkannt.
+
+**Für die MASTER-Überarbeitung festgehalten (nur Befund, nichts
+umgesetzt):** Grau (RT-Hold oder Leistungsziel 0, also auch bei vollem
+Speicher im IDLE-Profil) überdeckt alles, auch eine ausgefallene Node und
+CRITICAL-Alarme. Nach einem MASTER-Neustart kennt MASTER nur Nodes, die
+sich melden; eine dauerhaft tote Node ist dann unsichtbar (keine Liste
+erwarteter Nodes). Alarme gelöschter Nodes werden nie aufgelöst und
+bleiben bis zum MASTER-Neustart aktiv.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
