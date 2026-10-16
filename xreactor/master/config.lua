@@ -31,6 +31,11 @@ local CONFIG = {
   DEFAULT_RPM_WARN_LOW = 800,
   DEFAULT_RPM_CRIT_HIGH = 1800,
   DEFAULT_ROD_STUCK_SECS = 20,
+  -- Meldungen (v833): Energie niedrig kommt bei ..._LOW_PCT und geht erst
+  -- ab ..._LOW_CLEAR_PCT wieder. Neue Namen, weil die alten Schwellen
+  -- (energy_warn_pct usw.) in /xreactor_config/master.lua fest stehen.
+  DEFAULT_ALARM_ENERGY_LOW_PCT = 10,
+  DEFAULT_ALARM_ENERGY_LOW_CLEAR_PCT = 15,
   DEFAULT_STEAM_DEFICIT_PCT = 0.9,
   DEFAULT_ALERT_MUTE_DEFAULT_MINUTES = 10,
   DEFAULT_ALERT_MUTE_DURATIONS = { 5, 15, 30, 60 },
@@ -155,6 +160,8 @@ return {
   -- beschrieb etwas, das nie angekommen ist.
   scram_temperature = CONFIG.DEFAULT_SEQUENCER_SCRAM_TEMPERATURE,
   rod_stuck_secs = CONFIG.DEFAULT_ROD_STUCK_SECS,
+  alarm_energy_low_pct = CONFIG.DEFAULT_ALARM_ENERGY_LOW_PCT,
+  alarm_energy_low_clear_pct = CONFIG.DEFAULT_ALARM_ENERGY_LOW_CLEAR_PCT,
   steam_deficit_pct = CONFIG.DEFAULT_STEAM_DEFICIT_PCT,
   channels = { control = CONFIG.DEFAULT_COMMS_CHANNEL, status = CONFIG.DEFAULT_STATUS_CHANNEL },
   comms = {

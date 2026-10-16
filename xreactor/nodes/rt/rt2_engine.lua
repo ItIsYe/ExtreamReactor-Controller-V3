@@ -19,6 +19,7 @@ local rt2_safety = require("nodes.rt.rt2_safety")
 local rt2_projection = require("nodes.rt.rt2_projection")
 local rt2_reactor = require("nodes.rt.rt2_reactor")
 local rt2_turbine = require("nodes.rt.rt2_turbine")
+local rt2_problems = require("nodes.rt.rt2_problems")
 
 local M = {}
 
@@ -51,6 +52,11 @@ local last_projection
 -- Sicherheitslage.
 local reactor_state = {}
 
+-- Was MASTER als "RT meldet ein Problem" zeigt (rt2_problems.lua): der
+-- Entprellzustand und die Zeilen des letzten Takts.
+local problems_state = rt2_problems.new()
+local last_problems = {}
+
 -- Die Reaktoren dieses Knotens (Peripherienamen). Die Turbinen bleiben
 -- EINE Flotte: sie haengen alle am selben Dampfnetz, und jeder Reaktor
 -- regelt sich unabhaengig aus seinem eigenen Tank.
@@ -77,6 +83,8 @@ function M.init(opts)
   last_logged_reason = nil
   last_logged_override = nil
   last_projection = nil
+  problems_state = rt2_problems.new()
+  last_problems = {}
   -- Die MASTER-Liveness-Schwelle der Zustandsmaschine folgt
   -- config.comms.peer_timeout_s, weil Health-Check und Monitor-Anzeige
   -- (nodes/rt/health_payload.lua, nodes/rt/monitor_ui.lua) ihren
@@ -352,6 +360,30 @@ function M.tick(ctx)
     end
   end
 
+  -- Probleme fuer MASTER und den eigenen Schirm. Leistung wie in
+  -- status_fields(): Soll aus dem Lernwert und der wirksamen Vorgabe, Ist
+  -- als Summe dessen, was die Turbinen in diesem Takt gemeldet haben.
+  local actual_output = 0
+  for _, reading in ipairs(turbine_readings) do
+    actual_output = actual_output + (tonumber(reading.energy) or 0)
+  end
+  local problem_turbines = {}
+  for _, t in ipairs(result.turbines) do
+    problem_turbines[#problem_turbines + 1] = {
+      name = t.name, target_rpm = t.target_rpm, rpm = t.rpm,
+      flow_reason = t.flow_decision and t.flow_decision.reason or nil,
+    }
+  end
+  last_problems = rt2_problems.update(problems_state, {
+    now_ms = now_ms,
+    state = result.state,
+    learning = result.capacity and result.capacity.learning == true,
+    power_target = ((result.capacity and result.capacity.max_output) or 0)
+      * ((tonumber(result.effective_percent or result.master_percent) or 0) / 100),
+    actual_output = actual_output,
+    turbines = problem_turbines,
+  })
+
   last_result = result
   return result
 end
@@ -362,7 +394,7 @@ end
 -- branching to read it.
 function M.status_fields()
   if not last_result then
-    return { mode = M.current_state(), node_state = rt2_projection.node_state(M.current_state()) }
+    return { mode = M.current_state(), node_state = rt2_projection.node_state(M.current_state()), problems = {} }
   end
   local turbines = {}
   for _, t in ipairs(last_result.turbines) do
@@ -436,6 +468,9 @@ function M.status_fields()
     power_target = (last_result.capacity.max_output or 0)
       * ((tonumber(last_result.effective_percent or last_result.master_percent) or 0) / 100),
     turbines = turbines,
+    -- Zeilen fuer "RT meldet ein Problem" (rt2_problems.lua); immer eine
+    -- Liste, damit MASTER ein Verschwinden sieht.
+    problems = last_problems,
     control_rod_level = last_result.reactor_decision and last_result.reactor_decision.rods or nil,
     -- Je Reaktor, weil ein Knoten mehrere haben kann und sie unabhaengig
     -- regeln -- control_rod_level allein zeigte nur den ersten.

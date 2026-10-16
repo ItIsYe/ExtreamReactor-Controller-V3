@@ -12,11 +12,6 @@ local function numeric_value(value)
   return nil
 end
 
-local function bool_or_nil(value)
-  if type(value) == "boolean" then return value end
-  return nil
-end
-
 function M.build_module_payload(modules)
   local snapshot = {}
   for id, module in pairs(modules or {}) do
@@ -43,26 +38,29 @@ function M.build_turbine_snapshots(registry, turbine_adapter, modules, log_prefi
     if energy then total_output = total_output + energy end
     -- Je Turbine gehen nur noch die Felder raus, die MASTER auch liest.
     -- Bei 50 Turbinen alle 5 s ist dieses Array der mit Abstand groesste
-    -- Posten im Statusverkehr -- vier Felder waren reine Fracht:
+    -- Posten im Statusverkehr -- diese Felder waren reine Fracht:
     --
     --   name        entry.id ist bereits "turbine:"..name
     --   alias       nur bei REAKTOREN gelesen (master/fuel_relay.lua)
     --   output      Dublette von energy, derselbe Wert
-    --   target_rpm  MASTER kennt die Zieldrehzahl aus seiner eigenen Config
+    --   target_rpm  (die Annahme "MASTER kennt die Zieldrehzahl aus seiner
+    --               eigenen Config" stimmte nicht: der Regler stellt Turbinen
+    --               einzeln ab. Genau daraus kamen MASTERs Fehlalarme
+    --               TURBINE_RPM_LOW/COIL_EARLY -- seit v833 gestrichen, die
+    --               Node meldet ihre Probleme selbst, rt2_problems.lua)
+    --   coil_engaged nur COIL_EARLY las es (seit v833 gestrichen)
     --
     -- Was bleibt und WER es liest (vor dem Kuerzen nachgeprueft):
     --   id           ueberall zur Zuordnung
-    --   rpm          Sequencer-Telemetrie, alert_rules
+    --   rpm          Sequencer-Telemetrie (Ueberdrehzahl beim Hochfahren)
     --   flow_rate    master/startup_sequencer.lua's Telemetriezeile
     --   energy       Summe des Knotenausstosses
-    --   coil_engaged core/alert_rules.lua's COIL_EARLY
     --   state        Sequencer wartet auf "STABLE"
     table.insert(list, {
       id = entry.id,
       rpm = info and info.rpm or nil,
       flow_rate = info and info.flow or nil,
       energy = energy,
-      coil_engaged = info and bool_or_nil(info.coil_engaged) or nil,
       state = module and module.state or nil
     })
   end

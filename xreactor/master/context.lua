@@ -39,6 +39,11 @@ function M.normalize_config(config)
   config.energy_crit_pct       = cpct(config.energy_crit_pct, 15)
   if config.energy_crit_pct > config.energy_warn_pct then config.energy_crit_pct = config.energy_warn_pct end
   config.matrix_warn_full_pct  = cpct(config.matrix_warn_full_pct, 90)
+  config.alarm_energy_low_pct  = cpct(config.alarm_energy_low_pct, 10)
+  config.alarm_energy_low_clear_pct = cpct(config.alarm_energy_low_clear_pct, 15)
+  if config.alarm_energy_low_clear_pct < config.alarm_energy_low_pct then
+    config.alarm_energy_low_clear_pct = config.alarm_energy_low_pct
+  end
   config.rpm_warn_low          = clamp(config.rpm_warn_low  or 800,  800,  0, 5000)
   config.rpm_crit_high         = clamp(config.rpm_crit_high or 1800, 1800, 0, 10000)
   if config.rpm_crit_high < config.rpm_warn_low then config.rpm_crit_high = config.rpm_warn_low end

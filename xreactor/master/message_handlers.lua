@@ -218,6 +218,9 @@ function M.new(opts)
     rt.registry = payload.registry or rt.registry
     rt.snapshot = payload.snapshot or rt.snapshot
     rt.ramp_state = payload.ramp_state or rt.ramp_state
+    -- Was die Node selbst als Problem meldet (nodes/rt/rt2_problems.lua),
+    -- bei jeder Meldung neu: ein leeres oder fehlendes Feld heisst "keins".
+    rt.problems = type(payload.problems) == "table" and payload.problems or {}
     if type(payload.turbines) == "table" then rt.turbine_count = #payload.turbines end
     if type(payload.reactors) == "table" then rt.reactor_count = #payload.reactors end
 

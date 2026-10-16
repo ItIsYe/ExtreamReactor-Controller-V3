@@ -57,7 +57,19 @@ local function resolve_monitor(monitor_adapter, preferred_name, monitor_scale)
   return nil, preferred_name and ("monitor unavailable: " .. tostring(preferred_name)) or "no monitor found"
 end
 
+local rt_status_base
+
+-- Meldet die Node selbst ein Problem (rt2_problems.lua), ist die Ampel
+-- mindestens orange -- sonst zeigte sie gruen, waehrend MASTER "RT meldet
+-- ein Problem" anzeigt.
 local function rt_status(model)
+  local status = rt_status_base(model)
+  local problems = type(model.problems) == "table" and model.problems or {}
+  if #problems > 0 and status ~= "EMERGENCY" then return "WARNING" end
+  return status
+end
+
+function rt_status_base(model)
   -- Reihenfolge wie in mockup_pages.lua's rt_status(): assignment_state (vom
   -- Master zugewiesen) zuerst pruefen, sonst faerbt die Ampel einen bewusst
   -- geparkten/abgeschalteten Knoten faelschlich als "LIMITED" (Kapazitaet
@@ -307,6 +319,8 @@ function M.update(monitor, ctx)
     monitor_scale = ctx.monitor_scale,
     -- Verlorene/verspaetete Timer der Lauf-Schleifen, von main.lua gesetzt.
     loop_stats = ctx.loop_stats,
+    -- Was MASTER als "RT meldet ein Problem" zeigt (rt2_problems.lua).
+    problems = ctx.rt_problems or {},
   }
 
   if not M.monitor_router then

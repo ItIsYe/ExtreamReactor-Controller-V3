@@ -480,6 +480,10 @@ local function build_status_payload(status_level)
   if v2.capacity_sustainable_turbines then
     payload.capacity_sustainable_turbines = v2.capacity_sustainable_turbines
   end
+  -- "RT meldet ein Problem" bei MASTER (rt2_problems.lua). Immer eine
+  -- Liste: MASTER uebernimmt das Feld bei jeder Meldung neu, ein
+  -- weggelassenes Feld liesse dort die alten Zeilen stehen.
+  payload.problems = v2.problems or {}
   writeback_ctx()
   return payload
 end
@@ -537,6 +541,8 @@ local function update_monitor()
   }
   monitor_ctx.node_state    = v2.node_state
   monitor_ctx.current_state = v2.mode
+  -- Dieselben Zeilen, die MASTER als "RT meldet ein Problem" zeigt.
+  monitor_ctx.rt_problems   = v2.problems or {}
   -- Was der Regler je Turbine ZULETZT ENTSCHIEDEN hat, nach Peripheriename.
   --
   -- Die Turbinenliste des Schirms entsteht in monitor_ui.build_turbine_status()

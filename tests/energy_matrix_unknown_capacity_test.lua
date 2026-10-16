@@ -15,7 +15,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 --   2. daneben eine Matrix mit Kapazitaet: der Gesamtfuellstand ist ihrer,
 --      Zaehler und Nenner gehoeren zusammen
 --   3. MASTERs Alarmregeln melden fuer die unbekannte Matrix kein
---      MATRIX_NEAR_FULL
+--      MATRIX_NEAR_FULL (seit v833 gibt es die Meldung gar nicht mehr)
 --   4. ist keine Kapazitaet bekannt, ist der Gesamtfuellstand unbekannt
 --      (nil), weder 100 % noch 0 %
 --   5. sobald die Kapazitaet lesbar ist, gilt wieder der echte Wert
@@ -120,8 +120,10 @@ do
       'MATRIX_NEAR_FULL fuer eine Matrix mit unbekanntem Fuellstand: ' .. tostring(alert.message))
   end
 
-  -- Gegenprobe: die Regel laeuft hier wirklich -- eine bekannte, volle
-  -- Matrix meldet sie.
+  -- Seit v833 meldet MASTER eine volle Matrix ueberhaupt nicht mehr: ein
+  -- voller Speicher ist das Ziel (die IDLE-Schwelle liegt standardmaessig
+  -- ebenfalls bei 90 %), und die Warnung pendelte im Normalbetrieb um diese
+  -- Grenze. Also auch fuer eine bekannte, volle Matrix nichts.
   local full = alert_rules:evaluate({
     now = now,
     nodes = {
@@ -133,11 +135,9 @@ do
       },
     },
   })
-  local saw_full = false
   for _, alert in ipairs(full or {}) do
-    if alert.code == 'MATRIX_NEAR_FULL' then saw_full = true end
+    assert_true(alert.code ~= 'MATRIX_NEAR_FULL', 'eine volle Matrix ist kein Grund fuer eine Meldung (v833)')
   end
-  assert_true(saw_full, 'Gegenprobe: eine volle Matrix muss MATRIX_NEAR_FULL melden')
 end
 
 -- ══ 4. Keine Kapazitaet bekannt ═══════════════════════════════════════════

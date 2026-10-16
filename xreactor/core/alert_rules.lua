@@ -1,3 +1,31 @@
+-- core/alert_rules.lua -- welche Zustaende der Anlage MASTER meldet.
+--
+-- Neu geschrieben (v833, Betreiber 2026-10-16: "an die Meldungen,
+-- Warnungen, Stoerungen muss was dran ... die kommen so schnell wieder,
+-- dass es nichts bringt"). Bis v832 kamen viele Meldungen aus ganz
+-- normalem Regelbetrieb:
+--   - TURBINE_RPM_LOW / COIL_EARLY: der RT-Regler stellt bei Teillast
+--     Turbinen ab, bremst sie mit der Spule bis zum Stillstand und wechselt
+--     alle 5 Minuten, welche steht. Jeder Wechsel gab Warnungen.
+--   - MATRIX_NEAR_FULL ab 90 %: ein voller Speicher ist das Ziel (die
+--     IDLE-Schwelle liegt standardmaessig ebenfalls bei 90 %).
+--   - ENERGY_LOW bei 25 % ohne Abstand zwischen Kommen und Gehen.
+--   - NODE_COMMS_DOWN auch dann, wenn die NODE meldete, sie hoere MASTER
+--     nicht -- obwohl MASTER ihre Meldung gerade bekam. Nach 12 s wurde
+--     daraus eine Stoerung.
+--   - REACTOR_RODS_STUCK konnte unter dem neuen Regler nie ausloesen
+--     (Dampf-Sollwert immer 0).
+-- Alle gestrichen. Probleme einer RT-Node (zu wenig Leistung, Drehzahl
+-- nicht lesbar, Ueberdrehzahl) entscheidet die Node selbst
+-- (nodes/rt/rt2_problems.lua) und MASTER zeigt sie als RT_PROBLEM.
+--
+-- Jede Regel hat eine feste Klasse -- keine Hochstufung mehr:
+--   CRITICAL = Stoerung (rot, Hupe), WARN = Warnung (orange),
+--   INFO = Meldung (grau).
+--
+-- Schnittstelle unveraendert: rules.new(config), rules:evaluate(context)
+-- -> alerts (zu meldende Eintraege), clears (Schluessel, die gehen).
+
 local constants = require("shared.constants")
 local health = require("core.health")
 
@@ -8,92 +36,88 @@ local function now_ms()
 end
 
 local function has_reason(reasons, code)
-  if type(reasons) == "table" then
-    if reasons[code] then
-      return true
-    end
-    for _, entry in ipairs(reasons) do
-      if entry == code then
-        return true
-      end
-    end
+  if type(reasons) ~= "table" then return false end
+  if reasons[code] then return true end
+  for _, entry in ipairs(reasons) do
+    if entry == code then return true end
   end
   return false
 end
 
-local function build_reason_text(reasons)
-  if type(reasons) ~= "table" then
-    return nil
-  end
-  local list = {}
-  for key, value in pairs(reasons) do
-    if value == true then
-      table.insert(list, tostring(key))
-    end
-  end
-  for _, value in ipairs(reasons) do
-    table.insert(list, tostring(value))
-  end
-  if #list == 0 then
-    return nil
-  end
-  table.sort(list)
-  return table.concat(list, ", ")
+local function number_or(value, fallback)
+  if type(value) == "number" then return value end
+  local parsed = tonumber(value)
+  if parsed ~= nil then return parsed end
+  return fallback
 end
 
 local function build_source(node, device_id)
-  return {
-    node_id = node.id,
-    role = node.role,
-    device_id = device_id
-  }
+  return { node_id = node.id, role = node.role, device_id = device_id }
 end
 
-local function severity_for_proto(node)
-  if node.role == constants.roles.RT_NODE then
-    return "CRITICAL"
-  end
-  return "WARN"
-end
+-- Kritische Rollen: ohne sie laeuft die Anlage nicht weiter (wie
+-- optional/master_ampel.lua). Faellt eine davon aus, ist das eine
+-- Stoerung; jede andere Node ist eine Warnung.
+local CRITICAL_ROLES = {
+  [constants.roles.RT_NODE] = true,
+  [constants.roles.ENERGY_NODE] = true,
+  [constants.roles.FUEL_NODE] = true,
+}
 
-local function number_or(value, fallback)
-  if type(value) == "number" then
-    return value
+-- Gruende, aus denen eine Node "eingeschraenkt" ist, mit Klartext. Nicht
+-- dabei: COMMS_DOWN (die Node hoert MASTER nicht -- MASTER hoert sie aber,
+-- sonst kaeme diese Meldung nicht an; der echte Ausfall ist
+-- NODE_COMMS_DOWN), PROTO_MISMATCH (eigene Regel), NO_MATRIX bei ENERGY
+-- (MATRIX_MISSING), TIMER_LOST (die Node laeuft weiter; steht auf ihrer
+-- eigenen Diagnoseseite).
+local DEGRADE_REASONS = {
+  { code = health.reasons.DISCOVERY_FAILED, text = "Geraeteerkennung fehlgeschlagen" },
+  { code = health.reasons.CONTROL_DEGRADED, text = "Regelung eingeschraenkt" },
+  { code = health.reasons.NO_STORAGE, text = "kein Speicher (ME-Bridge)" },
+  { code = health.reasons.STALE_DATA, text = "Daten veraltet" },
+  { code = health.reasons.NO_MATRIX, text = "keine Matrix", skip_role = constants.roles.ENERGY_NODE },
+}
+
+local function degrade_text(node)
+  local reasons = node.health and node.health.reasons
+  local parts = {}
+  for _, entry in ipairs(DEGRADE_REASONS) do
+    if node.role ~= entry.skip_role and has_reason(reasons, entry.code) then
+      parts[#parts + 1] = entry.text
+    end
   end
-  local parsed = tonumber(value)
-  if parsed ~= nil then
-    return parsed
-  end
-  return fallback
+  if #parts == 0 then return nil end
+  return table.concat(parts, ", ")
 end
 
 local function rule_state(self, key)
   local state = self.state[key]
   if not state then
-    state = { active = false, since = nil, clear_since = nil, last_emit = 0, last_active = false }
+    state = { active = false, since = nil, clear_since = nil, last_emit = 0 }
     self.state[key] = state
   end
   return state
 end
 
+-- Entprellung: kommt erst, wenn die Bedingung raise_after_s lang ansteht,
+-- geht erst, wenn sie clear_after_s lang weg ist. Solange sie ansteht, wird
+-- der Eintrag alle cooldown_s aufgefrischt (Text, z. B. "seit 45 s").
 local function should_raise(state, active, now, opts)
   local raise_ms = (opts.raise_after_s or 0) * 1000
   local clear_ms = (opts.clear_after_s or 0) * 1000
   local cooldown_ms = (opts.cooldown_s or 0) * 1000
   if active then
+    state.clear_since = nil
     if not state.active then
       state.since = state.since or now
-      if now - state.since >= raise_ms and now - (state.last_emit or 0) >= cooldown_ms then
+      if now - state.since >= raise_ms then
         state.active = true
-        state.clear_since = nil
         state.last_emit = now
         return "raise"
       end
-    else
-      if now - (state.last_emit or 0) >= cooldown_ms then
-        state.last_emit = now
-        return "raise"
-      end
+    elseif now - (state.last_emit or 0) >= cooldown_ms then
+      state.last_emit = now
+      return "raise"
     end
   else
     state.since = nil
@@ -110,11 +134,17 @@ local function should_raise(state, active, now, opts)
 end
 
 function rules.new(config)
-  local self = {
-    config = config or {},
-    state = {}
-  }
+  local self = { config = config or {}, state = {} }
   return setmetatable(self, { __index = rules })
+end
+
+-- Alles, was zu einer Node gehoert, vergessen (master "Node vergessen").
+function rules:forget_node(node_id)
+  local marker = "|" .. tostring(node_id)
+  for key in pairs(self.state) do
+    local tail = key:sub(-#marker)
+    if tail == marker or key:find(marker .. "|", 1, true) then self.state[key] = nil end
+  end
 end
 
 function rules:evaluate(context)
@@ -125,274 +155,175 @@ function rules:evaluate(context)
   local alerts = {}
   local clears = {}
 
-  local base_opts = {
-    raise_after_s = cfg.alert_raise_after_s or cfg.alert_debounce_s or 1,
-    clear_after_s = cfg.alert_clear_after_s or cfg.alert_clear_s or 2,
-    cooldown_s = cfg.alert_cooldown_s or 5
+  local base = {
+    raise_after_s = cfg.alert_raise_after_s or cfg.alert_debounce_s or 2,
+    clear_after_s = cfg.alert_clear_after_s or cfg.alert_clear_s or 3,
+    cooldown_s = cfg.alert_cooldown_s or 6,
   }
+  local function opts(raise_after_s, clear_after_s, cooldown_s)
+    return {
+      raise_after_s = raise_after_s or base.raise_after_s,
+      clear_after_s = clear_after_s or base.clear_after_s,
+      cooldown_s = cooldown_s or base.cooldown_s,
+    }
+  end
 
-  local function emit(key, active, opts, builder)
+  local function emit(key, active, emit_opts, builder)
     local state = rule_state(self, key)
-    local action = should_raise(state, active, now, opts or base_opts)
+    local action = should_raise(state, active, now, emit_opts or base)
     if action == "raise" then
       local entry = builder(state)
       if entry then
         entry.key = key
-        table.insert(alerts, entry)
+        alerts[#alerts + 1] = entry
       end
     elseif action == "clear" then
-      table.insert(clears, key)
+      clears[#clears + 1] = key
     end
   end
 
-  -- P-ALERT-LOOP: was 5 separate `for _, node in pairs(nodes) do` passes
-  -- (all-nodes comms/degraded/proto; ENERGY_NODE-only matrix/aggregate;
-  -- RT_NODE-only turbine/reactor; RT_NODE-only redundancy tally; RT_NODE-
-  -- only SAFE-state) -- merged into one pass with role-gated branches.
-  -- Every individual check keeps its exact original condition, key,
-  -- options and builder; only the number of `pairs(nodes)` traversals per
-  -- evaluate() call changes (5 -> 1). Builders stay lazy (only invoked by
-  -- emit() on an actual "raise" transition), so this only saves the
-  -- redundant per-node/per-role loop overhead and the unconditional
-  -- key-string-format calls, not any alert semantics.
-  local stored = 0
-  local capacity = 0
-  local matrices = {}
-  local active_rt = {}
-  local total_capacity = 0
-  -- Reactor names are only unique WITHIN one RT installer run
-  -- (reactor_naming.lua's own dedup) -- it has no visibility into names
-  -- already used by OTHER RT nodes. Master sees every RT node's reactor
-  -- list every cycle, so it is the only place that can actually catch a
-  -- name reused across nodes (case-insensitive, matching the installer's
-  -- own dedup rule).
+  local stored, capacity = 0, 0
+  local active_rt, total_capacity = {}, 0
+  -- Reaktornamen sind nur innerhalb EINES RT-Installers eindeutig; MASTER
+  -- sieht alle Reaktorlisten und kann Doppelte ueber Nodes hinweg finden.
   local alias_seen = {}
-  local demand = context.power_target and context.power_target > 0
-  local warn_low = cfg.rpm_warn_low or 800
-  local crit_high = cfg.rpm_crit_high or 1800
 
   for _, node in pairs(nodes) do
     local reasons = node.health and node.health.reasons
-    local comms_down = node.health and node.health.status == health.status.DOWN
-    comms_down = comms_down or has_reason(reasons, health.reasons.COMMS_DOWN)
-    local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))
-    emit(down_key, comms_down, {
-      raise_after_s = cfg.comms_down_warn_secs or base_opts.raise_after_s,
-      clear_after_s = cfg.alert_clear_after_s or cfg.alert_clear_s or base_opts.clear_after_s,
-      cooldown_s = base_opts.cooldown_s
-    }, function(state)
-      local down_for = state.since and math.floor((now - state.since) / 1000) or (node.down_since and math.floor((now - node.down_since) / 1000)) or nil
-      local detail = down_for and ("down %ds"):format(down_for) or "down"
-      local crit_after = cfg.comms_down_crit_secs or 12
-      local severity = down_for and down_for >= crit_after and "CRITICAL" or "WARN"
+    local offline = node.offline == true
+
+    -- Node offline: nur MASTERs eigene Sicht (master/runtime_ops_rt.lua
+    -- check_timeouts() setzt node.offline nach dem Funk-Timeout). Klasse
+    -- fest nach Rolle.
+    local critical_role = CRITICAL_ROLES[node.role] == true
+    emit(string.format("NODE_COMMS_DOWN|%s", tostring(node.id)), offline, opts(), function(state)
+      local since = tonumber(node.down_since) or state.since
+      local down_for = since and math.max(0, math.floor((now - since) / 1000)) or nil
       return {
         code = "NODE_COMMS_DOWN",
-        severity = severity,
+        severity = critical_role and "CRITICAL" or "WARN",
         scope = "NODE",
         source = build_source(node),
-        title = "Node comms down",
-        message = string.format("%s (%s)", tostring(node.id or "NODE"), detail),
-        details = { down_for_s = down_for, warn_after_s = cfg.comms_down_warn_secs or base_opts.raise_after_s, crit_after_s = crit_after }
+        title = "Node offline",
+        message = down_for and string.format("%s antwortet nicht (seit %d s)", tostring(node.id), down_for)
+          or string.format("%s antwortet nicht", tostring(node.id)),
+        details = { down_for_s = down_for },
       }
     end)
 
-    local degraded = node.health and node.health.status == health.status.DEGRADED
-    degraded = degraded and not comms_down and node.offline ~= true and node.stale ~= true and node.recovering ~= true
-    local degraded_key = string.format("NODE_DEGRADED|%s", tostring(node.id))
-    emit(degraded_key, degraded, base_opts, function()
-      local reason_text = build_reason_text(reasons) or "unknown"
+    local reachable = not offline and node.stale ~= true and node.recovering ~= true
+
+    local degraded = reachable and degrade_text(node) or nil
+    emit(string.format("NODE_DEGRADED|%s", tostring(node.id)), degraded ~= nil, opts(10, 10), function()
+      local text = degrade_text(node) or "?"
       return {
         code = "NODE_DEGRADED",
         severity = "WARN",
         scope = "NODE",
         source = build_source(node),
-        title = "Node degraded",
-        message = string.format("%s (%s)", tostring(node.id or "NODE"), reason_text),
-        details = { reasons = reason_text }
+        title = "Node eingeschraenkt",
+        message = string.format("%s: %s", tostring(node.id), text),
+        details = { reasons = text },
       }
     end)
 
-    local proto_mismatch = has_reason(reasons, health.reasons.PROTO_MISMATCH)
-    local proto_key = string.format("PROTO_MISMATCH|%s", tostring(node.id))
-    emit(proto_key, proto_mismatch, base_opts, function()
-      local version = node.proto_ver or "unknown"
-      return {
-        code = "PROTO_MISMATCH",
-        severity = severity_for_proto(node),
-        scope = "NODE",
-        source = build_source(node),
-        title = "Protocol mismatch",
-        message = string.format("%s proto %s", tostring(node.id or "NODE"), tostring(version)),
-        details = { proto = version }
-      }
-    end)
+    emit(string.format("PROTO_MISMATCH|%s", tostring(node.id)), has_reason(reasons, health.reasons.PROTO_MISMATCH),
+      opts(), function()
+        local version = node.proto_ver or "?"
+        return {
+          code = "PROTO_MISMATCH",
+          severity = node.role == constants.roles.RT_NODE and "CRITICAL" or "WARN",
+          scope = "NODE",
+          source = build_source(node),
+          title = "Protokoll passt nicht",
+          message = string.format("%s spricht Protokoll %s", tostring(node.id), tostring(version)),
+          details = { proto = version },
+        }
+      end)
 
     if node.role == constants.roles.ENERGY_NODE then
-      stored = stored + (node.stored or 0)
-      capacity = capacity + (node.capacity or 0)
-      for _, matrix in ipairs(node.matrices or {}) do
-        table.insert(matrices, { matrix = matrix, node = node })
-      end
-      local node_reasons = node.health and node.health.reasons
-      -- node.status uses constants.status_levels (OFFLINE), not health.status
-      -- (DOWN) -- see message_handlers.lua's health_status_to_level().
-      local energy_comms_down = has_reason(node_reasons, health.reasons.COMMS_DOWN) or node.status == constants.status_levels.OFFLINE or node.offline == true
-      local matrix_missing = (not energy_comms_down)
-        and node.offline ~= true
-        and node.stale ~= true
-        and node.recovering ~= true
-        and node.managed ~= false
-        and has_reason(node_reasons, health.reasons.NO_MATRIX)
-      local matrix_key = string.format("MATRIX_MISSING|%s", tostring(node.id))
-      emit(matrix_key, matrix_missing, base_opts, function()
-        -- Die Zaehler stehen im Energy-Payload, nicht in der Node-Tabelle:
-        -- master/message_handlers.lua legt das Payload unter node.energy ab
-        -- und kopiert diese beiden Felder nicht nach oben. Vorher stand
-        -- hier deshalb immer 0/0, und die Schwere war immer CRITICAL.
+      stored = stored + number_or(node.stored, 0)
+      capacity = capacity + number_or(node.capacity, 0)
+      local energy_down = offline or has_reason(reasons, health.reasons.COMMS_DOWN)
+        or node.status == constants.status_levels.OFFLINE
+      local matrix_missing = (not energy_down) and reachable and node.managed ~= false
+        and has_reason(reasons, health.reasons.NO_MATRIX)
+      emit(string.format("MATRIX_MISSING|%s", tostring(node.id)), matrix_missing, opts(), function()
+        -- Die Zaehler stehen im Energy-Payload (node.energy), nicht oben in
+        -- der Node-Tabelle (master/message_handlers.lua).
         local e = (type(node.energy) == "table" and node.energy) or node
         local matrix_count = e.matrix_count or node.matrix_count or node.matrix_bound or 0
         local storage_count = e.storage_bound_count or node.storage_bound_count or 0
-        local severity = (storage_count == 0 and matrix_count == 0) and "CRITICAL" or "WARN"
+        local nothing = storage_count == 0 and matrix_count == 0
         return {
           code = "MATRIX_MISSING",
-          severity = severity,
+          severity = nothing and "CRITICAL" or "WARN",
           scope = "NODE",
           source = build_source(node),
-          title = "Matrix missing",
-          message = string.format("%s matrix bound=0", tostring(node.id or "ENERGY")),
-          details = { matrix_count = matrix_count, storage_count = storage_count }
+          title = "Keine Matrix angebunden",
+          message = string.format("%s findet keine Energiematrix", tostring(node.id)),
+          details = { matrix_count = matrix_count, storage_count = storage_count },
         }
       end)
     end
 
     if node.role == constants.roles.RT_NODE then
-      -- Redundanz-Tally (frueher eigene Schleife): Gesamtkapazitaet ueber
-      -- ALLE RT-Nodes, plus welche aktuell aktiv zugewiesen sind.
-      local assignment_state = tostring(node.assignment_state or "")
-      if assignment_state == "active" then
-        active_rt[#active_rt + 1] = node
-      end
+      if tostring(node.assignment_state or "") == "active" then active_rt[#active_rt + 1] = node end
       total_capacity = total_capacity + number_or(node.capacity_max, 0)
 
       local node_state = tostring(node.state or "")
-      local is_safe = node_state == "SAFE" or node_state == "EMERGENCY"
-      local safe_key = string.format("RT_SAFE_MODE|%s", tostring(node.id))
-      emit(safe_key, is_safe, base_opts, function()
+      emit(string.format("RT_SAFE_MODE|%s", tostring(node.id)), node_state == "SAFE" or node_state == "EMERGENCY",
+        opts(), function()
+          return {
+            code = "RT_SAFE_MODE",
+            severity = "CRITICAL",
+            scope = "NODE",
+            source = build_source(node),
+            title = "RT im Schutzzustand",
+            message = string.format("%s steht auf %s", tostring(node.id), node_state),
+            details = { state = node_state },
+          }
+        end)
+
+      -- Was die RT-Node selbst als Problem meldet (rt2_problems.lua), schon
+      -- dort entprellt. Einzelheiten stehen in details.lines und auf dem
+      -- RT-Monitor.
+      local problems = type(node.rt) == "table" and type(node.rt.problems) == "table" and node.rt.problems or {}
+      emit(string.format("RT_PROBLEM|%s", tostring(node.id)), reachable and #problems > 0, opts(0), function()
+        local lines = {}
+        for _, line in ipairs(problems) do lines[#lines + 1] = tostring(line) end
+        local more = #lines > 1 and string.format(" (+%d)", #lines - 1) or ""
         return {
-          code = "RT_SAFE_MODE",
-          severity = "CRITICAL",
+          code = "RT_PROBLEM",
+          severity = "WARN",
           scope = "NODE",
-          source = build_source(node, nil),
-          title = "RT node in SAFE/EMERGENCY",
-          message = string.format("%s ist im Zustand %s", tostring(node.id), node_state),
-          details = { state = node_state }
+          source = build_source(node),
+          title = "RT meldet ein Problem",
+          message = string.format("%s: %s%s -- Details am RT-Monitor", tostring(node.id), tostring(lines[1] or "?"), more),
+          details = { lines = lines },
         }
       end)
 
-      local turbines = node.turbines or {}
-      for _, turbine in ipairs(turbines) do
-        local rpm = turbine.rpm or 0
-        local turbine_id = turbine.id or turbine.name
-        local low_active = rpm > 0 and rpm < warn_low and (demand or (node.output or 0) > 0)
-        local low_key = string.format("TURBINE_RPM_LOW|%s|%s", tostring(node.id), tostring(turbine_id))
-        emit(low_key, low_active, base_opts, function()
-          return {
-            code = "TURBINE_RPM_LOW",
-            severity = "WARN",
-            scope = "DEVICE",
-            source = build_source(node, turbine_id),
-            title = "Turbine RPM low",
-            message = string.format("%s %.0f RPM", tostring(turbine_id or "turbine"), rpm),
-            details = { rpm = rpm, threshold = warn_low }
-          }
-        end)
-
-        local high_active = rpm > crit_high
-        local high_key = string.format("TURBINE_OVERSPEED|%s|%s", tostring(node.id), tostring(turbine_id))
-        emit(high_key, high_active, base_opts, function()
-          return {
-            code = "TURBINE_OVERSPEED",
-            severity = "CRITICAL",
-            scope = "DEVICE",
-            source = build_source(node, turbine_id),
-            title = "Turbine overspeed",
-            message = string.format("%s %.0f RPM", tostring(turbine_id or "turbine"), rpm),
-            details = { rpm = rpm, threshold = crit_high }
-          }
-        end)
-
-        local coil_active = turbine.coil_engaged and rpm > 0 and rpm < warn_low
-        local coil_key = string.format("COIL_EARLY|%s|%s", tostring(node.id), tostring(turbine_id))
-        emit(coil_key, coil_active, base_opts, function()
-          return {
-            code = "COIL_EARLY",
-            severity = "WARN",
-            scope = "DEVICE",
-            source = build_source(node, turbine_id),
-            title = "Coil engaged early",
-            message = string.format("%s coil at %.0f RPM", tostring(turbine_id or "turbine"), rpm),
-            details = { rpm = rpm, threshold = warn_low }
-          }
-        end)
-      end
-
-      local reactors = node.reactors or {}
-      local steam_target = number_or(node.steam, 0)
-      local steam_prod = 0
-      for _, reactor in ipairs(reactors) do
-        steam_prod = steam_prod + number_or(reactor.steam_production, 0)
-      end
-      local deficit = steam_target > 0 and steam_prod < steam_target * (cfg.steam_deficit_pct or 0.9)
-      for _, reactor in ipairs(reactors) do
-        local reactor_id = reactor.id or reactor.name
-
+      for _, reactor in ipairs(node.reactors or {}) do
         if type(reactor.alias) == "string" and reactor.alias ~= "" then
           local alias_key = reactor.alias:lower()
-          local global_id = tostring(node.id) .. ":" .. tostring(reactor_id)
+          local global_id = tostring(node.id) .. ":" .. tostring(reactor.id or reactor.name)
           local occurrences = alias_seen[alias_key]
           if not occurrences then occurrences = {}; alias_seen[alias_key] = occurrences end
-          local already_listed = false
+          local listed = false
           for _, occ in ipairs(occurrences) do
-            if occ.global_id == global_id then already_listed = true break end
+            if occ.global_id == global_id then listed = true break end
           end
-          if not already_listed then
-            occurrences[#occurrences + 1] = { global_id = global_id, alias = reactor.alias }
-          end
+          if not listed then occurrences[#occurrences + 1] = { global_id = global_id, alias = reactor.alias } end
         end
-
-        local rod_key = string.format("REACTOR_RODS_STUCK|%s|%s", tostring(node.id), tostring(reactor_id))
-        local rod_state = rule_state(self, rod_key)
-        local rods = reactor.rods_level
-        if rods ~= nil then
-          if rod_state.last_rods ~= rods then
-            rod_state.last_rods = rods
-            rod_state.last_change = now
-          end
-        end
-        local stuck_active = deficit and rods ~= nil and rod_state.last_change and (now - rod_state.last_change) >= (cfg.rod_stuck_secs or 20) * 1000
-        emit(rod_key, stuck_active, base_opts, function()
-          return {
-            code = "REACTOR_RODS_STUCK",
-            severity = "WARN",
-            scope = "DEVICE",
-            source = build_source(node, reactor_id),
-            title = "Reactor rods stuck",
-            message = string.format("%s rods %.0f%%, steam %.0f/%.0f", tostring(reactor_id or "reactor"), rods or 0, steam_prod, steam_target),
-            details = { rods = rods, steam_target = steam_target, steam_production = steam_prod }
-          }
-        end)
       end
     end
   end
 
-  -- Emitted for every alias seen THIS cycle (not only currently-duplicate
-  -- ones) so a name that drops back to a single reactor (renamed on one
-  -- node) clears normally instead of leaving a stale active alert. An
-  -- alias that stops being sent by any node at all still leaves its state
-  -- entry un-cleared, same as this file's other per-device keys.
+  -- Fuer jeden in DIESEM Durchlauf gesehenen Namen, damit ein umbenannter
+  -- Reaktor die Meldung wieder gehen laesst.
   for alias_key, occurrences in pairs(alias_seen) do
-    local duplicate_key = "REACTOR_NAME_DUPLICATE|" .. alias_key
-    emit(duplicate_key, #occurrences > 1, base_opts, function()
+    emit("REACTOR_NAME_DUPLICATE|" .. alias_key, #occurrences > 1, opts(), function()
       local ids = {}
       for _, occ in ipairs(occurrences) do ids[#ids + 1] = occ.global_id end
       table.sort(ids)
@@ -401,115 +332,66 @@ function rules:evaluate(context)
         severity = "WARN",
         scope = "SYSTEM",
         source = { node_id = "MASTER", role = "MASTER" },
-        title = "Duplicate reactor name",
+        title = "Reaktorname doppelt",
         message = string.format("Name '%s' ist mehrfach vergeben: %s", occurrences[1].alias, table.concat(ids, ", ")),
-        details = { alias = occurrences[1].alias, reactors = ids }
+        details = { alias = occurrences[1].alias, reactors = ids },
       }
     end)
   end
 
+  -- Energie niedrig, mit Abstand zwischen Kommen und Gehen: kommt bei
+  -- alarm_energy_low_pct, geht erst wieder ab alarm_energy_low_clear_pct.
   if capacity > 0 then
     local pct = (stored / capacity) * 100
-    local warn = cfg.energy_warn_pct or 25
-    local crit = cfg.energy_crit_pct or 10
-    local active = pct <= warn
-    local key = "ENERGY_LOW"
-    emit(key, active, base_opts, function()
-      -- A low/not-full total energy level is expected operating behavior,
-      -- not a fault: capped at WARN, never CRITICAL ("Störung").
-      local severity = "WARN"
+    local low = number_or(cfg.alarm_energy_low_pct, 10)
+    local clear = math.max(low, number_or(cfg.alarm_energy_low_clear_pct, 15))
+    local state = rule_state(self, "ENERGY_LOW")
+    local low_active = pct <= low or (state.active and pct < clear)
+    emit("ENERGY_LOW", low_active, opts(), function()
       return {
         code = "ENERGY_LOW",
-        severity = severity,
+        severity = "WARN",
         scope = "SYSTEM",
         source = { node_id = "MASTER", role = "MASTER" },
-        title = "Energy low",
-        message = string.format("Total energy %.1f%%", pct),
-        details = { percent = pct, warn = warn, crit = crit }
+        title = "Energie niedrig",
+        message = string.format("Speicher %.1f %% (Warnung ab %.0f %%, weg ab %.0f %%)", pct, low, clear),
+        details = { percent = pct, low = low, clear = clear },
       }
     end)
   end
 
-  local matrix_warn = cfg.matrix_warn_full_pct or 90
-  for _, entry in ipairs(matrices) do
-    local matrix = entry.matrix
-    local node = entry.node
-    local percent = (matrix.percent or 0) * 100
-    local active = percent >= matrix_warn
-    local matrix_id = matrix.id or matrix.name or matrix.label
-    local key = string.format("MATRIX_NEAR_FULL|%s|%s", tostring(node.id), tostring(matrix_id))
-    emit(key, active, base_opts, function()
-      return {
-        code = "MATRIX_NEAR_FULL",
-        severity = "WARN",
-        scope = "DEVICE",
-        source = build_source(node, matrix_id),
-        title = "Matrix near full",
-        message = string.format("%s %.1f%%", tostring(matrix.label or matrix_id or "matrix"), percent),
-        details = { percent = percent, threshold = matrix_warn }
-      }
-    end)
-  end
-
-  -- Redundanz-Warnung: wenn nur noch genau ein RT-Node aktiv zugewiesen ist,
-  -- und dieser Node bei einem Ausfall den globalen Leistungsbedarf allein
-  -- nicht mehr decken könnte, warnt der Master proaktiv — bevor der zweite
-  -- Node tatsächlich ausfällt, nicht erst danach. Nutzt dieselben Felder
-  -- (node.assignment_state, node.capacity_max, context.power_target) wie
-  -- die uebrige Setpoint-/Zuweisungslogik in rt_sync.lua. active_rt/
-  -- total_capacity wurden bereits im Hauptloop oben mitgezaehlt.
+  -- Nur noch ein RT-Node liefert, und ohne ihn reichte der Rest nicht fuer
+  -- den Bedarf. Lange Entprellung: MASTER verschiebt Zuweisungen selbst.
   do
-    local redundancy_active = false
-    local sole_node = nil
-    if #active_rt == 1 then
-      sole_node = active_rt[1]
-      local sole_capacity = number_or(sole_node.capacity_max, 0)
-      local target = tonumber(context.power_target) or 0
-      -- Warnt nur wenn tatsaechlich Bedarf besteht (target > 0) und die
-      -- verbleibende Gesamtkapazitaet OHNE diesen einen Node (also
-      -- total_capacity - sole_capacity) den Bedarf nicht mehr decken wuerde.
-      local remaining_without_sole = total_capacity - sole_capacity
-      redundancy_active = target > 0 and remaining_without_sole < target
-    end
-
-    local redundancy_key = "RT_NO_REDUNDANCY"
-    emit(redundancy_key, redundancy_active, {
-      raise_after_s = cfg.redundancy_warn_after_s or base_opts.raise_after_s,
-      clear_after_s = cfg.alert_clear_after_s or cfg.alert_clear_s or base_opts.clear_after_s,
-      cooldown_s = cfg.redundancy_cooldown_s or 60
-    }, function()
+    local sole = (#active_rt == 1) and active_rt[1] or nil
+    local target = tonumber(context.power_target) or 0
+    local redundancy_active = sole ~= nil and target > 0
+      and (total_capacity - number_or(sole.capacity_max, 0)) < target
+    emit("RT_NO_REDUNDANCY", redundancy_active, opts(60, 30, 60), function()
       return {
         code = "RT_NO_REDUNDANCY",
         severity = "WARN",
         scope = "SYSTEM",
-        source = sole_node and build_source(sole_node, nil) or { node_id = "MASTER", role = "MASTER" },
-        title = "No RT redundancy",
-        message = string.format(
-          "Nur %s liefert aktiv — bei Ausfall waere der Bedarf nicht gedeckt",
-          sole_node and tostring(sole_node.id) or "1 Node"
-        ),
-        details = { active_nodes = 1, total_capacity = total_capacity, power_target = context.power_target }
+        source = sole and build_source(sole) or { node_id = "MASTER", role = "MASTER" },
+        title = "Keine RT-Reserve",
+        message = string.format("Nur %s liefert -- faellt sie aus, reicht der Rest nicht",
+          sole and tostring(sole.id) or "eine RT-Node"),
+        details = { total_capacity = total_capacity, power_target = context.power_target },
       }
     end)
   end
 
-  -- RT-SAFE-Warnung (Feature 2026-07-02, fuer Speaker-Alarm-Event
-  -- "safe_mode"): pro RT-Node ein eigener CRITICAL-Alert, wenn der Node im
-  -- SAFE- oder EMERGENCY-Zustand ist -- bereits im Hauptloop oben emittiert.
-
   if context.recovery_notice then
     local recovery = context.recovery_notice
-    local active = recovery.active
-    local key = "UPDATE_RECOVERY"
-    emit(key, active, base_opts, function()
+    emit("UPDATE_RECOVERY", recovery.active, opts(), function()
       return {
         code = "UPDATE_RECOVERY",
-        severity = "WARN",
+        severity = "INFO",
         scope = "SYSTEM",
         source = { node_id = "MASTER", role = "MASTER" },
-        title = "Update recovery",
-        message = recovery.message or "Update recovery executed",
-        details = recovery.details
+        title = "Update-Rueckfall",
+        message = recovery.message or "Update-Rueckfall ausgefuehrt",
+        details = recovery.details,
       }
     end)
   end

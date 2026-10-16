@@ -64,6 +64,13 @@ local function rt_status(model)
   if assignment == "shutdown" then return "SYSTEM FAHRT HERUNTER", "muted" end
   if assignment == "shed" or assignment == "standby" then return "WARTET AUF LASTZUWEISUNG", "muted" end
   if assignment == "startup" then return "SYSTEM FAHRT HOCH", "LIMITED" end
+  -- Was MASTER als "RT meldet ein Problem" anzeigt, steht hier zuerst --
+  -- der Betreiber schaut genau dafuer auf diesen Schirm (rt2_problems.lua).
+  local problems = type(model.problems) == "table" and model.problems or {}
+  if #problems > 0 then
+    local more = #problems > 1 and string.format(" (+%d)", #problems - 1) or ""
+    return "PROBLEM: " .. tostring(problems[1]) .. more, "WARNING"
+  end
   -- Waehrend des Einlernens faehrt die ganze Flotte auf Zieldrehzahl und
   -- die MASTER-Vorgabe ist uebersteuert. Das gehoert deutlich dran, sonst
   -- sieht es wie eine Fehlfunktion aus ("warum laufen alle?").
@@ -375,18 +382,28 @@ function M.render_diagnostics(mon, model)
     }
   end
 
+  -- Zuerst die eigenen Probleme (dieselben Zeilen, die MASTER als "RT
+  -- meldet ein Problem" zeigt, rt2_problems.lua), dann MASTERs Meldungen
+  -- zu dieser Node.
   local alerts = model.local_alerts or {}
+  local problems = type(model.problems) == "table" and model.problems or {}
+  local rows = {}
+  for _, line in ipairs(problems) do
+    rows[#rows + 1] = { label = "PROBLEM", value = tostring(line), status = "WARNING", icon = "warning" }
+  end
+  for _, a in ipairs(alerts) do
+    local sev = tostring(a.severity or "INFO")
+    local key = sev == "CRITICAL" and "EMERGENCY" or (sev == "WARN" or sev == "WARNING") and "WARNING" or "LIMITED"
+    rows[#rows + 1] = { label = tostring(a.code or sev), value = tostring(a.title or a.message or "alert"), status = key, icon = "warning" }
+  end
   if h >= 26 then
-    section_arrow(mon, 2, 23, w - 3, "AKTIVE ALARME", #alerts > 0 and "WARNING" or "OK", "warning")
-    if #alerts == 0 then
-      mux.data_row(mon, 2, 25, w - 3, { label = "Keine aktiven Alarme", value = "", status = "OK", icon = "ok" })
+    section_arrow(mon, 2, 23, w - 3, "PROBLEME / ALARME", #rows > 0 and "WARNING" or "OK", "warning")
+    if #rows == 0 then
+      mux.data_row(mon, 2, 25, w - 3, { label = "Keine Probleme, keine Alarme", value = "", status = "OK", icon = "ok" })
     else
       local y = 25
-      for i = 1, math.min(#alerts, math.max(0, h - y - 1)) do
-        local a = alerts[i]
-        local sev = tostring(a.severity or "INFO")
-        local key = sev == "CRITICAL" and "EMERGENCY" or (sev == "WARN" or sev == "WARNING") and "WARNING" or "LIMITED"
-        mux.data_row(mon, 2, y, w - 3, { label = tostring(a.code or sev), value = tostring(a.title or a.message or "alert"), status = key, icon = "warning" })
+      for i = 1, math.min(#rows, math.max(0, h - y - 1)) do
+        mux.data_row(mon, 2, y, w - 3, rows[i])
         y = y + 1
       end
     end
