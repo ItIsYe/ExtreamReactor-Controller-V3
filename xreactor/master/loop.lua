@@ -110,12 +110,13 @@ function M.run(runtime, constants)
       return
     end
     -- MASTER-Gesamtampel (Feature, 2026-07-02): siehe
-    -- xreactor/optional/master_ampel.lua. Eigenes Rate-Limiting (alle ~3s),
-    -- nicht bei jedem 0.5s-Loop-Tick neu rechnen. Vollstaendig
-    -- fehlerisoliert wie alle optional/-Module.
+    -- xreactor/optional/master_ampel.lua. Eigenes Rate-Limiting (jede
+    -- Sekunde -- seit v834 blinkt sie, solange eine gegangene Stoerung
+    -- nicht quittiert ist; bis v833 alle ~3 s), nicht bei jedem
+    -- 0.5s-Loop-Tick. Vollstaendig fehlerisoliert wie alle optional/-Module.
     runtime.state.last_master_ampel_check = runtime.state.last_master_ampel_check or 0
     local now_ampel = os.epoch and os.epoch("utc") or 0
-    if now_ampel - runtime.state.last_master_ampel_check >= 3000 then
+    if now_ampel - runtime.state.last_master_ampel_check >= 1000 then
       runtime.state.last_master_ampel_check = now_ampel
       pcall(function()
         local ok_mod, mod = pcall(require, "optional.master_ampel")

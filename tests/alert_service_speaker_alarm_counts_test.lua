@@ -20,7 +20,9 @@ package.loaded['core.utils'] = {
   log = function() end,
 }
 
-local counts_by_severity = { INFO = 0, WARN = 0, CRITICAL = 1 }
+-- Seit v834 hupt nur eine anstehende, NICHT quittierte Stoerung
+-- (UNACKED_ACTIVE_CRITICAL, core/alerts.lua).
+local counts_by_severity = { INFO = 0, WARN = 0, CRITICAL = 1, UNACKED_ACTIVE_CRITICAL = 1 }
 
 package.loaded['core.alerts'] = {
   new = function()
@@ -73,6 +75,14 @@ end
 
 if play_calls[1] ~= 'alarm' then
   error("expected speaker_alarm to play 'alarm' for an active CRITICAL count, got: " .. tostring(play_calls[1]))
+end
+
+-- Quittiert, Stoerung steht aber noch an: die Hupe schweigt.
+counts_by_severity.UNACKED_ACTIVE_CRITICAL = 0
+service.last_eval = 0
+service:tick()
+if #play_calls ~= 1 then
+  error('an acknowledged CRITICAL must not sound the horn again, got: ' .. table.concat(play_calls, ','))
 end
 
 -- Uebergang auf keine kritischen Alerts mehr -> genau einmal 'clear' spielen.

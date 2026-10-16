@@ -43,7 +43,9 @@ function M.build_master_alert_payload(alert_service, config)
   local active = alert_service and alert_service:get_active() or {}
   for _, alert in ipairs(active) do
     local node_id = alert.source and alert.source.node_id
-    if node_id then
+    -- Nur Anstehendes an die Node: eine gegangene, noch nicht quittierte
+    -- Stoerung (core/alerts.lua, seit v834) ist dort keine aktuelle Lage.
+    if node_id and alert.active ~= false then
       local entry = by_node[node_id] or { critical = 0, top = {} }
       if alert.severity == "CRITICAL" then entry.critical = entry.critical + 1 end
       if #entry.top < limit then

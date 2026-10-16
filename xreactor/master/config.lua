@@ -36,6 +36,12 @@ local CONFIG = {
   -- (energy_warn_pct usw.) in /xreactor_config/master.lua fest stehen.
   DEFAULT_ALARM_ENERGY_LOW_PCT = 10,
   DEFAULT_ALARM_ENERGY_LOW_CLEAR_PCT = 15,
+  -- Meldungen (v834): eine gegangene, nicht quittierte Stoerung wird nach
+  -- ..._AUTO_ACK_MIN ohne Wiederkehr automatisch quittiert; kommt eine
+  -- quittierte Ursache innerhalb von ..._REACK_WINDOW_MIN wieder, kommt sie
+  -- quittiert zurueck (Flatterschutz).
+  DEFAULT_ALARM_AUTO_ACK_MIN = 30,
+  DEFAULT_ALARM_REACK_WINDOW_MIN = 30,
   DEFAULT_STEAM_DEFICIT_PCT = 0.9,
   DEFAULT_ALERT_MUTE_DEFAULT_MINUTES = 10,
   DEFAULT_ALERT_MUTE_DURATIONS = { 5, 15, 30, 60 },
@@ -162,6 +168,8 @@ return {
   rod_stuck_secs = CONFIG.DEFAULT_ROD_STUCK_SECS,
   alarm_energy_low_pct = CONFIG.DEFAULT_ALARM_ENERGY_LOW_PCT,
   alarm_energy_low_clear_pct = CONFIG.DEFAULT_ALARM_ENERGY_LOW_CLEAR_PCT,
+  alarm_auto_ack_min = CONFIG.DEFAULT_ALARM_AUTO_ACK_MIN,
+  alarm_reack_window_min = CONFIG.DEFAULT_ALARM_REACK_WINDOW_MIN,
   steam_deficit_pct = CONFIG.DEFAULT_STEAM_DEFICIT_PCT,
   channels = { control = CONFIG.DEFAULT_COMMS_CHANNEL, status = CONFIG.DEFAULT_STATUS_CHANNEL },
   comms = {

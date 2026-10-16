@@ -1,8 +1,8 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 833,
-  manifest_id = "manifest-v833",
-  payload_digest = "29e963b7",
+  manifest_version = 834,
+  manifest_id = "manifest-v834",
+  payload_digest = "588bdb11",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5696, hash = "14622fa6", always = true },
-  { path = "release.lua", size_bytes = 376, hash = "203ca358", always = true },
+  { path = "release.lua", size_bytes = 376, hash = "f301ad57", always = true },
   { path = "start.lua", size_bytes = 12891, hash = "11149123", always = true },
   { path = "shared/build_info.lua", size_bytes = 2897, hash = "440a6f12", always = true },
   { path = "shared/constants.lua", size_bytes = 3629, hash = "60d09111", always = true },
@@ -49,11 +49,11 @@ return {
   { path = "core/window_buffer.lua", size_bytes = 3681, hash = "1743677d", required_for={"RT","ENERGY","FUEL","REPROCESSING"} },
   { path = "core/utils.lua", size_bytes = 38597, hash = "9c14ab3f" },
   { path = "core/remote_update.lua", size_bytes = 4347, hash = "773d370e" },
-  { path = "core/alerts.lua", size_bytes = 11106, hash = "7ca6c61c", required_for={"MASTER"} },
+  { path = "core/alerts.lua", size_bytes = 15365, hash = "4f5c877a", required_for={"MASTER"} },
   -- required_for={"MASTER"}: nur master/runtime_loop.lua require()t
   -- diese Datei tatsaechlich (siehe auch core/alert_rules.lua, ihre
   -- Abhaengigkeit, ebenso auf MASTER beschraenkt).
-  { path = "services/alert_service.lua", size_bytes = 14539, hash = "60d734ad", required_for={"MASTER"} },
+  { path = "services/alert_service.lua", size_bytes = 16404, hash = "476addf0", required_for={"MASTER"} },
   { path = "services/comms_service.lua", size_bytes = 24611, hash = "78af500d" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4", required_for={"MASTER"} },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de", required_for={"RT","ENERGY","FUEL","REPROCESSING"} },
@@ -70,11 +70,11 @@ return {
   roles = {
     master = {
     { path = "master/config_edits.lua", size_bytes = 10603, hash = "6efd3ec5", required_for={"MASTER"} },
-    { path = "master/context.lua", size_bytes = 5746, hash = "e09dcc03", required_for={"MASTER"} },
-    { path = "master/loop.lua", size_bytes = 5810, hash = "f767f671", required_for={"MASTER"} },
+    { path = "master/context.lua", size_bytes = 5921, hash = "c7f0ab58", required_for={"MASTER"} },
+    { path = "master/loop.lua", size_bytes = 5906, hash = "30076c3b", required_for={"MASTER"} },
     { path = "core/alert_rules.lua", size_bytes = 16100, hash = "ff5f222a", required_for={"MASTER"} },
-    { path = "master/config.lua", size_bytes = 8167, hash = "f7d088aa", required_for={"MASTER"} },
-    { path = "master/housekeeping.lua", size_bytes = 6213, hash = "5efeea43", required_for={"MASTER"} },
+    { path = "master/config.lua", size_bytes = 8629, hash = "4416bc3d", required_for={"MASTER"} },
+    { path = "master/housekeeping.lua", size_bytes = 6388, hash = "fac082fe", required_for={"MASTER"} },
     { path = "master/fuel_relay.lua", size_bytes = 4575, hash = "9960a5b2", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 9753, hash = "0ca2e405", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
@@ -119,7 +119,7 @@ return {
     -- irgendeiner Rolle auftaucht; trotzdem im Manifest gefuehrt, damit
     -- Groesse/Hash bei gezieltem manuellem Download verifizierbar sind.
     { path = "optional/pocket_client.lua", size_bytes = 10477, hash = "bf1a75b4", optional=true, feature="pocket_client", required_for={} },
-    { path = "optional/master_ampel.lua", size_bytes = 14211, hash = "bb46a357", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 14899, hash = "98a60114", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 51801, hash = "482f2d16", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },

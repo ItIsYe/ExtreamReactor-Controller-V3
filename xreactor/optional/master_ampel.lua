@@ -14,8 +14,13 @@
 --               absichtlich abgeschaltetes System ist kein Fehlerzustand und
 --               soll nicht rot leuchten.
 --   2. ROT    -- eine kritische Node (RT, ENERGY oder FUEL) ist offline,
---               ODER mindestens ein CRITICAL-Alert ist aktiv, ODER ein
---               RT-Node steht in SAFE/EMERGENCY.
+--               ODER mindestens eine Stoerung (CRITICAL) steht an --
+--               quittiert oder nicht --, ODER ein RT-Node steht in
+--               SAFE/EMERGENCY.
+--   2b. ROT BLINKEND -- keine Stoerung steht mehr an, aber eine gegangene
+--               ist noch nicht quittiert (v834, Betreiber: "Blinken, wenn
+--               nur was quittiert werden muss; wenn Stoerung akut ist,
+--               rot"). Im Sekundentakt rot/aus.
 --   3. ORANGE -- mindestens ein WARN-Alert aktiv (deckt u.a. die
 --               RT_NO_REDUNDANCY-Warnung und Energy-Fuellstand-Warnungen ab)
 --   4. GELB   -- mindestens ein RT-Node lernt gerade seine Kapazitaet
@@ -50,6 +55,7 @@ local COLORS = {
   orange = colors.orange,
   red    = colors.red,
   gray   = colors.gray,
+  black  = colors.black,
 }
 
 M.REPAINT_S = 10
@@ -204,6 +210,9 @@ local function color_for(runtime, constants, offline)
     end
   end
 
+  -- 2b. ROT BLINKEND: nur noch etwas zu quittieren.
+  if (counts.GONE_UNACKED_CRITICAL or 0) > 0 then return "red_blink" end
+
   -- 3. ORANGE: Warnungen (deckt RT_NO_REDUNDANCY, Energy-Fuellstand etc. ab).
   if (counts.WARN or 0) > 0 then return "orange" end
 
@@ -303,7 +312,13 @@ function M.update(runtime, constants)
       cache.offline_label = offline_label
     end
     if not mon then return end
-    local color = COLORS[color_key] or COLORS.gray
+    local color
+    if color_key == "red_blink" then
+      -- Sekundentakt: update() laeuft dafuer jede Sekunde (master/loop.lua).
+      color = (math.floor(now) % 2 == 0) and COLORS.red or COLORS.black
+    else
+      color = COLORS[color_key] or COLORS.gray
+    end
     local due = cache.painted_color ~= color or cache.painted_at == nil
       or now - cache.painted_at >= M.REPAINT_S
     if not due then return end

@@ -44,6 +44,8 @@ function M.normalize_config(config)
   if config.alarm_energy_low_clear_pct < config.alarm_energy_low_pct then
     config.alarm_energy_low_clear_pct = config.alarm_energy_low_pct
   end
+  config.alarm_auto_ack_min    = clamp(config.alarm_auto_ack_min or 30, 30, 1, 1440)
+  config.alarm_reack_window_min = clamp(config.alarm_reack_window_min or 30, 30, 0, 1440)
   config.rpm_warn_low          = clamp(config.rpm_warn_low  or 800,  800,  0, 5000)
   config.rpm_crit_high         = clamp(config.rpm_crit_high or 1800, 1800, 0, 10000)
   if config.rpm_crit_high < config.rpm_warn_low then config.rpm_crit_high = config.rpm_warn_low end

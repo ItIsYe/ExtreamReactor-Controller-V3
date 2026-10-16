@@ -59,9 +59,13 @@ end
 function alert_service.new(opts)
   opts = opts or {}
   local config = opts.config or {}
+  -- Automatische Quittung gegangener Stoerungen und Flatterschutz (v834,
+  -- siehe core/alerts.lua): Minuten in der MASTER-Config.
   local alerts = alerts_lib.new({
     info_ttl_s = config.alert_info_ttl or 10,
-    history_size = config.alert_history_size or 100
+    history_size = config.alert_history_size or 100,
+    auto_ack_s = (tonumber(config.alarm_auto_ack_min) or 30) * 60,
+    reack_window_s = (tonumber(config.alarm_reack_window_min) or 30) * 60,
   })
   local state_path = config.alert_state_path or "/xreactor_config/alerts_state.lua"
   local state = utils.load_config(state_path, state_defaults)
@@ -103,6 +107,9 @@ function alert_service.new(opts)
     state_path = state_path,
     state = state,
     clear_pending = {},
+    -- Gesperrte Schluessel, deren Unterdrueckung schon im Verlauf steht --
+    -- frueher kam alle 6 s je gesperrter Meldung ein Eintrag dazu.
+    muted_noted = {},
     last_eval_duration_ms = 0,
     last_eval_ts = 0,
     muted_last = 0,
@@ -142,9 +149,10 @@ function alert_service:_is_muted(entry, now)
   local code = entry.code
   local source = entry.source or {}
   local node_id = source.node_id
+  local function until_of(e) return type(e) == "table" and (e.until_ts or e["until"]) or e end
   local rule_entry = code and self.state.mutes.rules[code] or nil
   if rule_entry and not is_expired(rule_entry, now) then
-    return "rule", code
+    return "rule", code, until_of(rule_entry)
   end
   if rule_entry then
     self.state.mutes.rules[code] = nil
@@ -152,7 +160,7 @@ function alert_service:_is_muted(entry, now)
   if node_id then
     local node_entry = self.state.mutes.nodes[node_id]
     if node_entry and not is_expired(node_entry, now) then
-      return "node", node_id
+      return "node", node_id, until_of(node_entry)
     end
     if node_entry then
       self.state.mutes.nodes[node_id] = nil
@@ -229,10 +237,14 @@ function alert_service:tick()
     self:_clear_alert(key, now)
   end
   for _, entry in ipairs(alerts or {}) do
-    local muted_kind = self:_is_muted(entry, now)
+    local muted_kind, _, muted_until = self:_is_muted(entry, now)
+    local key = build_alert_key(entry)
     if muted_kind then
       muted_count = muted_count + 1
-      if self.config.alert_log_muted_events then
+      -- Einmal je Sperre in den Verlauf, nicht bei jeder Auffrischung.
+      local noted = key and self.muted_noted[key] == (muted_until or true)
+      if key then self.muted_noted[key] = muted_until or true end
+      if self.config.alert_log_muted_events and not noted then
         local muted_entry = {
           severity = "INFO",
           scope = entry.scope,
@@ -246,15 +258,19 @@ function alert_service:tick()
         self:log_alert(muted_entry, "muted")
       end
     else
+      if key then self.muted_noted[key] = nil end
       local result = self.alerts:raise(entry)
       if result and result.log and result.alert then
         self:log_alert(result.alert, result.event)
       end
     end
   end
-  local expired = self.alerts:tick(now)
+  local expired, auto_acked = self.alerts:tick(now)
   for _, alert in ipairs(expired or {}) do
     self:log_alert(alert, "expired")
+  end
+  for _, alert in ipairs(auto_acked or {}) do
+    self:log_alert(alert, "auto_ack")
   end
   self.muted_last = muted_count
   self.last_eval_duration_ms = now_ms() - eval_start
@@ -265,12 +281,16 @@ function alert_service:tick()
   -- xreactor/optional/speaker_alarm.lua. Vollstaendig fehlerisoliert —
   -- fehlt der Speaker oder ist opts.speaker_alarm nicht gesetzt, passiert
   -- hier einfach nichts.
+  -- Hupe (v834): nur solange eine Stoerung ANSTEHT und noch NICHT
+  -- quittiert ist -- Quittieren stellt sie ab. Bis v833 lief sie alle 8 s,
+  -- solange irgendeine Stoerung stand, quittiert oder nicht.
   if self.speaker_alarm then
     local counts = self:get_counts()
     local critical_active = (counts.CRITICAL or 0) > 0
-    if critical_active then
+    if (counts.UNACKED_ACTIVE_CRITICAL or 0) > 0 then
       pcall(self.speaker_alarm.play, "alarm")
-    elseif self.last_critical_active == true then
+    end
+    if not critical_active and self.last_critical_active == true then
       -- Uebergang von "war aktiv" zu "jetzt nicht mehr aktiv" — Entwarnung
       -- nur EINMAL beim Uebergang spielen, nicht dauerhaft solange kein
       -- Alarm aktiv ist (das waere sinnlos haeufig).
@@ -278,22 +298,24 @@ function alert_service:tick()
     end
     self.last_critical_active = critical_active
 
-    -- node_offline / safe_mode: nur beim NEUEN Auftreten eines konkreten
-    -- Alerts spielen, nicht bei jedem tick() solange er noch aktiv ist —
-    -- verfolgt dafuer die zuletzt gesehenen aktiven Alert-IDs pro Code.
+    -- node_offline / safe_mode: einmal je Auftreten (Eintrag + Zaehler --
+    -- ein Eintrag bleibt beim Wiederkommen derselbe), und nur, solange er
+    -- ansteht und nicht quittiert ist.
     self.seen_offline_ids = self.seen_offline_ids or {}
     self.seen_safe_ids = self.seen_safe_ids or {}
     local active = self.alerts:get_active()
     local still_offline, still_safe = {}, {}
     for _, alert in ipairs(active) do
+      local occurrence = tostring(alert.id) .. "#" .. tostring(alert.count or 1)
+      local sounding = alert.active ~= false and not alert.acknowledged
       if alert.code == "NODE_COMMS_DOWN" then
-        still_offline[alert.id] = true
-        if not self.seen_offline_ids[alert.id] then
+        still_offline[occurrence] = true
+        if sounding and not self.seen_offline_ids[occurrence] then
           pcall(self.speaker_alarm.play, "node_offline")
         end
       elseif alert.code == "RT_SAFE_MODE" or alert.code == "RT_EMERGENCY" then
-        still_safe[alert.id] = true
-        if not self.seen_safe_ids[alert.id] then
+        still_safe[occurrence] = true
+        if sounding and not self.seen_safe_ids[occurrence] then
           pcall(self.speaker_alarm.play, "safe_mode")
         end
       end
@@ -303,16 +325,11 @@ function alert_service:tick()
   end
 end
 
+-- Die Meldungsliste: anstehende Eintraege und gegangene, noch nicht
+-- quittierte Stoerungen (alert.active sagt, welches). Wiederkehr steht in
+-- alert.count, nicht mehr in einem eigenen Zustand.
 function alert_service:get_active()
-  local active = self.alerts:get_active()
-  -- Feature 2026-07-02 (Alarm-Lifecycle): lifecycle_state direkt an jeden
-  -- Alert anhaengen, damit UI-Views es einfach als alert.lifecycle_state
-  -- lesen koennen, ohne selbst Zugriff auf das interne alerts-Objekt oder
-  -- dessen History zu brauchen.
-  for _, alert in ipairs(active) do
-    alert.lifecycle_state = self.alerts:lifecycle_state(alert)
-  end
-  return active
+  return self.alerts:get_active()
 end
 
 function alert_service:get_history()
@@ -335,7 +352,7 @@ function alert_service:get_top_critical(limit)
   local list = {}
   local max = limit or 3
   for _, alert in ipairs(self.alerts:get_active()) do
-    if alert.severity == "CRITICAL" then
+    if alert.severity == "CRITICAL" and alert.active ~= false then
       table.insert(list, alert)
       if #list >= max then
         break
@@ -345,10 +362,11 @@ function alert_service:get_top_critical(limit)
   return list
 end
 
+-- Quittieren ist einseitig: ein zweiter Aufruf aendert nichts.
 function alert_service:ack(id)
   local ok, alert = self.alerts:ack(id)
   if ok and alert then
-    self:log_alert(alert, alert.acknowledged and "ack" or "unack")
+    self:log_alert(alert, "ack")
   end
   return ok
 end
@@ -420,6 +438,17 @@ function alert_service:unmute_node(node_id)
     self:save_state()
     self:log_mute("unmute_node", node_id, nil)
   end
+  return true
+end
+
+-- Eine Node vergessen (abgebauter Rechner): ihre Eintraege und der Zustand
+-- ihrer Regeln verschwinden. Meldet sie sich wieder, beginnt alles neu.
+function alert_service:forget_node(node_id)
+  if not node_id then return false end
+  local removed = self.alerts:forget_node(node_id)
+  if self.rules and type(self.rules.forget_node) == "function" then self.rules:forget_node(node_id) end
+  utils.log(self.log_prefix, string.format("severity=INFO code=NODE_FORGOTTEN node=%s msg=%d Eintraege entfernt",
+    tostring(node_id), #(removed or {})), "INFO")
   return true
 end
 
