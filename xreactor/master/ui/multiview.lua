@@ -398,6 +398,12 @@ function M:handle_input(monitor_name, x, y)
   end
 
   local ok, hit = pcall(view.hit_test, session.render_mon or session.mon, x, y)
+  -- Jeder Tipp zeichnet beim naechsten Durchlauf neu (v837). Bis v836
+  -- tat das nur der Seitenwechsel: ein Tipp, der nur die Ansicht aendert
+  -- (Auswahl, Reiter, Blaettern auf der Seite MELDUNGEN), aendert das Model
+  -- nicht -- should_render_view() zeichnete dann erst beim Pflicht-Redraw,
+  -- bis zu 5 s spaeter, und es sah aus, als ginge der Tipp nicht.
+  self.sessions:mark_dirty(session, "input")
   local payload = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = ok and hit or nil, dispatched = false, handled = false }
 
   if not ok or type(hit) ~= "table" or not hit.type then

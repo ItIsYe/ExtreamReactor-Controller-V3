@@ -107,14 +107,18 @@ controller = controller_lib.new({
   alert_service = service, view_manager = view_manager, calc = {}, log = function() end,
 })
 
+-- Bewusst KEIN erzwungenes Neuzeichnen je Durchlauf: bis v836 setzte dieser
+-- Helfer jede Sitzung auf "dirty" und verdeckte so, dass ein Tipp auf der
+-- Seite (Auswahl, Reiter, Blaettern) das Modell nicht aendert und erst nach
+-- bis zu 5 s sichtbar wurde. Jetzt muss der Tipp selbst neu zeichnen lassen.
 local function draw()
-  for _, s in ipairs(view_manager.sessions:get_sessions()) do s.dirty = true end
   now = now + 1100
   controller.draw()
 end
 draw()
 local sessions = view_manager.sessions:get_sessions()
 sessions[4].view_key = 'alarms'
+sessions[4].dirty = true
 local function touch(x, y)
   view_manager:handle_input('aux', x, y)
   draw()

@@ -255,6 +255,17 @@ function alert_service:tick()
   for _, key in ipairs(clears or {}) do
     self:_clear_alert(key, now)
   end
+  -- Wartende Aufloesungen nach der Schonfrist nachholen (v837). Die Regeln
+  -- melden "ist weg" genau EINMAL (core/alert_rules.lua should_raise);
+  -- _clear_alert() merkt sich dabei nur den Zeitpunkt und loest erst nach
+  -- alert_clear_grace_s auf -- ein zweiter Aufruf kam aber nie. Damit ging
+  -- keine Meldung jemals (schon vor v833): keine Stoerung wurde zu "WEG",
+  -- keine Warnung verschwand, die automatische Quittung griff nie, und die
+  -- MASTER-Ampel blieb nach jedem Ausfall rot. Kommt die Ursache in der
+  -- Schonfrist wieder, hat raise() oben die Wartemarke schon geloescht.
+  for key in pairs(self.clear_pending) do
+    self:_clear_alert(key, now)
+  end
   for _, entry in ipairs(alerts or {}) do
     local muted_kind, _, muted_until = self:_is_muted(entry, now)
     local key = build_alert_key(entry)
