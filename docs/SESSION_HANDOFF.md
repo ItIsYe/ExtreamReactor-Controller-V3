@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-10-16 | beta | manifest-v835 | HEAD `dda3c3c7`**
+**Stand: 2026-10-16 | beta | manifest-v836 | HEAD `1b19815c`**
 
 ---
 
@@ -14,8 +14,8 @@ weiterhin gültig, aber nicht Gegenstand dieser Sitzung.
 | | |
 |---|---|
 | Branches | auf GitHub nur noch `beta` (Arbeitsstand) und `main` (wenn alles läuft); alle anderen am 2026-10-04 gelöscht |
-| HEAD | `dda3c3c7` |
-| Fassung | `manifest-v835` / `beta-v835`, Prüfsumme `25325aed` (aus `xreactor/release.lua`, nicht gezählt) |
+| HEAD | `1b19815c` |
+| Fassung | `manifest-v836` / `beta-v836`, Prüfsumme `e5de65eb` (aus `xreactor/release.lua`, nicht gezählt) |
 | Tests | 427 Lua + 45 Python, grün |
 | Arbeitsbaum | sauber, nichts Unverbuchtes |
 | Sprache | Oberfläche, Kommentare und Commit-Texte **deutsch** |
@@ -1123,9 +1123,17 @@ Tests: `alarm_rules_v833_test.lua`, `rt2_problems_test.lua` (Zwilling),
 Touch-Isolation neu; Mutationen 30 + 29 + 18, alle gefangen bis auf eine
 gleichwertige.
 
-**Offen / für später (nur Befund):** Grau (Leistungsziel 0) überdeckt an
-der MASTER-Ampel weiter alles, auch Blinken und Störungen. Nach einem
-MASTER-Neustart gibt es keine Liste erwarteter Nodes.
+**Offen / für später (nur Befund):** Nach einem MASTER-Neustart gibt es
+keine Liste erwarteter Nodes.
+
+### W) Umgesetzt am 2026-10-16 (v836): Störungen gehen vor Grau
+
+Auf die Frage, ob Grau (Leistungsziel 0 / RT-Hold) eine Störung und das
+Blinken weiter verdecken soll, Betreiber: „Nein“. MASTER-Ampel jetzt: rot →
+rot blinkend → grau → orange → gelb → grün. Bewusstes Abschalten macht
+nichts rot (RT-Hold = nur „nicht steuerbar“, SAFE nur bei echter
+Schutzauslösung); Warnungen und lernende RT-Nodes bleiben bei Grau grau.
+Test `master_ampel_critical_offline_test.lua`; 4 Mutationen gefangen.
 
 ## Fehler dieser Sitzung — damit sie sich nicht wiederholen
 
