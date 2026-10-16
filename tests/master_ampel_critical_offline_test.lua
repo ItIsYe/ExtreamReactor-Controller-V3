@@ -108,17 +108,33 @@ do
   assert_eq(ampel.determine_color(rt, constants), 'green', 'kein falsches Rot direkt nach der Rueckkehr')
 end
 
--- ══ 4. Grau geht vor; Rot geht vor Orange und Gelb ═════════════════════
+-- ══ 4. Stoerungen gehen vor Grau (v836); Rot vor Orange und Gelb ═══════
 
 do
+  -- Betreiber auf die Frage, ob Grau eine Stoerung und das Blinken weiter
+  -- verdecken soll: "Nein".
   local rt = world(function(w) go_offline(w.state.nodes['RT-1']); w.state.rt_global_off_hold = true end)
   local color, offline = ampel.determine_color(rt, constants)
-  assert_eq(color, 'gray', 'RT-Global-Hold: grau, auch mit ausgefallener Node')
-  assert_eq(table.concat(offline, ','), 'RT-1', 'die Liste kommt auch bei Grau')
+  assert_eq(color, 'red', 'RT-Global-Hold mit ausgefallener Node: rot')
+  assert_eq(table.concat(offline, ','), 'RT-1', 'mit der Liste')
   rt = world(function(w) go_offline(w.state.nodes['RT-1']); w.state.power_target = 0 end)
-  assert_eq(ampel.determine_color(rt, constants), 'gray', 'Leistungsziel 0: grau')
-  rt = world(function(w) go_offline(w.state.nodes['RT-1']); w.state.power_target = 0; w.state.active_profile = 'PEAK' end)
-  assert_eq(ampel.determine_color(rt, constants), 'red', 'PEAK-Anfahren ist nicht grau')
+  assert_eq(ampel.determine_color(rt, constants), 'red', 'Leistungsziel 0 (voller Speicher) mit ausgefallener Node: rot')
+  rt = world(function(w, counts) w.state.power_target = 0; counts.CRITICAL = 1 end)
+  assert_eq(ampel.determine_color(rt, constants), 'red', 'eine anstehende Stoerung kommt bei Grau durch')
+  rt = world(function(w) w.state.power_target = 0; w.state.nodes['RT-1'].state = 'EMERGENCY' end)
+  assert_eq(ampel.determine_color(rt, constants), 'red', 'RT im Schutzzustand kommt bei Grau durch')
+  rt = world(function(w, counts) w.state.rt_global_off_hold = true; counts.GONE_UNACKED_CRITICAL = 1 end)
+  assert_eq(ampel.determine_color(rt, constants), 'red_blink', 'das Blinken kommt bei Grau durch')
+  -- Ohne Stoerung bleibt die bewusst abgeschaltete Anlage grau -- auch mit
+  -- einer Warnung oder einem lernenden RT-Node.
+  rt = world(function(w, counts) w.state.rt_global_off_hold = true; counts.WARN = 3 end)
+  assert_eq(ampel.determine_color(rt, constants), 'gray', 'RT-Global-Hold, nur Warnungen: grau')
+  rt = world(function(w) w.state.power_target = 0; w.state.nodes['RT-1'].capacity_ready = false end)
+  assert_eq(ampel.determine_color(rt, constants), 'gray', 'Leistungsziel 0, RT lernt: grau')
+  rt = world(function(w) w.state.power_target = 0 end)
+  assert_eq(ampel.determine_color(rt, constants), 'gray', 'Leistungsziel 0, alles gut: grau')
+  rt = world(function(w) w.state.power_target = 0; w.state.active_profile = 'PEAK' end)
+  assert_eq(ampel.determine_color(rt, constants), 'green', 'PEAK-Anfahren ist nicht grau')
   rt = world(function(w, counts) go_offline(w.state.nodes['ENERGY-1']); counts.WARN = 2 end)
   assert_eq(ampel.determine_color(rt, constants), 'red', 'rot vor orange')
   rt = world(function(w) go_offline(w.state.nodes['FUEL-1']); w.state.nodes['RT-1'].capacity_ready = false end)
@@ -165,8 +181,9 @@ do
   local memory = {}
   local rt = world(function(w) w.state.power_target = 0 end)
   go_offline(rt.state.nodes['ENERGY-1'])
-  assert_eq(ampel.determine_color(rt, constants, memory), 'gray')
+  assert_eq(ampel.determine_color(rt, constants, memory), 'red', 'auch bei vollem Speicher rot (v836)')
   rt.state.nodes['ENERGY-1'] = nil
+  assert_eq(ampel.determine_color(rt, constants, memory), 'red', 'nach dem Loeschen weiter rot')
   rt.state.power_target = 100
   assert_eq(ampel.determine_color(rt, constants, memory), 'red', 'die waehrend Grau ausgefallene Node fehlt weiter')
 end

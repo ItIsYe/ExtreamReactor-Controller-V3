@@ -9,22 +9,28 @@
 --
 -- Prioritaet der Zustaende (hoechste zuerst -- die erste zutreffende
 -- Bedingung gewinnt):
---   1. GRAU   -- RT-Global-Hold aktiv, oder Leistungsziel 0 (ausser mitten
---               im PEAK-Anfahren). Bewusst hoechste Prioritaet: ein
---               absichtlich abgeschaltetes System ist kein Fehlerzustand und
---               soll nicht rot leuchten.
---   2. ROT    -- eine kritische Node (RT, ENERGY oder FUEL) ist offline,
+--   1. ROT    -- eine kritische Node (RT, ENERGY oder FUEL) ist offline,
 --               ODER mindestens eine Stoerung (CRITICAL) steht an --
 --               quittiert oder nicht --, ODER ein RT-Node steht in
 --               SAFE/EMERGENCY.
---   2b. ROT BLINKEND -- keine Stoerung steht mehr an, aber eine gegangene
+--   2. ROT BLINKEND -- keine Stoerung steht mehr an, aber eine gegangene
 --               ist noch nicht quittiert (v834, Betreiber: "Blinken, wenn
 --               nur was quittiert werden muss; wenn Stoerung akut ist,
 --               rot"). Im Sekundentakt rot/aus.
---   3. ORANGE -- mindestens ein WARN-Alert aktiv (deckt u.a. die
+--   3. GRAU   -- RT-Global-Hold aktiv, oder Leistungsziel 0 (ausser mitten
+--               im PEAK-Anfahren): Anlage bewusst aus.
+--   4. ORANGE -- mindestens ein WARN-Alert aktiv (deckt u.a. die
 --               RT_NO_REDUNDANCY-Warnung und Energy-Fuellstand-Warnungen ab)
---   4. GELB   -- mindestens ein RT-Node lernt gerade seine Kapazitaet
---   5. GRUEN  -- alles normal
+--   5. GELB   -- mindestens ein RT-Node lernt gerade seine Kapazitaet
+--   6. GRUEN  -- alles normal
+--
+-- Stoerungen vor Grau (v836, Betreiber auf die Frage, ob Grau eine Stoerung
+-- und das Blinken weiter verdecken soll: "Nein"). Bis v835 stand Grau ganz
+-- oben -- bei vollem Speicher ist das Leistungsziel 0, also war die Ampel
+-- dann grau, auch wenn eine RT-Node ausgefallen war. Das bewusste
+-- Abschalten selbst macht nichts rot: RT-Hold setzt die RT-Nodes nur auf
+-- "nicht steuerbar" (master/rt_sync.lua), SAFE/EMERGENCY kommt nur von
+-- einer echten Schutzausloesung.
 --
 -- Kritische Node offline (v832): bis v831 stand die Regel nur in diesem
 -- Kommentar. Eine ausgefallene Node machte die Ampel nur ueber den Alarm
@@ -181,21 +187,12 @@ function M.offline_critical_nodes(runtime, constants, memory)
   return offline
 end
 
--- Die Farbregeln 1-5 aus dem Kopfkommentar; offline aus
+-- Die Farbregeln 1-6 aus dem Kopfkommentar; offline aus
 -- offline_critical_nodes().
 local function color_for(runtime, constants, offline)
   local state = runtime.state or {}
 
-  -- 1. GRAU: Anlage bewusst aus.
-  if state.rt_global_off_hold == true then return "gray" end
-  local power_target = tonumber(state.power_target) or 0
-  if power_target <= 0 and state.active_profile ~= "PEAK" then
-    -- Kein Auftrag UND nicht mitten in einem PEAK-Anfahrvorgang -- echtes
-    -- "nichts angefordert", nicht nur ein kurzzeitiger Nulldurchgang.
-    return "gray"
-  end
-
-  -- 2. ROT: kritische Node offline, kritische Alerts, RT im SAFE/EMERGENCY.
+  -- 1. ROT: kritische Node offline, kritische Alerts, RT im SAFE/EMERGENCY.
   if #offline > 0 then return "red" end
 
   local alert_service = runtime.refs and runtime.refs.alert_service
@@ -210,32 +207,38 @@ local function color_for(runtime, constants, offline)
     end
   end
 
-  -- 2b. ROT BLINKEND: nur noch etwas zu quittieren.
+  -- 2. ROT BLINKEND: nur noch etwas zu quittieren.
   if (counts.GONE_UNACKED_CRITICAL or 0) > 0 then return "red_blink" end
 
-  -- 3. ORANGE: Warnungen (deckt RT_NO_REDUNDANCY, Energy-Fuellstand etc. ab).
+  -- 3. GRAU: Anlage bewusst aus.
+  if state.rt_global_off_hold == true then return "gray" end
+  local power_target = tonumber(state.power_target) or 0
+  if power_target <= 0 and state.active_profile ~= "PEAK" then
+    -- Kein Auftrag UND nicht mitten in einem PEAK-Anfahrvorgang -- echtes
+    -- "nichts angefordert", nicht nur ein kurzzeitiger Nulldurchgang.
+    return "gray"
+  end
+
+  -- 4. ORANGE: Warnungen (deckt RT_NO_REDUNDANCY, Energy-Fuellstand etc. ab).
   if (counts.WARN or 0) > 0 then return "orange" end
 
-  -- 4. GELB: mindestens ein Node lernt noch Kapazitaet.
+  -- 5. GELB: mindestens ein Node lernt noch Kapazitaet.
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE and node.capacity_ready ~= true then
       return "yellow"
     end
   end
 
-  -- 5. GRUEN: alles normal.
+  -- 6. GRUEN: alles normal.
   return "green"
 end
 
 -- determine_color(runtime, constants, memory): gibt den Farb-Key zurueck
 -- (rendert nicht selbst) -- separat testbar/nachvollziehbar -- und als
--- zweiten Wert die Kennungen der ausgefallenen kritischen Nodes (auch bei
--- Grau). memory siehe offline_critical_nodes(); ohne memory zaehlen nur
--- Nodes in state.nodes.
+-- zweiten Wert die Kennungen der ausgefallenen kritischen Nodes. memory
+-- siehe offline_critical_nodes(); ohne memory zaehlen nur Nodes in
+-- state.nodes.
 function M.determine_color(runtime, constants, memory)
-  -- Vor den Farbregeln, also auch bei Grau: memory muss sehen, welche Node
-  -- offline geht -- sonst fehlt sie, wenn MASTER sie loescht, bevor wieder
-  -- Leistung angefordert wird.
   local offline = M.offline_critical_nodes(runtime, constants, memory)
   return color_for(runtime, constants, offline), offline
 end

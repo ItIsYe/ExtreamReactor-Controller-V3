@@ -1,8 +1,8 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 835,
-  manifest_id = "manifest-v835",
-  payload_digest = "25325aed",
+  manifest_version = 836,
+  manifest_id = "manifest-v836",
+  payload_digest = "e5de65eb",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 14658, hash = "a407fec8", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5696, hash = "14622fa6", always = true },
-  { path = "release.lua", size_bytes = 376, hash = "2f995826", always = true },
+  { path = "release.lua", size_bytes = 376, hash = "ec657dcc", always = true },
   { path = "start.lua", size_bytes = 12891, hash = "11149123", always = true },
   { path = "shared/build_info.lua", size_bytes = 2897, hash = "440a6f12", always = true },
   { path = "shared/constants.lua", size_bytes = 3629, hash = "60d09111", always = true },
@@ -118,7 +118,7 @@ return {
     -- irgendeiner Rolle auftaucht; trotzdem im Manifest gefuehrt, damit
     -- Groesse/Hash bei gezieltem manuellem Download verifizierbar sind.
     { path = "optional/pocket_client.lua", size_bytes = 10477, hash = "bf1a75b4", optional=true, feature="pocket_client", required_for={} },
-    { path = "optional/master_ampel.lua", size_bytes = 15116, hash = "643c4c6a", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 15259, hash = "311a5d16", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 51793, hash = "744138ab", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
