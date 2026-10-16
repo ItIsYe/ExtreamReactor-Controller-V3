@@ -2,24 +2,32 @@
 --
 -- Optionale Peripherie: MASTER-Gesamtampel.
 --
--- Zweck: eine zentrale 1x3-Ampel am MASTER, die NICHT den Zustand eines
--- einzelnen Nodes zeigt (das macht optional/ampel.lua auf RT/ENERGY),
--- sondern den Gesamtzustand der kompletten Anlage — eine einzige Farbe,
--- die alle Nodes/Alerts zusammenfasst.
+-- Zweck: eine zentrale Ampel (1x1 oder 1x3) am MASTER, die NICHT den
+-- Zustand eines einzelnen Nodes zeigt (das macht optional/ampel.lua an den
+-- Nodes selbst), sondern den Gesamtzustand der kompletten Anlage -- eine
+-- einzige Farbe, die alle Nodes/Alerts zusammenfasst.
 --
--- Prioritaet der Zustaende (hoechste zuerst — die erste zutreffende
+-- Prioritaet der Zustaende (hoechste zuerst -- die erste zutreffende
 -- Bedingung gewinnt):
---   1. GRAU   — Anlage aus / RT-Global-Hold aktiv / kein Auftrag
---               (bewusst hoechste Prioritaet: ein absichtlich abgeschaltetes
---               System ist kein Fehlerzustand und soll nicht rot blinken)
---   2. ROT    — mindestens ein CRITICAL-Alert aktiv, ODER ein RT-Node im
---               SAFE/EMERGENCY-Zustand, ODER eine als kritisch markierte
---               Node ist offline
---   3. ORANGE — mindestens ein WARN-Alert aktiv (deckt u.a. die
+--   1. GRAU   -- RT-Global-Hold aktiv, oder Leistungsziel 0 (ausser mitten
+--               im PEAK-Anfahren). Bewusst hoechste Prioritaet: ein
+--               absichtlich abgeschaltetes System ist kein Fehlerzustand und
+--               soll nicht rot leuchten.
+--   2. ROT    -- eine kritische Node (RT, ENERGY oder FUEL) ist offline,
+--               ODER mindestens ein CRITICAL-Alert ist aktiv, ODER ein
+--               RT-Node steht in SAFE/EMERGENCY.
+--   3. ORANGE -- mindestens ein WARN-Alert aktiv (deckt u.a. die
 --               RT_NO_REDUNDANCY-Warnung und Energy-Fuellstand-Warnungen ab)
---   4. GELB   — mindestens ein Node lernt gerade Kapazitaet, oder eine
---               leichte, nicht-kritische Abweichung liegt vor
---   5. GRUEN  — alles normal
+--   4. GELB   -- mindestens ein RT-Node lernt gerade seine Kapazitaet
+--   5. GRUEN  -- alles normal
+--
+-- Kritische Node offline (v832): bis v831 stand die Regel nur in diesem
+-- Kommentar. Eine ausgefallene Node machte die Ampel nur ueber den Alarm
+-- NODE_COMMS_DOWN rot -- erst ~2 s orange, nach ~12 s rot, und gar nicht,
+-- wenn der Alarm stummgeschaltet war. Jetzt ist sie rot, sobald MASTER die
+-- Node als offline fuehrt, und bleibt es auch, nachdem MASTER sie nach
+-- node_offline_purge_after_s (120 s) aus seiner Liste geloescht hat -- bis
+-- sie sich wieder meldet oder MASTER neu startet.
 --
 -- Nutzt dieselbe Monitor-Erkennung/-Rendering-Basis wie optional/ampel.lua
 -- (1x1 oder 1x3, auto-detected, pcall-isoliert), aber als eigenstaendiges
@@ -62,8 +70,11 @@ local function now_s()
 end
 
 -- lost_name: zuletzt verlorene Ampel -- taucht sie wieder auf, wird sofort
--- gesucht statt erst nach PROBE_S.
-local cache = { ampel_name = nil, painted_color = nil, painted_at = nil, next_probe = 0, lost_name = nil }
+-- gesucht statt erst nach PROBE_S. critical_memory: siehe
+-- offline_critical_nodes(); offline_label: zuletzt ins Log gemeldete
+-- ausgefallene Nodes. Beide ueberstehen forget().
+local cache = { ampel_name = nil, painted_color = nil, painted_at = nil, next_probe = 0, lost_name = nil,
+  critical_memory = {}, offline_label = "" }
 
 -- Fix: anders als optional/ampel.lua (ein Node, EIN bekannter Hauptmonitor,
 -- per Name ausgeschlossen) hatte diese MASTER-Variante gar keinen
@@ -113,21 +124,74 @@ local function find_ampel_monitor(known_names)
   return nil
 end
 
--- determine_color(runtime, constants): reine Funktion, gibt nur den
--- Farb-Key zurueck (nicht rendert selbst) — separat testbar/nachvollziehbar.
-function M.determine_color(runtime, constants)
+-- Kritische Rollen: ohne sie laeuft die Anlage nicht weiter -- RT erzeugt
+-- den Strom, ENERGY misst den Speicher (ohne ihn regelt MASTER blind),
+-- FUEL versorgt die Reaktoren. REPROCESSING, LOG und die VALVE-Nodes unter
+-- FUEL sind Nebenaufgaben: faellt eine davon aus, meldet das weiter nur
+-- der Alarm NODE_COMMS_DOWN (Regeln 2/3 ueber die Alert-Zaehler).
+local function critical_roles(constants)
+  local roles = constants and constants.roles or {}
+  return {
+    [roles.RT_NODE or "RT-NODE"] = true,
+    [roles.ENERGY_NODE or "ENERGY-NODE"] = true,
+    [roles.FUEL_NODE or "FUEL-NODE"] = true,
+  }
+end
+
+-- Offline heisst: MASTER hoert nichts mehr von der Node. node.offline setzt
+-- master/runtime_ops_rt.lua check_timeouts() nach dem Funk-Timeout, die
+-- naechste Meldung der Node loescht es wieder. Bewusst NICHT node.status:
+-- der bleibt nach einer Rueckkehr noch OFFLINE, bis die naechste
+-- STATUS-Meldung kommt (der Heartbeat setzt ihn aus dem alten
+-- health.status DOWN neu) -- das gaebe ein falsches Rot.
+--
+-- memory (optional, {[node_id] = rolle}): kritische Nodes, die zuletzt
+-- offline gesehen wurden. check_timeouts() loescht eine Node, die
+-- node_offline_purge_after_s lang offline war, aus state.nodes -- ohne
+-- memory waere die Ampel danach wieder gruen, obwohl die Node weiter fehlt.
+-- Verschwindet eine Node, die zuletzt online war (Kennung umbenannt), zaehlt
+-- sie nicht. Gibt die sortierten Kennungen der fehlenden Nodes zurueck.
+function M.offline_critical_nodes(runtime, constants, memory)
+  local critical = critical_roles(constants)
+  local nodes = (runtime.state and runtime.state.nodes) or {}
+  local offline = {}
+  local present = {}
+  for key, node in pairs(nodes) do
+    if type(node) == "table" then
+      local id = tostring(node.id or key)
+      present[id] = true
+      if critical[node.role] and node.offline == true then
+        offline[#offline + 1] = id
+        if memory then memory[id] = node.role end
+      elseif memory then
+        memory[id] = nil
+      end
+    end
+  end
+  for id in pairs(memory or {}) do
+    if not present[id] then offline[#offline + 1] = id end
+  end
+  table.sort(offline)
+  return offline
+end
+
+-- Die Farbregeln 1-5 aus dem Kopfkommentar; offline aus
+-- offline_critical_nodes().
+local function color_for(runtime, constants, offline)
   local state = runtime.state or {}
 
   -- 1. GRAU: Anlage bewusst aus.
   if state.rt_global_off_hold == true then return "gray" end
   local power_target = tonumber(state.power_target) or 0
   if power_target <= 0 and state.active_profile ~= "PEAK" then
-    -- Kein Auftrag UND nicht mitten in einem PEAK-Anfahrvorgang — echtes
+    -- Kein Auftrag UND nicht mitten in einem PEAK-Anfahrvorgang -- echtes
     -- "nichts angefordert", nicht nur ein kurzzeitiger Nulldurchgang.
     return "gray"
   end
 
-  -- 2. ROT: kritische Alerts oder RT im SAFE/EMERGENCY.
+  -- 2. ROT: kritische Node offline, kritische Alerts, RT im SAFE/EMERGENCY.
+  if #offline > 0 then return "red" end
+
   local alert_service = runtime.refs and runtime.refs.alert_service
   local counts = alert_service and alert_service.get_counts and alert_service:get_counts() or {}
   if (counts.CRITICAL or 0) > 0 then return "red" end
@@ -152,6 +216,19 @@ function M.determine_color(runtime, constants)
 
   -- 5. GRUEN: alles normal.
   return "green"
+end
+
+-- determine_color(runtime, constants, memory): gibt den Farb-Key zurueck
+-- (rendert nicht selbst) -- separat testbar/nachvollziehbar -- und als
+-- zweiten Wert die Kennungen der ausgefallenen kritischen Nodes (auch bei
+-- Grau). memory siehe offline_critical_nodes(); ohne memory zaehlen nur
+-- Nodes in state.nodes.
+function M.determine_color(runtime, constants, memory)
+  -- Vor den Farbregeln, also auch bei Grau: memory muss sehen, welche Node
+  -- offline geht -- sonst fehlt sie, wenn MASTER sie loescht, bevor wieder
+  -- Leistung angefordert wird.
+  local offline = M.offline_critical_nodes(runtime, constants, memory)
+  return color_for(runtime, constants, offline), offline
 end
 
 -- Ampel vergessen; retry_now: sofort neu suchen (abgezogen/umgebaut),
@@ -212,8 +289,20 @@ function M.update(runtime, constants)
         mon = found
       end
     end
+    -- Farbe auch ohne Ampel bestimmen: critical_memory muss eine Node, die
+    -- offline geht, sehen, bevor MASTER sie loescht -- auch wenn die Ampel
+    -- gerade abgezogen ist.
+    local color_key, offline = M.determine_color(runtime, constants, cache.critical_memory)
+    local offline_label = table.concat(offline or {}, ", ")
+    if offline_label ~= cache.offline_label then
+      -- Ins MASTER-Log (wie "Node offline: ..."), nicht per print ins
+      -- Terminal; nur bei Aenderung.
+      local message = offline_label ~= "" and ("[MASTER_AMPEL] kritische Node offline: " .. offline_label)
+        or (cache.offline_label ~= "" and "[MASTER_AMPEL] kritische Nodes wieder da") or nil
+      if message and type(runtime.log) == "function" then pcall(runtime.log, message, "WARN") end
+      cache.offline_label = offline_label
+    end
     if not mon then return end
-    local color_key = M.determine_color(runtime, constants)
     local color = COLORS[color_key] or COLORS.gray
     local due = cache.painted_color ~= color or cache.painted_at == nil
       or now - cache.painted_at >= M.REPAINT_S
