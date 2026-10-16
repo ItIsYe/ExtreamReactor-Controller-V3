@@ -10,14 +10,46 @@
 local M = {}
 local ui_completion = require("nodes.fuel.ui_completion")
 local window_buffer = require("core.window_buffer")
+local mux = require("core.mockup_ui")
+local utils = require("core.utils")
+local monitor_scada = require("nodes.fuel.monitor_scada")
+local half_overview = require("nodes.fuel.half_overview")
+local valve_page = require("nodes.fuel.valve_page")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
 local monitor_router = nil
+local valve_page_instance = valve_page.new()
+local VALVE_PAGE_NAME = "Valves"
 local current_mon = nil
+local bound_monitor_name = nil
+local scada_ready = false
 local render_surface = window_buffer.new()
 
+-- Diagnose fuer "Touch reagiert nicht" (2026-09-03 Nutzerbericht): loggt
+-- jeden monitor_touch mit dem tatsaechlichen Peripherie-Namen aus dem
+-- Event gegen den aktuell gebundenen FUEL-Monitor -- ohne das muss der
+-- Nutzer live am PC UND am Monitor gleichzeitig sein, um einen simplen
+-- Namens-/Skalierungs-Mismatch zu erkennen. Nur fuer monitor_touch (die
+-- haeufige "key"-Navigation waere reines Log-Rauschen).
+local function log_touch_diag(event, consumed_by)
+  if not event or event[1] ~= "monitor_touch" then return end
+  local touched_name, x, y = event[2], event[3], event[4]
+  local w, h = nil, nil
+  if current_mon and type(current_mon.getSize) == "function" then
+    local ok, mw, mh = pcall(current_mon.getSize)
+    if ok then w, h = mw, mh end
+  end
+  utils.log("FUEL", string.format(
+    "Touch-Diag: event_monitor=%s bound_monitor=%s x=%s y=%s bound_size=%sx%s consumed_by=%s",
+    tostring(touched_name), tostring(bound_monitor_name), tostring(x), tostring(y),
+    tostring(w), tostring(h), tostring(consumed_by)), "INFO")
+end
+
+-- Fixed SCADA monitor contract: 8x6 Advanced Monitor at TextScale 1.0
+-- must resolve to exactly 82x40 terminal cells. There is deliberately no
+-- responsive/legacy fallback.
 local function ensure_completion(ctx)
   if ctx and ctx.fuel_ui then
     ui_completion.attach(ctx.fuel_ui, { devices = ctx.devices })
@@ -30,10 +62,13 @@ local ui_diag_extra = { pointer_events_received = 0, page_handler_calls = 0, mod
 
 local VIEW_STATE_TO_AMPEL = {
   ERROR = "EMERGENCY", CONFIG_REQUIRED = "WARNING", NO_CONFIG = "WARNING",
-  ROUTING_INVALID = "WARNING", VALVE_OFFLINE = "WARNING", NO_STORAGE = "WARNING",
+  ROUTING_INVALID = "WARNING", VALVE_OFFLINE = "WARNING", VALVE_UNKNOWN = "WARNING",
+  VALVE_WAITING = "LIMITED", NO_STORAGE = "WARNING",
   NO_FRESH_RT_DATA = "WARNING", DATA_STALE = "WARNING", DATA_MISSING = "WARNING",
   LOGISTICS_DISABLED = "muted", NO_ME_BRIDGE = "WARNING", LOGISTICS_BLOCKED = "WARNING",
   RESERVE_LOW = "WARNING", DELIVERING = "LIMITED", READY = "OK", LOADING = "LIMITED",
+  -- v831: Leerlauf ist gruen; ein echter Lieferstopp bleibt orange.
+  IDLE = "OK", SUPPLY_BLOCKED = "WARNING",
 }
 local function fuel_ampel_status(view_state, logistics)
   for _, r in ipairs((logistics or {}).reactors or {}) do
@@ -75,13 +110,64 @@ function M.build_model(ctx)
     model.snapshot.ui_error_count = model.ui_diagnostics.error_count
     model.snapshot.view_state_code = model.view_state.code
   end
+  -- Seite VENTILE: die Ventilliste nur, solange die Seite offen ist. Sie
+  -- gehoert nicht in den Status-Payload (der geht per Funk an MASTER), und
+  -- im Vergleichsstand der anderen Seiten loeste sie nur unnoetiges
+  -- Neuzeichnen aus. Hier im snapshot sorgt sie dafuer, dass die Seite neu
+  -- gezeichnet wird, sobald sich ein angezeigter Text aendert.
+  local page = monitor_router and monitor_router:current() or nil
+  if page and page.name == VALVE_PAGE_NAME then
+    model.valve_page = M.collect_valve_page(ctx, now)
+    if type(model.snapshot) == "table" then model.snapshot.valve_page = model.valve_page end
+  end
   return model
+end
+
+-- Ventilliste fuer die Seite VENTILE, frisch aus dem Ventil-Router. nil,
+-- wenn es (noch) keinen gibt oder er nicht antwortet.
+function M.collect_valve_page(ctx, now)
+  local rs = nil
+  if ctx and type(ctx.get_rs_router) == "function" then
+    local ok, value = pcall(ctx.get_rs_router)
+    if ok then rs = value end
+  end
+  if not (rs and type(rs.get_valve_status) == "function") then return nil end
+  local ok, status = pcall(rs.get_valve_status, rs)
+  if not ok then return nil end
+  local loop = nil
+  if type(ctx.loop_stats) == "function" then
+    local ok_loop, value = pcall(ctx.loop_stats)
+    if ok_loop then loop = value end
+  end
+  local uplink = nil
+  if ctx.comms and type(ctx.comms.get_uplink_state) == "function" then
+    local ok_uplink, value = pcall(ctx.comms.get_uplink_state, ctx.comms)
+    if ok_uplink then uplink = value end
+  end
+  return valve_page.collect(status, now or os.epoch("utc"), loop, uplink)
+end
+
+-- All FUEL pages share the same page-navigation controls. The old
+-- labels were short and their touch zones were exactly the text width.
+-- Longer, bracketed labels make the controls visually obvious and enlarge
+-- the physical touch target without consuming an additional content row.
+local function large_footer(target, center)
+  return monitor_scada.footer(target, center)
+end
+
+local function page_with_large_footer(render_fn, center)
+  return function(target, model, should_clear)
+    render_fn(target, model, should_clear)
+    return large_footer(target, center)
+  end
 end
 
 function M.render_monitor(ctx, model)
   local devices = ctx.devices
   if not devices.monitor then
+    scada_ready = false
     current_mon = nil
+    bound_monitor_name = nil
     render_surface:bind(nil, nil)
     if monitor_router then
       if monitor_router.set_monitor_name then monitor_router:set_monitor_name(nil) end
@@ -91,19 +177,42 @@ function M.render_monitor(ctx, model)
   end
   ensure_completion(ctx)
   local mon = devices.monitor
+  local requested_scale = (ctx.config and ctx.config.ui_scale) or 1.0
+  local ready, detected_w, detected_h, scada_parent =
+    monitor_scada.ensure(mon, requested_scale)
+  scada_ready = ready
+  if not ready then
+    current_mon = mon
+    bound_monitor_name = devices.monitor_name
+    monitor_scada.render_size_error(mon, detected_w, detected_h, requested_scale)
+    return true
+  end
   current_mon = mon
+  bound_monitor_name = devices.monitor_name
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
     monitor_router = ctx.ui_router.new({
       error_title = "FUEL UI ERROR",
       on_render_error = ctx.on_render_error,
       pages = {
-        { name = "Overview", render = fuel_ui.render_overview },
-        { name = "Details", render = fuel_ui.render_details,
+        { name = "Overview", render = page_with_large_footer(fuel_ui.render_overview, "FUEL OVERVIEW"),
+          handle_touch = function(x, y) return fuel_ui.handle_overview_touch and fuel_ui.handle_overview_touch(x, y) or false end },
+        { name = "Details", render = page_with_large_footer(fuel_ui.render_details, "FUEL DETAILS"),
           handle_touch = function(x, y) return fuel_ui.handle_details_touch and fuel_ui.handle_details_touch(x, y) or false end },
-        { name = "Diagnostics", render = fuel_ui.render_diagnostics,
+        { name = "Diagnostics", render = page_with_large_footer(fuel_ui.render_diagnostics, "FUEL DIAGNOSTICS"),
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        { name = "Router", render = function(target, model, should_clear) return ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
+        -- Alle Ventile mit Zustand, zuletzt gehoert und letzter Rueckmeldung
+        -- (nodes/fuel/valve_page.lua) -- direkt vor dem Router, in dem man
+        -- eine falsche Ventilkette dann repariert.
+        { name = VALVE_PAGE_NAME, render = page_with_large_footer(function(target, page_model, should_clear)
+            local data = page_model and page_model.valve_page or M.collect_valve_page(ctx)
+            valve_page_instance.render(target, page_model, should_clear, data, "4/5")
+          end, "FUEL VENTILE"),
+          handle_touch = function(x, y) return valve_page_instance.handle_touch(x, y) end },
+        { name = "Router", render = function(target, page_model, should_clear)
+            ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear, true)
+            return large_footer(target, "ROUTER")
+          end,
           handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },
@@ -113,7 +222,9 @@ function M.render_monitor(ctx, model)
   if monitor_router.set_monitor_name then
     monitor_router:set_monitor_name(devices.monitor_name)
   end
-  local render_target, binding_changed = render_surface:bind(mon, devices.monitor_name)
+  local binding_name = tostring(devices.monitor_name or "monitor")
+    .. "@ui_scale=" .. tostring(requested_scale)
+  local render_target, binding_changed = render_surface:bind(scada_parent, binding_name)
   if binding_changed and monitor_router.invalidate_layout then
     monitor_router:invalidate_layout()
   end
@@ -127,15 +238,52 @@ function M.render_monitor(ctx, model)
     if monitor_router.invalidate_layout then monitor_router:invalidate_layout() end
     error(result, 0)
   end
+  -- TextScale 0.5 has 164x81 physical cells. The normal SCADA renderer
+  -- deliberately keeps the proven control geometry; this telemetry-only
+  -- overlay uses the otherwise sparse middle area with native small text.
+  if requested_scale == 0.5 then
+    local page = monitor_router and monitor_router:current() or nil
+    if page and page.name == "Overview" then
+      local overlay_ok, overlay_err = pcall(half_overview.render, mon, model)
+      if not overlay_ok then
+        utils.log("FUEL", "0.5 Overview overlay failed: " .. tostring(overlay_err), "WARN")
+      end
+    end
+  end
   return result
 end
 
+local function localize_pointer_event(event)
+  if type(event) ~= "table" then return event, true end
+  local kind = event[1]
+  if kind ~= "monitor_touch" and kind ~= "mouse_click" then return event, true end
+  local lx, ly, inside = monitor_scada.touch_to_local(current_mon, event[3], event[4])
+  if not inside then return nil, false end
+  local localized = {}
+  for i = 1, #event do localized[i] = event[i] end
+  localized[3], localized[4] = lx, ly
+  return localized, true
+end
+
 function M.handle_input(event)
+  if not scada_ready then return false end
   local kind = event and event[1]
   if kind == "monitor_touch" or kind == "mouse_click" or kind == "key" or kind == "char" then
     ui_diag_extra.pointer_events_received = ui_diag_extra.pointer_events_received + 1
   end
-  if monitor_router and monitor_router:handle_input(event) then
+  local routed_event, inside = localize_pointer_event(event)
+  if (kind == "monitor_touch" or kind == "mouse_click") and not inside then
+    log_touch_diag(event, "outside_scada_viewport")
+    return false
+  end
+  routed_event = routed_event or event
+  if monitor_router and monitor_router:handle_input(routed_event) then
+    -- Covers both a footer prev/next hit AND a silently swallowed touch
+    -- from a monitor other than the one FUEL is bound to (name mismatch --
+    -- see router:monitor_touch_matches() in core/ui_router.lua). Can't
+    -- tell the two apart from here; the event_monitor/bound_monitor
+    -- comparison in the log line itself is what disambiguates.
+    log_touch_diag(event, "router_nav_or_foreign_swallow")
     return true
   end
   if kind ~= "monitor_touch" and kind ~= "mouse_click" then
@@ -143,9 +291,10 @@ function M.handle_input(event)
   end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
-    local x, y = event and event[3], event and event[4]
+    local x, y = routed_event and routed_event[3], routed_event and routed_event[4]
     ui_diag_extra.page_handler_calls = ui_diag_extra.page_handler_calls + 1
     local consumed = page.handle_touch(x, y) == true
+    log_touch_diag(event, consumed and "page_handler" or "page_handler_unconsumed")
     if consumed and monitor_router then
       -- Page-local state (details pagination / router editor) is not part of
       -- the telemetry model snapshot. Force exactly one following redraw so
@@ -158,13 +307,17 @@ function M.handle_input(event)
     end
     return consumed
   end
+  log_touch_diag(event, "no_page_handler")
   return false
 end
 
 function M.handle_touch(x, y)
+  if not scada_ready then return false end
+  local local_x, local_y, inside = monitor_scada.touch_to_local(current_mon, x, y)
+  if not inside then return false end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
-    local consumed = page.handle_touch(x, y) == true
+    local consumed = page.handle_touch(local_x, local_y) == true
     if consumed and monitor_router then
       if monitor_router.invalidate_content then monitor_router:invalidate_content() else monitor_router.last_snapshot = nil end
     end

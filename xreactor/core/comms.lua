@@ -28,6 +28,7 @@ local state = {
   seq = 0,
   node_id = nil,
   role = nil,
+  label = nil,
   proto_ver = nil,
   config = nil,
   network = nil,
@@ -47,10 +48,13 @@ local state = {
     retries = 0,
     dedupe_hits = 0,
     timeouts = 0,
+    peer_only = 0,
     last_timeout_ts = nil,
     last_timeout_id = nil
   },
-  timeouts = {}
+  timeouts = {},
+  payload_filter = nil,
+  track_peer = nil
 }
 
 local function now_ms()
@@ -62,6 +66,7 @@ local function reset_runtime_state()
   state.seq = 0
   state.node_id = nil
   state.role = nil
+  state.label = nil
   state.proto_ver = nil
   state.config = nil
   state.network = nil
@@ -81,10 +86,13 @@ local function reset_runtime_state()
     retries = 0,
     dedupe_hits = 0,
     timeouts = 0,
+    peer_only = 0,
     last_timeout_ts = nil,
     last_timeout_id = nil
   }
   state.timeouts = {}
+  state.payload_filter = nil
+  state.track_peer = nil
 end
 
 
@@ -208,11 +216,22 @@ end
 local function update_peer(message)
   local sender = message.src or message.sender_id
   if not sender or sender == state.node_id then return end
+  -- Optional, je Rolle (comms.init track_peer): wessen Lebenszeichen diese
+  -- Rolle ueberhaupt fuehrt. Eine Node, die von den anderen nur MASTER
+  -- braucht und den Uplink schliesst (Funk-Hygiene v822), fuehrt sonst
+  -- Peers, die sie danach nicht mehr hoert -- und meldet jeden davon als
+  -- "Peer down". Ein Filter, der fehlschlaegt, heisst: fuehren.
+  local track = state.track_peer
+  if track then
+    local ok_track, wanted = pcall(track, message)
+    if ok_track and wanted == false then return end
+  end
   state.peers[sender] = state.peers[sender] or {}
   local peer = state.peers[sender]
   peer.last_seen = now_ms()
   peer.last_message_type = message.type
   peer.role = message.role
+  peer.label = message.label
   peer.proto_ver = message.proto_ver
   peer.stale_since = nil
   peer.stale_observations = 0
@@ -243,6 +262,7 @@ local function build_message(dst, msg_type, payload)
     node_id = state.node_id,
     dst = dst,
     role = state.role,
+    label = state.label,
     ts = now_ms(),
     timestamp = now_ms(),
     proto_ver = state.proto_ver,
@@ -326,11 +346,16 @@ local function queue_entry(message, channel, opts)
     volatile_key = volatile_key
   }
   table.insert(state.queue, entry)
-  table.sort(state.queue, function(a, b) return a.priority < b.priority end)
   return entry
 end
 
 local function flush_queue()
+  -- Sorted once per flush instead of on every single queue_entry() insert
+  -- (previously re-sorted the whole queue on every enqueue) --
+  -- flush_queue() processes every entry in order every call regardless, so
+  -- sorting immediately before that single pass is equivalent and cheaper
+  -- under bursts of several sends between flushes.
+  table.sort(state.queue, function(a, b) return a.priority < b.priority end)
   local remaining = {}
   local now_ts = now_ms()
   local ttl_ms = (state.config.volatile_ttl_s or DEFAULT_CONFIG.volatile_ttl_s) * 1000
@@ -408,6 +433,16 @@ local function retry_inflight()
   end
 end
 
+-- Quittungen gehen an den Absender des Kommandos. MASTER quittiert auf dem
+-- Downlink (control), jede andere Rolle auf dem Uplink (status) -- dort
+-- hoert MASTER immer mit, die uebrigen Nodes ab v822 nicht mehr (siehe
+-- services/comms_service.lua, handle_event). Bis v821 lag jede Quittung
+-- auf control, und jede Node hoerte jede Quittung jeder anderen.
+local function is_master_role(role)
+  if role == nil then return false end
+  return tostring(role):upper():gsub("_", "-") == constants.roles.MASTER
+end
+
 local function send_ack(message, msg_type, payload)
   if not message or not message.message_id then return end
   local ack = build_message(message.src, msg_type, payload or {})
@@ -416,8 +451,13 @@ local function send_ack(message, msg_type, payload)
   ack.dst = message.src
   ack.src = state.node_id
   local channels = state.network and state.network.channels or {}
-  local control_channel = channels.control or constants.channels.CONTROL
-  queue_entry(ack, control_channel, { priority = 1 })
+  local channel
+  if is_master_role(state.role) then
+    channel = channels.control or constants.channels.CONTROL
+  else
+    channel = channels.status or constants.channels.STATUS
+  end
+  queue_entry(ack, channel, { priority = 1 })
 end
 
 local function dispatch_handlers(message)
@@ -444,11 +484,23 @@ local function dispatch_handlers(message)
   return applied_result
 end
 
+-- Rueckgabe: false GENAU DANN, wenn dieses ACK wegen seiner HERKUNFT
+-- verworfen wurde (falscher Absender, fremder Empfaenger). In allen
+-- anderen Faellen true -- auch wenn es hier nichts zu tun gab, etwa weil
+-- der Inflight-Eintrag schon aufgeloest ist.
+--
+-- Der Aufrufer braucht diese Unterscheidung: handle_message() rief bisher
+-- handle_ack() und DANACH unbedingt dispatch_handlers(). Die
+-- Transportebene verwarf das ACK also korrekt fuer ihren Inflight-Eintrag
+-- und reichte es trotzdem an die Anwendungshandler weiter. Der
+-- Config-Edit-Handler korreliert nur ueber die Nachrichten-ID -- ein ACK
+-- eines ANDEREN Nodes mit derselben ID bestaetigte damit einen Edit, auf
+-- den das eigentliche Ziel nie geantwortet hatte.
 local function handle_ack(message)
   local ack_for = message.ack_for
-  if not ack_for then return end
+  if not ack_for then return true end
   local entry = state.inflight[ack_for]
-  if not entry then return end
+  if not entry then return true end
 
   -- The ACK source is part of the delivery proof. A peer cannot complete a
   -- command merely by guessing/observing its message ID.
@@ -458,13 +510,13 @@ local function handle_ack(message)
       and utils.normalize_node_id(actual_source) ~= utils.normalize_node_id(expected_source) then
     log(("Ignoring ACK %s from unexpected source %s (expected %s)"):format(
       tostring(ack_for), tostring(actual_source), tostring(expected_source)), "WARN")
-    return
+    return false
   end
   if message.dst ~= nil
       and utils.normalize_node_id(message.dst) ~= utils.normalize_node_id(state.node_id) then
     log(("Ignoring ACK %s addressed to %s (local %s)"):format(
       tostring(ack_for), tostring(message.dst), tostring(state.node_id)), "WARN")
-    return
+    return false
   end
   if message.type == constants.message_types.ACK_DELIVERED then
     entry.delivered = true
@@ -472,8 +524,11 @@ local function handle_ack(message)
     if not entry.require_applied then
       state.inflight[ack_for] = nil
     end
+    -- Quittungen und "queued" je Kommando: DEBUG (Funk-Hygiene v821) --
+    -- MASTER schrieb davon drei Zeilen je Kommando, jede per Funk an den
+    -- Log-Sammler. Fehlschlaege meldet message_handlers.lua als WARN.
     if entry.message and entry.message.type == constants.message_types.COMMAND then
-      log(("Command delivered ack %s from %s"):format(tostring(ack_for), tostring(message.src or message.sender_id or "unknown")))
+      log(("Command delivered ack %s from %s"):format(tostring(ack_for), tostring(message.src or message.sender_id or "unknown")), "DEBUG")
     end
   elseif message.type == constants.message_types.ACK_APPLIED then
     state.inflight[ack_for] = nil
@@ -484,9 +539,20 @@ local function handle_ack(message)
         tostring(ack_for),
         tostring(message.src or message.sender_id or "unknown"),
         status
-      ))
+      ), result.ok == false and "INFO" or "DEBUG")
     end
   end
+  return true
+end
+
+-- Ein Kommando, dessen Absender keine Quittung will (payload.no_ack, siehe
+-- comms_service:send_command opts.no_ack): eine regelmaessig wiederholte
+-- Mitteilung wie MASTERs Fuellstand-Relais an FUEL. Bis v820 kamen darauf
+-- zwei Quittungen zurueck, eine davon mit der kompletten Tabelle als Echo.
+local function command_wants_ack(message)
+  if message.type ~= constants.message_types.COMMAND then return false end
+  local payload = message.payload
+  return not (type(payload) == "table" and payload.no_ack == true)
 end
 
 local function handle_message(message)
@@ -502,7 +568,7 @@ local function handle_message(message)
     local dup = find_dedupe(message.src, message.message_id)
     if dup then
       state.metrics.dedupe_hits = state.metrics.dedupe_hits + 1
-      if message.type == constants.message_types.COMMAND then
+      if command_wants_ack(message) then
         send_ack(message, constants.message_types.ACK_DELIVERED, { detail = "duplicate" })
         if dup.applied then
           send_ack(message, constants.message_types.ACK_APPLIED, { result = dup.applied })
@@ -513,12 +579,18 @@ local function handle_message(message)
   end
 
   if message.type == constants.message_types.ACK_DELIVERED or message.type == constants.message_types.ACK_APPLIED then
-    handle_ack(message)
+    -- Ein wegen seiner Herkunft verworfenes ACK erreicht die
+    -- Anwendungshandler gar nicht erst. Alles andere wird wie bisher
+    -- weitergereicht -- auch ein ACK ohne passenden Inflight-Eintrag
+    -- (doppelt, oder nach einem Neustart dieser Node).
+    if handle_ack(message) == false then
+      return
+    end
     dispatch_handlers(message)
     return
   end
 
-  if message.type == constants.message_types.COMMAND then
+  if command_wants_ack(message) then
     send_ack(message, constants.message_types.ACK_DELIVERED)
   end
 
@@ -535,7 +607,9 @@ local function handle_message(message)
         applied.command_value = cmd.value
       end
     end
-    send_ack(message, constants.message_types.ACK_APPLIED, { result = applied })
+    if command_wants_ack(message) then
+      send_ack(message, constants.message_types.ACK_APPLIED, { result = applied })
+    end
     add_dedupe(message.src, message.message_id, applied)
   else
     add_dedupe(message.src, message.message_id, nil)
@@ -626,10 +700,17 @@ function comms.init(opts)
   state.network = opts.network or network_lib.init(opts)
   state.node_id = opts.node_id or state.network.id
   state.role = opts.role or state.network.role
+  state.label = opts.label
   state.proto_ver = opts.proto_ver or constants.proto_ver
   state.log_prefix = opts.log_prefix or "COMMS"
   state.logger = opts.logger
   state.drop_simulation = opts.drop_simulation or state.config.drop_simulation
+  -- Optional, je Rolle: function(raw) -> false, wenn von dieser Nachricht nur
+  -- der Absender zaehlt (siehe receive_peer_only()). Ohne: alles wie bisher.
+  state.payload_filter = type(opts.payload_filter) == "function" and opts.payload_filter or nil
+  -- Optional, je Rolle: function(message) -> false, wenn diese Rolle den
+  -- Absender nicht als Peer fuehrt (siehe update_peer()). Ohne: alle.
+  state.track_peer = type(opts.track_peer) == "function" and opts.track_peer or nil
   state.initialized = true
   return comms
 end
@@ -665,7 +746,7 @@ function comms.send(dst, msg_type, payload, opts)
       tostring(message.message_id),
       tostring(dst or "broadcast"),
       tostring(opts and opts.require_applied or false)
-    ))
+    ), "DEBUG")
   end
   return entry
 end
@@ -673,6 +754,29 @@ end
 function comms.receive(raw_message)
   if not raw_message then return end
   table.insert(state.incoming, raw_message)
+end
+
+-- Nur Lebenszeichen: Jede Node hoert JEDE Funkmeldung jeder anderen Node
+-- (Rundfunk), und bis v819 lief jede davon den vollen Weg -- Nutzlast
+-- komplett kopieren (protocol.sanitize_message), pruefen, an alle Handler
+-- reichen, Duplikat-Buchfuehrung. Eine Rolle, die vom Heartbeat/Status der
+-- anderen Nodes nur wissen muss, DASS sie leben, kann per payload_filter
+-- (comms.init) sagen, welche Nachrichten sie wirklich braucht. Fuer den
+-- Rest wird nur der Umschlag geprueft (dieselbe Pruefung wie im vollen
+-- Weg) und der Absender in der Peer-Tabelle aktualisiert -- genau das, was
+-- handle_message() bei einer Nachricht ohne Interesse ohnehin als einziges
+-- bewirkt haette. Ungueltiges laeuft weiter den vollen Weg (Log,
+-- PROTO_MISMATCH). Ein Filter, der fehlschlaegt oder etwas anderes als
+-- false liefert, heisst: voller Weg.
+local function receive_peer_only(raw)
+  local filter = state.payload_filter
+  if not filter or type(raw) ~= "table" then return false end
+  local ok_filter, wanted = pcall(filter, raw)
+  if not ok_filter or wanted ~= false then return false end
+  if protocol.validate(raw) ~= true then return false end
+  update_peer(protocol.sanitize_envelope(raw))
+  state.metrics.peer_only = state.metrics.peer_only + 1
+  return true
 end
 
 function comms.tick()
@@ -684,6 +788,7 @@ function comms.tick()
   local queue = state.incoming
   state.incoming = {}
   for _, raw in ipairs(queue) do
+    if receive_peer_only(raw) then goto next_raw end
     local message = protocol.sanitize_message(raw)
     local ok, err = protocol.validate(message)
     if not ok then
@@ -711,6 +816,7 @@ function comms.tick()
     else
       handle_message(message)
     end
+    ::next_raw::
   end
 
   -- Evaluate peer timeout transitions after ingesting fresh messages queued
@@ -735,6 +841,7 @@ function comms.get_peer_state()
       age = delta,
       stale = delta > state.config.peer_timeout_s,
       role = data.role,
+      label = data.label,
       proto_ver = data.proto_ver,
       stale_since = data.stale_since,
       stale_observations = data.stale_observations or 0,
@@ -749,6 +856,23 @@ function comms.get_peer_state()
     }
   end
   return out
+end
+
+-- Peers still vergessen -- ohne "Peer down"/"Peer expired" --, fuer die
+-- predicate(id, peer) true liefert. Fuer eine Rolle, die einen Kanal
+-- schliesst und die Absender darauf danach nicht mehr hoert (FUEL,
+-- services/comms_service.lua). Rueckgabe: Anzahl.
+function comms.forget_peers(predicate)
+  if type(predicate) ~= "function" then return 0 end
+  local removed = 0
+  for id, peer in pairs(state.peers) do
+    local ok, drop = pcall(predicate, id, peer)
+    if ok and drop == true then
+      state.peers[id] = nil
+      removed = removed + 1
+    end
+  end
+  return removed
 end
 
 function comms.get_diagnostics()

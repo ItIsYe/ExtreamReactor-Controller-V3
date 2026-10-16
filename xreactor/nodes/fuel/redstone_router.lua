@@ -1,26 +1,73 @@
 -- nodes/fuel/redstone_router.lua
--- Per-reactor valve-path routing for Mekanism pipe networks.
+-- Per-reactor valve-path routing, exclusively over wireless VALVE-Nodes.
 --
 -- config.logistics.redstone_tree ist eine FLACHE Liste von Routen, eine pro
--- Reaktor, mit einer geordneten Ventilliste ("path") direkt am Reaktor:
+-- Reaktor, mit einer geordneten Ventilkette ("path") direkt am Reaktor --
+-- jeder Eintrag ist schlicht die node_id des VALVE-Node, der dieses Ventil
+-- steuert:
 --   { reactor = "<id>", label = "<Anzeigename>",
---     path = { { side = "back" }, { side = "left", integrator = "VALVE-1" } } }
+--     path = { "VALVE-1", "VALVE-5" } }
 -- Ein gemeinsames Ventil auf dem Weg zu mehreren Reaktoren wird als dieselbe
--- {side=,integrator=}-Kombination in mehreren Routen-Pfaden wiederholt.
+-- ID in mehreren Routen-Pfaden wiederholt.
 --
--- normalize_tree() akzeptiert gemischt alle drei historischen Formen ohne
--- manuelle Migration: 1. neues Format (path=..., siehe oben). 2. alte
--- FLACHE Form { side=, integrator=, reactor=, label= } (genau ein Ventil
--- pro Reaktor). 3. alte VERSCHACHTELTE Baum-Form (children=...), rekursiv
--- zu path=<Ast von der Wurzel bis zum Reaktor-Blatt> aufgeloest.
+-- Feature (2026-09-03): frueher hatte jeder Pfad-Schritt zusaetzlich eine
+-- "side" (top/bottom/left/right/front/back), gedacht fuer zwei inzwischen
+-- entfernte Steuerungswege -- ein lokaler, per Wired Modem direkt
+-- angesprochener Mekanism Redstone-Integrator, oder ein direkt an den
+-- FUEL-Computer verdrahtetes Ventil ohne jeden VALVE-Node. Fuer den
+-- tatsaechlich genutzten Weg (ein VALVE-Node PRO Ventil, per Funk adressiert
+-- ueber SET_VALVE, siehe nodes/valve/controller.lua) war "side" von Anfang
+-- an bedeutungslos: der VALVE-Node liest aus der Nachricht nur `high`, nie
+-- `side` (siehe handle_event() dort). Beide Steuerungswege sind jetzt
+-- entfernt -- ein Pfad-Eintrag ist nur noch die VALVE-Node-ID selbst.
+--
+-- normalize_tree() akzeptiert weiterhin gemischt alle drei historischen
+-- Baumformen ohne manuelle Migration (jetzt ohne "side"):
+--   1. neues Format (path=..., siehe oben, oder mit alten {side=,integrator=}
+--      Schritt-Tabellen -- "side" wird dabei stillschweigend ignoriert).
+--   2. alte FLACHE Form { integrator=, reactor=, label= } (genau ein Ventil
+--      pro Reaktor).
+--   3. alte VERSCHACHTELTE Baum-Form (children=...), rekursiv zu
+--      path=<Ast von der Wurzel bis zum Reaktor-Blatt> aufgeloest.
+-- Ein Legacy-Knoten ohne "integrator" (der alte "direkt an FUEL verdrahtet"-
+-- Fall) ergibt jetzt einen harten Validierungsfehler statt eines stillen
+-- No-Ops -- dieser Weg existiert nicht mehr, ein solcher Knoten war schon
+-- vorher praktisch tot.
 
 local constants = require("shared.constants")
+local once_log = require("core.once_log")
 
 local M = {}
 
-local BUILTIN_SIDES = {
-  top=true, bottom=true, left=true, right=true, front=true, back=true
-}
+-- Wie lange ein Ventil, von dem FUEL noch nie gehoert hat, als "meldet sich
+-- noch" gilt, bevor es als "unbekannt" (falsche Kennung) gemeldet wird --
+-- gezaehlt ab dem Anlegen des Routers. Ein VALVE-Node schickt alle 2 s einen
+-- Heartbeat; nach einem Update starten aber alle Nodes gleichzeitig neu, und
+-- ein VALVE-Node kann dabei laenger brauchen als FUEL.
+local VALVE_UNKNOWN_GRACE_MS = 60 * 1000
+
+-- Lebenszeichen-Abfrage der Ventile (Funk-Hygiene Stufe 3, v823). Bis v822
+-- erfuhr FUEL nur aus den Heartbeats (alle 2 s, dazu Status alle 5 s), ob
+-- ein Ventil da ist -- und musste dafuer den ganzen Uplink 6501 mithoeren,
+-- also die Meldungen ALLER Nodes. Jetzt fragt FUEL selbst: VALVE_PING alle
+-- VALVE_PING_INTERVAL_MS als Rundruf auf 6504, jedes Ventil ab v823
+-- antwortet mit VALVE_PONG auf 6506 (nodes/valve/controller.lua). Die
+-- Heartbeats der Ventile an MASTER bleiben unveraendert.
+--
+-- Grenzen (v824): "ueberfaellig" (kein OPEN mehr) nach VALVE_PONG_STALE_MS
+-- -- zwei verlorene Antworten hintereinander schaden nicht --, "weg" nach
+-- VALVE_PONG_DOWN_MS -- fuenf verlorene. In v823 waren es 10 s Takt und
+-- 20 s: eine einzige verlorene Antwort machte ein Ventil kurz
+-- "ueberfaellig", eine Lieferung, die genau dann oeffnete, brach ab und
+-- setzte den Sicherheits-Riegel. Mit Heartbeats (2 s, 12 s) vertrug FUEL
+-- etwa fuenf verlorene Meldungen.
+M.VALVE_PING_INTERVAL_MS = 5 * 1000
+M.VALVE_PONG_STALE_MS = 17500
+M.VALVE_PONG_DOWN_MS = 30 * 1000
+
+local function epoch_ms()
+  return os.epoch and os.epoch("utc") or 0
+end
 
 local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then return nil, "no_method" end
@@ -59,17 +106,15 @@ local function find_wireless_modem(config)
   return nil
 end
 
--- Liefert eine flache, deduplizierte Liste JEDES Ventils, das in
--- irgendeiner Route vorkommt (side+integrator identisch => dasselbe
--- physische Ventil, unabhaengig davon, in wie vielen Routen es auftaucht).
+-- Liefert eine flache, deduplizierte Liste jeder VALVE-Node-ID, die in
+-- irgendeiner Route vorkommt.
 local function collect_all_valves(routes)
   local seen, out = {}, {}
   for _, route in ipairs(routes or {}) do
-    for _, step in ipairs(route.path or {}) do
-      local key = tostring(step.side) .. "|" .. tostring(step.integrator or "")
-      if not seen[key] then
-        seen[key] = true
-        out[#out + 1] = { side = step.side, integrator = step.integrator }
+    for _, id in ipairs(route.path or {}) do
+      if not seen[id] then
+        seen[id] = true
+        out[#out + 1] = id
       end
     end
   end
@@ -87,16 +132,12 @@ local function find_path(routes, target_id)
   local route = find_route(routes, target_id)
   if not route then return nil end
   local copy = {}
-  for i, step in ipairs(route.path or {}) do copy[i] = { side = step.side, integrator = step.integrator } end
+  for i, id in ipairs(route.path or {}) do copy[i] = id end
   return copy
 end
 
 local function path_key(path)
-  local parts = {}
-  for _, v in ipairs(path or {}) do
-    parts[#parts + 1] = tostring(v.side) .. ":" .. tostring(v.integrator or "")
-  end
-  return table.concat(parts, ">")
+  return table.concat(path or {}, ">")
 end
 
 -- Normalisiert die rohe Config (siehe Formen 1-3 oben) in eine flache
@@ -114,13 +155,34 @@ local function normalize_with_errors(raw)
     return routes, errors
   end
 
+  -- Akzeptiert sowohl das neue Format (Pfad-Eintrag = VALVE-Node-ID-String)
+  -- als auch alte {side=,integrator=}-Schritt-Tabellen (side ignoriert).
+  -- Gibt die aufgeloeste ID oder nil zurueck.
+  local function step_integrator(step)
+    if type(step) == "string" then
+      return step ~= "" and step or nil
+    end
+    if type(step) == "table" then
+      return (type(step.integrator) == "string" and step.integrator ~= "") and step.integrator or nil
+    end
+    return nil
+  end
+
   local function emit(reactor, label, path, source_desc)
     if not reactor and not label then
       err("missing_target", "Route ohne 'reactor' und ohne 'label' (" .. tostring(source_desc) .. ") -- nicht adressierbar")
       return
     end
     local copy = {}
-    for _, step in ipairs(path or {}) do copy[#copy + 1] = { side = step.side, integrator = step.integrator } end
+    for step_i, step in ipairs(path or {}) do
+      local id = step_integrator(step)
+      if not id then
+        err("missing_integrator", "Route '" .. tostring(reactor or label or "?") .. "', Schritt #" .. step_i
+          .. " hat keine VALVE-Node-ID (integrator) -- ein direkt verdrahtetes Ventil ohne VALVE-Node wird nicht mehr unterstuetzt")
+      else
+        copy[#copy + 1] = id
+      end
+    end
     routes[#routes + 1] = { reactor = reactor, label = label or reactor, path = copy }
   end
 
@@ -150,30 +212,16 @@ local function normalize_with_errors(raw)
           err("invalid_path", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "' hat ein 'path'-Feld, das keine Tabelle ist")
           goto next_node
         end
-        for step_i, step in ipairs(node.path) do
-          if type(step) ~= "table" then
-            err("invalid_path_step", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "', Schritt #" .. step_i .. " ist keine Tabelle")
-          elseif step.side and not BUILTIN_SIDES[step.side] then
-            err("invalid_side", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "', Schritt #" .. step_i
-              .. ": ungueltige Redstone-Seite '" .. tostring(step.side) .. "' (erlaubt: top/bottom/left/right/front/back)")
-          elseif not step.side then
-            err("invalid_path_step", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "', Schritt #" .. step_i .. " hat keine 'side'")
-          end
-        end
         emit(node.reactor, node.label, node.path, "Index " .. i)
         goto next_node
       end
 
-      -- Formen 2+3: Legacy-Knoten mit eigenem 'side' und/oder 'children'.
-      if not node.side and not node.reactor and (type(node.children) ~= "table" or #node.children == 0) then
-        err("missing_side", "Knoten ohne 'side', 'reactor', 'children' oder 'path' (Tiefe " .. depth .. ", Index " .. i .. ")")
-      end
-      if node.side and not BUILTIN_SIDES[node.side] then
-        err("invalid_side", "Ungueltige Redstone-Seite '" .. tostring(node.side)
-          .. "' (erlaubt: top/bottom/left/right/front/back)")
+      -- Formen 2+3: Legacy-Knoten mit eigenem 'integrator' und/oder 'children'.
+      if not node.integrator and not node.reactor and (type(node.children) ~= "table" or #node.children == 0) then
+        err("missing_integrator", "Knoten ohne 'integrator', 'reactor', 'children' oder 'path' (Tiefe " .. depth .. ", Index " .. i .. ")")
       end
 
-      local step = node.side and { side = node.side, integrator = node.integrator } or nil
+      local step = node.integrator
       local next_path = ancestor_path
       if step then
         next_path = {}
@@ -187,10 +235,10 @@ local function normalize_with_errors(raw)
             .. "' hat zusaetzlich 'children' — ein Reaktor-Endpunkt darf keine weiteren Aeste haben")
         end
         emit(node.reactor, node.label, next_path, "Index " .. i)
-      elseif not node.side and not (type(node.children) == "table" and #node.children > 0) then
-        -- bereits oben als missing_side gemeldet, hier nichts weiter tun
+      elseif not node.integrator and not (type(node.children) == "table" and #node.children > 0) then
+        -- bereits oben als missing_integrator gemeldet, hier nichts weiter tun
       elseif not (type(node.children) == "table" and #node.children > 0) then
-        err("dead_end", "Knoten '" .. tostring(node.side or node.label or ("#" .. i))
+        err("dead_end", "Knoten '" .. tostring(node.integrator or node.label or ("#" .. i))
           .. "' fuehrt nirgendwohin (kein 'reactor', keine 'children')")
       end
 
@@ -249,18 +297,47 @@ function M.new(opts)
   -- von comms_service -- roh per modem.transmit, kein Ack/Retry-Overhead.
   local router_config = opts.config or {}
   local valve_modem = find_wireless_modem(router_config)
-  if valve_modem then pcall(valve_modem.open, constants.channels.VALVE) end
+  -- 6504 bleibt offen fuer Ventile bis v821, die noch dort antworten;
+  -- Ventile ab v822 antworten auf VALVE_REPLY (Funk-Hygiene v822).
+  if valve_modem then
+    pcall(valve_modem.open, constants.channels.VALVE)
+    if constants.channels.VALVE_REPLY then pcall(valve_modem.open, constants.channels.VALVE_REPLY) end
+  end
   local self = {
     config = router_config,
     source_node_id = resolve_source_node_id(opts, router_config),
     log = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
-    -- Fuer Auto-Discovery erreichbarer VALVE-Nodes (siehe refresh()).
+    -- Peer-Tabelle: daraus kommt LIVE, ob ein Ventil erreichbar ist (siehe
+    -- _valve_link()).
     comms = opts.comms or nil,
     valve_modem = valve_modem,
+    -- Optional: nodes/fuel/hop_timing.lua-Instanz, siehe handle_hop_scan()
+    -- unten. nil-fähig -- ohne hop_timing werden HOP_SCAN-Nachrichten
+    -- einfach ignoriert (kein Verhalten aendert sich).
+    hop_timing = opts.hop_timing or nil,
+    -- Ventil-Verbindungsmeldungen: einmal je Stoerung, nicht einmal je
+    -- Laufzeit (siehe _valve_link()).
+    _link_log = once_log.new(),
     _state = {
       all_valves = {},
-      integrators = {},
+      -- [id] = { last_seen_ms =, label = }: dieser VALVE-Node war seit dem
+      -- Start mindestens einmal in der Peer-Tabelle -- mit dem Zeitpunkt
+      -- seiner letzten Meldung und seinem Namen. Unterscheidet "offline"
+      -- (war da, ist weg) von "unbekannt" (hat sich unter dieser Kennung nie
+      -- gemeldet) und haelt "zuletzt gehoert" fest, auch wenn comms den Peer
+      -- nach der Haltezeit (180 s) schon vergessen hat (Seite VENTILE).
+      valve_seen = {},
+      -- [id] = { last_ms =, label =, blocked =, initialized =, error = }:
+      -- die letzte Antwort dieses Ventils auf VALVE_PING (siehe
+      -- handle_valve_pong()).
+      valve_pong = {},
+      -- [id] = Zeitpunkt der letzten sonstigen Meldung dieses Ventils
+      -- (VALVE_ACK, HOP_SCAN) -- zaehlt fuer die Erreichbarkeit, aber nicht
+      -- fuers Schliessen des Uplinks (siehe valve_peers()).
+      valve_reply = {},
+      last_ping_ms = nil,
+      started_ms = os.epoch and os.epoch("utc") or 0,
       routes = {},
       active_target = nil,
       active_path = nil,
@@ -282,7 +359,7 @@ end
 
 function M:refresh()
   -- Discovery may fire while a valve transaction is between confirmed OPEN
-  -- and the export callback. Rebuilding integrator wrappers or block_all() in
+  -- and the export callback. Reloading the route list or block_all() in
   -- that window races the transaction state machine. Defer the refresh until
   -- the transaction has reached a terminal state instead.
   if self._state.transaction or self._state.quiesce then
@@ -302,9 +379,9 @@ function M:refresh()
   self._state.tree_configured = #tree > 0
 
   -- Strukturelle Validierung VOR jeder Aktivierung. Bei einem ungueltigen
-  -- Baum: alle Ventile blockieren (Fail-Safe-Grundzustand), all_valves/
-  -- integrators NICHT aus dem fehlerhaften Baum laden, Fehler geloggt und
-  -- ueber get_validation() fuer UI/Alerts bereitgestellt.
+  -- Baum: alle Ventile blockieren (Fail-Safe-Grundzustand), all_valves
+  -- NICHT aus dem fehlerhaften Baum laden, Fehler geloggt und ueber
+  -- get_validation() fuer UI/Alerts bereitgestellt.
   --
   -- get_routing_state() ist die einzige Autoritaet fuer "war konfiguriert"
   -- vs. "nie konfiguriert" -- basiert auf tree_configured/tree_valid/
@@ -320,13 +397,15 @@ function M:refresh()
   self._state.routes = routes
   self._state.tree_valid = #errors == 0
   self._state.tree_errors = errors
+  -- Die Ventilketten sind geladen -- erst ab jetzt weiss uplink_close_check(),
+  -- welche Ventile antworten muessen.
+  self._state.routes_loaded = true
 
   if #errors > 0 then
     for _, e in ipairs(errors) do
       self.warn_once("tree_invalid:" .. e.code, "RedstoneRouter: UNGUELTIGER BAUM [" .. e.code .. "] " .. e.message)
     end
     self._state.all_valves = {}
-    self._state.integrators = {}
     self:block_all()
     self.log("ERROR", string.format(
       "RedstoneRouter: redstone_tree ungueltig (%d Fehler) — alle Ventile blockiert, kein Routing aktiv",
@@ -334,143 +413,323 @@ function M:refresh()
     return
   end
 
+  -- Ob ein Ventil erreichbar ist, haelt refresh() NICHT mehr fest -- das
+  -- fragt jede Stelle live ab, wenn sie es braucht (_valve_link()).
   local all = collect_all_valves(routes)
   self._state.all_valves = all
-
-  local int_names = {}
-  for _, v in ipairs(all) do if v.integrator then int_names[v.integrator] = true end end
-  local integrators = {}
-  local known_peers = self.comms and self.comms:get_peers() or {}
-  for name in pairs(int_names) do
-    if known_peers[name] and not known_peers[name].down then
-      -- Auto-Discovery: der Integrator meldet sich per HELLO/Heartbeat wie
-      -- jeder andere Node. "name" ist die node_id des VALVE-Node.
-      integrators[name] = { network = true, node_id = name }
-      self.log("DEBUG", "RedstoneRouter: integrator " .. name .. " (VALVE-Node, per Funk erreichbar)")
-    elseif peripheral.isPresent(name) then
-      local ok, w = pcall(peripheral.wrap, name)
-      if ok and w then
-        integrators[name] = { network = false, wrapped = w }
-        self.log("DEBUG", "RedstoneRouter: integrator " .. name .. " (lokales Peripheral)")
-      else
-        self.warn_once("int:" .. name, "RedstoneRouter: integrator wrap failed: " .. name)
-      end
-    else
-      self.warn_once("int_abs:" .. name,
-        "RedstoneRouter: integrator '" .. name .. "' weder als VALVE-Node per Funk erreichbar noch als lokales Peripheral gefunden")
-    end
-  end
-  self._state.integrators = integrators
   self:block_all()
   self.log("DEBUG", string.format("RedstoneRouter: tree loaded, %d total valves", #all))
 end
 
-function M:_set_valve(valve, high)
-  local side = valve.side
-  -- Angeforderten Zustand PRO (integrator, side) festhalten (nicht nur
-  -- integrator -- sonst ueberschreiben mehrere Seiten am selben Integrator
-  -- sich gegenseitig). Ehrlich "requested" benannt, NICHT "confirmed": das
-  -- Funkprotokoll bleibt fire-and-forget, ein erfolgreicher modem.transmit()
-  -- bestaetigt nicht, dass Redstone tatsaechlich geschaltet wurde.
-  if valve.integrator then
-    self._state.valve_requested = self._state.valve_requested or {}
-    self._state.valve_requested[valve.integrator .. "|" .. tostring(side)] = high and "BLOCKED" or "OPEN"
+-- ── Ventil-Erreichbarkeit: LIVE aus der Peer-Tabelle von comms ─────────────
+--
+-- Bis v817 legte refresh() eine Momentaufnahme an (_state.integrators): nur
+-- ein Ventil, das in GENAU DIESEM Augenblick per Funk bekannt war, durfte
+-- geschaltet werden. refresh() laeuft aber beim Start -- bevor auch nur ein
+-- VALVE-Node seinen ersten Heartbeat geschickt hat -- und danach hoechstens
+-- alle 60 s, nur bei eingeschalteter Logistik und nie waehrend einer
+-- Lieferung. Bis dahin galt jedes Ventil als "offline": der Schirm zeigte
+-- "Ventil-Verbindung nicht bereit", jede Lieferung scheiterte sofort, obwohl
+-- alle VALVE-Nodes laengst funkten. Umgekehrt blieb ein Ventil, das nach dem
+-- refresh() ausfiel, bis zum naechsten refresh() "schaltbar".
+--
+-- Jetzt fragt jede Stelle (Schalten, Exportfreigabe, Statusanzeige) in dem
+-- Moment, in dem sie die Antwort braucht -- seit v823 valve_peers(): die
+-- Peer-Tabelle von comms (Heartbeats, solange FUEL den Uplink hoert)
+-- zusammen mit den Antworten auf VALVE_PING, das jeweils Bessere zaehlt:
+--   "online"  -- comms kennt den Node, er ist weder down noch ueberfaellig
+--   "stale"   -- comms kennt ihn, sein letzter Heartbeat ist ueberfaellig
+--   "offline" -- comms fuehrt ihn als down, oder er war schon einmal da und
+--                ist inzwischen aus der Peer-Tabelle gealtert
+--   "waiting" -- noch nie gehoert, FUEL laeuft aber erst kurz (Anlauf)
+--   "unknown" -- noch nie gehoert, seit VALVE_UNKNOWN_GRACE_MS: unter dieser
+--                Kennung meldet sich kein VALVE-Node -- fast immer eine
+--                falsche oder veraltete ID in der Ventilkette
+-- Zweiter Rueckgabewert: der Peer-Eintrag (nil, wenn comms ihn nicht fuehrt).
+--
+-- Uebergaenge landen im Log -- einmal je Stoerung (core/once_log.lua), nicht
+-- einmal je Laufzeit: beim Start, solange noch alles "waiting" ist, gar
+-- nicht (frueher stand dort fuer jedes Ventil "nicht per Funk erreichbar"),
+-- und faellt ein Ventil nach einer Erholung erneut aus, wird das wieder
+-- gemeldet.
+-- Ventil-Lebenszeichen fuer alle Abfragen: die Peer-Tabelle von comms,
+-- ergaenzt um das, was das Ventil selbst an FUEL schickt (Eintraege in
+-- derselben Form wie comms:get_peers(), mit via = "ping"): die Antwort auf
+-- VALVE_PING und -- seit v824, bei Ventilen, die auf den Ping antworten --
+-- jede Quittung (VALVE_ACK) und jeder HOP_SCAN; waehrend einer Lieferung
+-- kommen so laufend frische Zeichen.
+-- Hat ein Ventil Heartbeat und Antwort, zaehlt das Bessere (online vor
+-- ueberfaellig vor weg, bei Gleichstand das Juengere). Ein Zeitstempel aus
+-- der Zukunft (Uhr zurueckgesprungen) gilt als ueberfaellig, nicht als
+-- frisch: die naechste Runde heilt das.
+--
+-- Fuers Schliessen des Uplinks zaehlt dagegen NUR die Ping-Antwort
+-- (all_valves_answer_ping()): ein Ventil bis v822 quittiert auch, antwortet
+-- aber nie auf den Ping -- wuerden seine Quittungen zaehlen, ginge 6501 bei
+-- jeder Lieferung kurz zu und 30 s spaeter wieder auf.
+local function presence_rank(entry)
+  if entry.down == true then return 2 end
+  if entry.stale == true then return 1 end
+  return 0
+end
+
+function M:valve_peers()
+  local peers = self.comms and self.comms:get_peers() or {}
+  local pongs, replies = self._state.valve_pong or {}, self._state.valve_reply or {}
+  if next(pongs) == nil then return peers end
+  -- Quittung und HOP_SCAN zaehlen nur bei Ventilen, die auf VALVE_PING
+  -- antworten (ab v823). Ein aelteres Ventil beurteilt FUEL wie bisher nur
+  -- ueber seinen Heartbeat -- erklaert comms es fuer weg, laeuft kein Export
+  -- mehr, auch wenn es eben noch quittiert hat
+  -- (redstone_router_refresh_transaction_race_test.lua).
+  local heard = {}
+  for id, pong in pairs(pongs) do
+    local last = pong.last_ms or 0
+    local reply = replies[id]
+    if reply ~= nil and reply > last then last = reply end
+    heard[id] = last
   end
-  if valve.integrator then
-    local w = self._state.integrators[valve.integrator]
-    if w and w.network then
-      -- Jedes Kommando bekommt eine eindeutige command_id, wird als "pending"
-      -- verfolgt (siehe check_pending_acks(), periodisch von der aufrufenden
-      -- Rolle aufgerufen) und bei fehlender Bestaetigung erneut gesendet
-      -- (begrenzte Versuche). handle_valve_ack() traegt den tatsaechlich
-      -- bestaetigten Zustand ein. Fail-Safe (VALVE faellt nach 20s ohne
-      -- Kommando in BLOCKED) bleibt die letzte Verteidigungslinie.
-      if not self.valve_modem then
-        self.warn_once("no_valve_modem", "RedstoneRouter: kein Wireless Modem fuer den Ventil-Kanal gefunden")
-        return false
-      end
-      local source_node_id = self.source_node_id
-      if type(source_node_id) ~= "string" or source_node_id == "" then
-        self.warn_once("missing_valve_source_id", "RedstoneRouter: keine gueltige Runtime-Node-ID fuer SET_VALVE; Netzwerkschaltung verweigert")
-        return false
-      end
-      self._state.command_seq = (self._state.command_seq or 0) + 1
-      local command_id = source_node_id .. "-" .. tostring(os.epoch and os.epoch("utc") or 0) .. "-" .. tostring(self._state.command_seq)
-      local key = valve.integrator .. "|" .. tostring(side)
-      local message = {
-        type = "SET_VALVE", src = source_node_id, dst = w.node_id,
-        command_id = command_id, side = side, high = high, ts = os.epoch and os.epoch("utc") or 0,
-      }
-      local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
-      if not ok then
-        self.warn_once("valve_net_fail:" .. valve.integrator,
-          "RedstoneRouter: SET_VALVE an " .. valve.integrator .. " konnte nicht gesendet werden")
-        return false
-      end
-      self._state.pending_valve_acks = self._state.pending_valve_acks or {}
-      self._state.pending_valve_acks[key] = {
-        command_id = command_id, src = source_node_id, dst = w.node_id, side = side, high = high,
-        integrator = valve.integrator, sent_ts = message.ts, retries = 0,
-      }
-      return true, command_id
+  local now = epoch_ms()
+  for id, last_ms in pairs(heard) do
+    local pong = pongs[id]
+    local age_ms = now - last_ms
+    local entry = {
+      last_seen = last_ms,
+      age = math.max(0, age_ms) / 1000,
+      stale = age_ms < 0 or age_ms > M.VALVE_PONG_STALE_MS,
+      down = age_ms > M.VALVE_PONG_DOWN_MS,
+      role = constants.roles.VALVE_NODE,
+      label = pong and pong.label or nil,
+      via = "ping",
+    }
+    local current = peers[id]
+    local better = current == nil
+      or presence_rank(entry) < presence_rank(current)
+      or (presence_rank(entry) == presence_rank(current)
+        and (entry.last_seen or 0) > (current.last_seen or 0))
+    if better then
+      if entry.label == nil and current ~= nil then entry.label = current.label end
+      peers[id] = entry
     end
-    if w and w.wrapped then
-      local ok = safe_call(w.wrapped, "setOutput", side, high)
-      if ok == nil then
-        self.warn_once("valve_set_fail:" .. valve.integrator .. ":" .. tostring(side),
-          "RedstoneRouter: Ventil-Schaltung fehlgeschlagen (" .. valve.integrator .. "/" .. tostring(side) .. ")")
-        return false
-      end
-      return true
-    end
-    -- Integrator offline/nicht gewrapped: explizite Warnung statt stillem
-    -- Nichtstun -- ein nicht schaltbares Ventil ist sicherheitsrelevant.
-    self.warn_once("int_offline:" .. valve.integrator,
-      "RedstoneRouter: Integrator '" .. valve.integrator .. "' offline — Ventil (" .. tostring(side) .. ") nicht schaltbar")
-    return false
-  elseif BUILTIN_SIDES[side] then
-    local ok = pcall(redstone.setOutput, side, high)
-    if not ok then
-      self.warn_once("valve_rs_fail:" .. tostring(side),
-        "RedstoneRouter: redstone.setOutput fehlgeschlagen fuer Seite '" .. tostring(side) .. "'")
-      return false
-    end
-    return true
+  end
+  return peers
+end
+
+-- VALVE_PING als Rundruf an alle Ventile, hoechstens alle
+-- VALVE_PING_INTERVAL_MS (springt die Uhr zurueck: sofort). true = gesendet.
+function M:ping_valves(now)
+  if not self.valve_modem then return false end
+  local src = self.source_node_id
+  if type(src) ~= "string" or src == "" then return false end
+  now = now or epoch_ms()
+  local last = self._state.last_ping_ms
+  if last ~= nil and now >= last and now - last < M.VALVE_PING_INTERVAL_MS then return false end
+  self._state.last_ping_ms = now
+  local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    type = "VALVE_PING", src = src, ts = now,
+    reply_channel = constants.channels.VALVE_REPLY,
+  })
+  return ok
+end
+
+-- Sonstige Meldung eines Ventils an FUEL (VALVE_ACK, HOP_SCAN): zaehlt fuer
+-- die Erreichbarkeit (valve_peers()), nicht fuers Schliessen des Uplinks.
+function M:_note_valve_reply(id)
+  if type(id) ~= "string" or id == "" then return end
+  self._state.valve_reply = self._state.valve_reply or {}
+  self._state.valve_reply[id] = epoch_ms()
+end
+
+-- Antwort eines Ventils auf VALVE_PING. Nur Antworten an DIESE FUEL-Node
+-- (dst) zaehlen. true = uebernommen.
+function M:handle_valve_pong(message)
+  if type(message) ~= "table" or message.type ~= "VALVE_PONG" then return false end
+  if type(message.src) ~= "string" or message.src == "" then return false end
+  if message.dst == nil or message.dst ~= self.source_node_id then return false end
+  self._state.valve_pong[message.src] = {
+    last_ms = epoch_ms(),
+    label = type(message.label) == "string" and message.label ~= "" and message.label or nil,
+    blocked = message.blocked,
+    initialized = message.initialized,
+    error = message.error,
+  }
+  return true
+end
+
+-- Antwortet jedes Ventil der Routen auf VALVE_PING (juengste Antwort nicht
+-- aelter als VALVE_PONG_DOWN_MS)? Nur dann braucht FUEL die Heartbeats auf
+-- dem Uplink nicht (nodes/fuel/main.lua, uplink_close_check). Zweiter
+-- Rueckgabewert: das erste Ventil, das nicht antwortet. Ohne Routen: true.
+function M:all_valves_answer_ping(now)
+  now = now or epoch_ms()
+  for _, id in ipairs(self._state.all_valves or {}) do
+    local pong = self._state.valve_pong[id]
+    local age = pong and (now - (pong.last_ms or 0)) or nil
+    if age == nil or age < 0 or age > M.VALVE_PONG_DOWN_MS then return false, id end
+  end
+  return true
+end
+
+-- Darf FUEL den Uplink 6501 schliessen (services/comms_service.lua,
+-- uplink_close_check)? Nur, wenn die Ventilketten geladen sind (vorher ist
+-- "alle antworten" trivial wahr), jedes Ventil der Routen auf VALVE_PING
+-- antwortet -- sonst kennt FUEL ein Ventil nur ueber dessen Heartbeat --
+-- und nicht, waehrend im ROUTER eine Kette bearbeitet wird (editing): die
+-- Auswahl soll auch ein Ventil zeigen, das (noch) nicht antwortet.
+-- Rueckgabe: can_close, Grund.
+function M:uplink_close_check(editing, now)
+  if not self._state.routes_loaded then
+    return false, "die Ventilketten sind noch nicht geladen"
+  end
+  if editing then return false, "im ROUTER wird eine Ventilkette bearbeitet" end
+  local answering, missing = self:all_valves_answer_ping(now)
+  if not answering then
+    return false, "Ventil " .. tostring(missing) .. " antwortet nicht auf VALVE_PING"
+  end
+  return true, "alle Ventile antworten auf VALVE_PING, den Fuellstand reicht MASTER weiter"
+end
+
+function M:_valve_link(id, peers)
+  if peers == nil then peers = self:valve_peers() end
+  local peer = peers[id]
+  local kind
+  if peer then
+    local seen = self._state.valve_seen[id]
+    if not seen then seen = {}; self._state.valve_seen[id] = seen end
+    if peer.last_seen ~= nil then seen.last_seen_ms = peer.last_seen end
+    if peer.label ~= nil then seen.label = peer.label end
+    if peer.down == true then kind = "offline"
+    elseif peer.stale == true then kind = "stale"
+    else kind = "online" end
+  elseif self._state.valve_seen[id] then
+    kind = "offline"
   else
-    self.warn_once("bad_side:" .. tostring(side), "RedstoneRouter: unknown side '" .. tostring(side) .. "'")
+    local now = os.epoch and os.epoch("utc") or 0
+    -- Uhr zurueckgesprungen: die Anlaufzeit beginnt von vorn, statt um den
+    -- Sprung verlaengert zu werden.
+    if now < self._state.started_ms then self._state.started_ms = now end
+    if now - self._state.started_ms < VALVE_UNKNOWN_GRACE_MS then
+      kind = "waiting"
+    else
+      kind = "unknown"
+    end
+  end
+
+  local link_log = self._link_log
+  if kind == "online" or kind == "stale" then
+    link_log.recover_name(id)
+  elseif kind == "offline" then
+    if link_log.report(id, "offline") then
+      self.log("WARN", "RedstoneRouter: VALVE-Node '" .. tostring(id) .. "' offline — Ventil nicht schaltbar")
+    end
+  elseif kind == "unknown" then
+    if link_log.report(id, "unknown") then
+      self.log("WARN", "RedstoneRouter: unter der Kennung '" .. tostring(id)
+        .. "' hat sich seit dem Start kein VALVE-Node gemeldet — Ventilkette pruefen (ROUTER > Ventilkette neu einlernen)")
+    end
+  end
+  return kind, peer
+end
+
+-- Schaltet genau ein Ventil (per node_id, "integrator") auf den
+-- angeforderten Zustand -- ausschliesslich per Funk (SET_VALVE) an dessen
+-- VALVE-Node. Jedes Kommando bekommt eine eindeutige command_id, wird als
+-- "pending" verfolgt (siehe check_pending_acks(), periodisch von der
+-- aufrufenden Rolle aufgerufen) und bei fehlender Bestaetigung erneut
+-- gesendet (begrenzte Versuche). handle_valve_ack() traegt den tatsaechlich
+-- bestaetigten Zustand ein. Fail-Safe (VALVE faellt nach 20s ohne Kommando
+-- in BLOCKED, oder nach Redstone-Fallback-Konfiguration analog) bleibt die
+-- letzte Verteidigungslinie.
+--
+-- Wohin gesendet werden darf, entscheidet die Live-Erreichbarkeit
+-- (_valve_link()):
+--   BLOCKED (high=true) geht an jedes Ventil, das comms gerade fuehrt --
+--     auch "stale" oder down. Sperren ist immer der sichere Zustand; kommt
+--     das Kommando trotzdem an, umso besser.
+--   OPEN (high=false) geht nur an ein Ventil, das gerade "online" ist --
+--     dieselbe Bedingung, die _path_runtime_ready() vor dem Export verlangt.
+-- Ein Ventil, das comms nicht fuehrt (noch nie gehoert, oder laengst weg),
+-- bekommt nichts; der Aufrufer sieht false und bricht sofort ab, statt auf
+-- ein ACK zu warten, das nie kommt.
+-- peers: optional, die Peer-Tabelle eines ganzen Stapels (einmal geholt
+-- statt je Ventil -- comms:get_peers() baut jedes Mal eine neue Tabelle).
+function M:_set_valve(integrator, high, peers)
+  if type(integrator) ~= "string" or integrator == "" then
+    self.warn_once("valve_no_integrator", "RedstoneRouter: Ventil-Eintrag ohne VALVE-Node-ID uebersprungen")
     return false
   end
+
+  -- Angeforderten Zustand festhalten. Ehrlich "requested" benannt, NICHT
+  -- "confirmed": das Funkprotokoll bleibt fire-and-forget, ein erfolgreicher
+  -- modem.transmit() bestaetigt nicht, dass Redstone/Sorter tatsaechlich
+  -- geschaltet wurde.
+  self._state.valve_requested = self._state.valve_requested or {}
+  self._state.valve_requested[integrator] = high and "BLOCKED" or "OPEN"
+
+  -- Ein nicht schaltbares Ventil ist sicherheitsrelevant: _valve_link()
+  -- meldet "offline"/"unbekannt" ins Log, hier wird nur verweigert.
+  local link, peer = self:_valve_link(integrator, peers)
+  if high then
+    if peer == nil then return false end
+  elseif link ~= "online" then
+    return false
+  end
+  if not self.valve_modem then
+    self.warn_once("no_valve_modem", "RedstoneRouter: kein Wireless Modem fuer den Ventil-Kanal gefunden")
+    return false
+  end
+  local source_node_id = self.source_node_id
+  if type(source_node_id) ~= "string" or source_node_id == "" then
+    self.warn_once("missing_valve_source_id", "RedstoneRouter: keine gueltige Runtime-Node-ID fuer SET_VALVE; Netzwerkschaltung verweigert")
+    return false
+  end
+  self._state.command_seq = (self._state.command_seq or 0) + 1
+  local command_id = source_node_id .. "-" .. tostring(os.epoch and os.epoch("utc") or 0) .. "-" .. tostring(self._state.command_seq)
+  -- Die Pfad-ID IST die node_id des VALVE-Node (siehe Kopf dieser Datei).
+  local message = {
+    type = "SET_VALVE", src = source_node_id, dst = integrator,
+    command_id = command_id, high = high, ts = os.epoch and os.epoch("utc") or 0,
+    -- Hierauf antwortet ein Ventil ab v822 (VALVE_ACK, HOP_SCAN, Teach);
+    -- aeltere ignorieren das Feld und antworten auf 6504.
+    reply_channel = constants.channels.VALVE_REPLY,
+  }
+  local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
+  if not ok then
+    self.warn_once("valve_net_fail:" .. integrator,
+      "RedstoneRouter: SET_VALVE an " .. integrator .. " konnte nicht gesendet werden")
+    return false
+  end
+  self._state.pending_valve_acks = self._state.pending_valve_acks or {}
+  self._state.pending_valve_acks[integrator] = {
+    command_id = command_id, src = source_node_id, dst = integrator, high = high,
+    integrator = integrator, sent_ts = message.ts, retries = 0,
+  }
+  return true, command_id
 end
 
 function M:block_all()
   local all_ok = true
-  for _, v in ipairs(self._state.all_valves) do
-    if not self:_set_valve(v, true) then all_ok = false end
+  local peers = self:valve_peers()
+  for _, id in ipairs(self._state.all_valves) do
+    if not self:_set_valve(id, true, peers) then all_ok = false end
   end
   return all_ok
 end
 
-local function valve_key(integrator, side)
-  return tostring(integrator or "") .. "|" .. tostring(side)
-end
-
--- Sendet SET_VALVE fuer eine Liste von {side=, integrator=, high=}-
--- Eintraegen und baut eine Bestaetigungs-Erwartung PRO Ventil auf.
--- Netzwerk-Ventile (VALVE-Node per Funk) brauchen ein asynchrones ACK
--- (siehe _set_valve()/handle_valve_ack() -- pending_valve_acks/confirmed_
--- valve_state); lokale Peripherals und eingebaute Redstone-Seiten werden
--- synchron geschaltet, ihr _set_valve()-Rueckgabewert IST bereits die
--- Bestaetigung (kein Funk-Roundtrip noetig).
+-- Sendet SET_VALVE fuer eine Liste von {id=, high=}-Eintraegen und baut eine
+-- Bestaetigungs-Erwartung PRO Ventil auf. Jedes Ventil wird per Funk
+-- geschaltet: was gesendet wurde, muss per VALVE_ACK bestaetigt werden
+-- (needs_ack); was nicht gesendet werden durfte oder konnte, ist sofort
+-- gescheitert (sync_ok == false, siehe _check_valve_batch()).
 function M:_request_valve_batch(entries)
   local pending = {}
+  local peers = self:valve_peers()
   for _, entry in ipairs(entries) do
-    local key = valve_key(entry.integrator, entry.side)
-    local w = entry.integrator and self._state.integrators[entry.integrator] or nil
-    local needs_ack = w and w.network == true
-    local ok, command_id = self:_set_valve({ side = entry.side, integrator = entry.integrator }, entry.high)
-    pending[key] = {
-      integrator = entry.integrator, side = entry.side, high = entry.high,
-      needs_ack = needs_ack, sync_ok = ok, command_id = command_id,
+    local ok, command_id = self:_set_valve(entry.id, entry.high, peers)
+    local sent = ok == true
+    pending[entry.id] = {
+      integrator = entry.id, high = entry.high,
+      needs_ack = sent, sync_ok = sent, command_id = command_id,
     }
   end
   return pending
@@ -479,17 +738,16 @@ end
 -- Prueft eine per _request_valve_batch() aufgebaute Bestaetigungs-
 -- Erwartung. Rueckgabe "ok": JEDES Ventil ist nachweislich im
 -- angeforderten Zustand (ACK vorhanden, applied==true, bestaetigtes high
--- entspricht angefordertem high -- fuer synchrone Ventile: Schaltbefehl
--- erfolgreich). "waiting": mindestens ein Netzwerk-ACK ist noch
--- unterwegs (nicht aufgegeben), aber nichts ist bisher fehlgeschlagen.
--- "failed": mindestens ein Ventil ist nachweislich NICHT im gewuenschten
--- Zustand (synchroner Fehlschlag, oder ein Netzwerk-Kommando wurde nach
+-- entspricht angefordertem high). "waiting": mindestens ein Netzwerk-ACK
+-- ist noch unterwegs (nicht aufgegeben), aber nichts ist bisher
+-- fehlgeschlagen. "failed": mindestens ein Ventil ist nachweislich NICHT im
+-- gewuenschten Zustand (ein Netzwerk-Kommando wurde nach
 -- VALVE_ACK_MAX_RETRIES aufgegeben ohne Bestaetigung -- check_pending_
 -- acks() loescht es dann aus pending_valve_acks OHNE confirmed_valve_
 -- state zu setzen, was hier als "nicht pending UND nicht bestaetigt"
 -- erkannt wird).
 --
--- confirmed_valve_state[key] wird NIE geloescht und ueberlebt beliebig viele
+-- confirmed_valve_state[id] wird NIE geloescht und ueberlebt beliebig viele
 -- Transaktionen fuer denselben Schluessel -- deshalb wird zusaetzlich
 -- verlangt, dass der bestaetigte Zustand zur AKTUELL angeforderten
 -- command_id gehoert. Sonst koennte ein alter Bestaetigungszustand als
@@ -497,18 +755,18 @@ end
 -- durchgehen.
 function M:_check_valve_batch(pending)
   local waiting = false
-  for key, entry in pairs(pending) do
+  for id, entry in pairs(pending) do
     if entry.needs_ack then
-      local still_pending = self._state.pending_valve_acks and self._state.pending_valve_acks[key]
-      local confirmed = self._state.confirmed_valve_state and self._state.confirmed_valve_state[key]
+      local still_pending = self._state.pending_valve_acks and self._state.pending_valve_acks[id]
+      local confirmed = self._state.confirmed_valve_state and self._state.confirmed_valve_state[id]
       if still_pending then
         waiting = true
       elseif not (confirmed and confirmed.applied == true and confirmed.high == entry.high
           and entry.command_id ~= nil and confirmed.command_id == entry.command_id) then
-        return "failed", key
+        return "failed", id
       end
     elseif not entry.sync_ok then
-      return "failed", key
+      return "failed", id
     end
   end
   if waiting then return "waiting" end
@@ -555,8 +813,8 @@ end
 
 function M:_all_block_entries()
   local entries = {}
-  for _, v in ipairs(self._state.all_valves or {}) do
-    entries[#entries + 1] = { integrator = v.integrator, side = v.side, high = true }
+  for _, id in ipairs(self._state.all_valves or {}) do
+    entries[#entries + 1] = { id = id, high = true }
   end
   return entries
 end
@@ -650,7 +908,7 @@ function M:get_last_transaction()
 end
 
 -- Update-Quiesce has a stricter contract than shutdown_now(): runtime may only
--- stop after every currently known wireless/local valve is confirmed BLOCKED.
+-- stop after every currently known wireless valve is confirmed BLOCKED.
 function M:begin_quiesce(reason)
   if self._state.quiesce then return self._state.quiesce.state == "CONFIRMED" end
   if self._state.transaction then
@@ -706,6 +964,24 @@ function M:poll_quiesce(now_ms)
   q.attempts = (q.attempts or 0) + 1
   self.log("WARN", "RedstoneRouter: Quiesce-BLOCKED noch nicht bestaetigt -- sichere Anforderung wird erneut gesendet")
   return false
+end
+
+-- Gegenstueck zu begin_quiesce(): core/update_handshake.lua's reset()
+-- storniert einen Quiesce-Request ausdruecklich nur, solange die Rolle noch
+-- laeuft. _state.quiesce sperrt begin_transaction() ("quiescing") und damit
+-- jede Lieferung -- ohne Rueckweg blieb FUEL nach einem abgebrochenen
+-- Update-Versuch dauerhaft stumm, bis zum naechsten Reboot. Ein bereits
+-- BESTAETIGTER Quiesce wird NICHT zurueckgenommen: ab da gehoert die
+-- Hardware dem gestoppten Runtime-Zustand, Erholung heisst Reboot (dieselbe
+-- Grenze, die update_handshake.reset() selbst zieht).
+function M:cancel_quiesce(reason)
+  local q = self._state.quiesce
+  if not q then return false end
+  if q.state == "CONFIRMED" then return false end
+  self._state.quiesce = nil
+  self.log("WARN", "RedstoneRouter: Update-Quiesce zurueckgenommen ("
+    .. tostring(reason or "CANCELLED") .. ") -- Lieferungen sind wieder erlaubt")
+  return true
 end
 
 function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
@@ -785,6 +1061,20 @@ function M:_fail_transaction(reason)
   end
 end
 
+-- Exportfreigabe: jedes Ventil des Zielpfads muss JETZT "online" sein (siehe
+-- _valve_link()). Grund im Fehlerfall: "<Zustand>:<Ventil-ID>", etwa
+-- "stale:VALVE-3" oder "unknown:node-12".
+function M:_path_runtime_ready(path)
+  local peers = self:valve_peers()
+  for _, integrator in ipairs(path or {}) do
+    local link = self:_valve_link(integrator, peers)
+    if link ~= "online" then
+      return false, link .. ":" .. tostring(integrator)
+    end
+  end
+  return true
+end
+
 -- Maximale Wartezeit auf eine Ventil-Bestaetigungs-Phase (Block oder
 -- Open), bevor die Transaktion als fehlgeschlagen abgebrochen wird.
 -- Deutlich groesser als das einzelne ACK-Timeout (VALVE_ACK_TIMEOUT_MS,
@@ -792,34 +1082,12 @@ end
 -- nach VALVE_ACK_MAX_RETRIES aufgibt -- diese Phasen-Deadline ist nur ein
 -- zusaetzliches Sicherheitsnetz, falls ein Ventil dauerhaft "pending"
 -- haengen bleibt, ohne dass check_pending_acks() es je aufgibt.
-function M:_path_runtime_ready(path)
-  local peers = self.comms and self.comms:get_peers() or {}
-  for _, valve in ipairs(path or {}) do
-    if valve.integrator then
-      local binding = self._state.integrators[valve.integrator]
-      if not binding then
-        return false, "integrator_missing:" .. tostring(valve.integrator)
-      end
-      if binding.network then
-        local peer = peers[valve.integrator]
-        if not peer then
-          return false, "peer_missing:" .. tostring(valve.integrator)
-        end
-        if peer.down == true or peer.stale == true then
-          return false, "peer_stale:" .. tostring(valve.integrator)
-        end
-      else
-        if not peripheral or type(peripheral.isPresent) ~= "function"
-            or not peripheral.isPresent(valve.integrator) then
-          return false, "peripheral_missing:" .. tostring(valve.integrator)
-        end
-      end
-    end
-  end
-  return true
-end
-
 local VALVE_PHASE_TIMEOUT_MS = 15000
+
+-- Physische Pufferzeit NACH bestaetigtem OPEN, bevor exportiert wird. Jedes
+-- Ventil haengt an einem VALVE-Node (Funk) -- die frueheren 0.05 s fuer ein
+-- direkt verdrahtetes Ventil gibt es mit diesem Steuerungsweg nicht mehr.
+local VALVE_SETTLE_MS = 400
 
 -- Muss regelmaessig (z.B. alle 0.5s aus dem Haupt-Event-Loop der
 -- aufrufenden Rolle) aufgerufen werden, unabhaengig davon ob gerade eine
@@ -845,14 +1113,11 @@ function M:tick(now_ms)
       if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then self:_fail_transaction("block_ack_timeout") end
       return
     end
-    local uses_network, open_entries = false, {}
-    for _, v in ipairs(tx.path) do
-      open_entries[#open_entries + 1] = { integrator = v.integrator, side = v.side, high = false }
-      local w = v.integrator and self._state.integrators[v.integrator]
-      if w and w.network then uses_network = true end
+    local open_entries = {}
+    for _, id in ipairs(tx.path) do
+      open_entries[#open_entries + 1] = { id = id, high = false }
     end
     tx.pending = self:_request_valve_batch(open_entries)
-    tx.uses_network = uses_network
     tx.state = "WAIT_OPEN_ACKS"
     tx.phase = "OPENING"
     tx.phase_started_ms = now_ms
@@ -866,15 +1131,12 @@ function M:tick(now_ms)
       if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then self:_fail_transaction("open_ack_timeout") end
       return
     end
-    local sides = {}
-    for _, v in ipairs(tx.path) do sides[#sides + 1] = v.side end
     self._state.active_target = tx.target_id
-    self._state.active_path = sides
+    self._state.active_path = tx.path
     self._state.last_target = tx.target_id
-    self._state.last_path = sides
+    self._state.last_path = tx.path
     self._state.last_active_ts = now_ms
-    local settle_s = tx.uses_network and 0.4 or 0.05
-    tx.settle_until = now_ms + math.floor(settle_s * 1000)
+    tx.settle_until = now_ms + VALVE_SETTLE_MS
     tx.state = "WAIT_SETTLE"
     tx.phase = "SETTLING"
     return
@@ -982,13 +1244,6 @@ function M:valve_count()
   return #self._state.all_valves
 end
 
--- Fuehrt fuer jeden Netzwerk-Integrator zusammen: Live-Peer-Status, zuletzt
--- angeforderten Zustand (siehe _set_valve()), und beliefert Reaktoren.
---
--- "confirmed_state"/"state_matches" sind bewusst NICHT vorhanden -- nur
--- "requested_state" (was WIR zuletzt angefordert haben), niemals ein
--- bestaetigter Ist-Zustand.
---
 -- Verarbeitet eine eingehende VALVE_ACK-Nachricht -- muss von der aufrufenden
 -- Rolle aus ihrem comms-Message-Handler aufgerufen werden. Loescht das
 -- zugehoerige pending-Kommando und traegt den tatsaechlich bestaetigten
@@ -997,16 +1252,17 @@ function M:handle_valve_ack(message)
   if type(message) ~= "table" or message.type ~= "VALVE_ACK" or not message.command_id then return end
   local pending = self._state.pending_valve_acks
   if not pending then return end
-  for key, entry in pairs(pending) do
+  for id, entry in pairs(pending) do
     if entry.command_id == message.command_id then
       if message.src ~= entry.dst or message.dst ~= entry.src then
-        self.warn_once("valve_ack_identity:" .. tostring(key) .. ":" .. tostring(message.command_id),
+        self.warn_once("valve_ack_identity:" .. tostring(id) .. ":" .. tostring(message.command_id),
           "RedstoneRouter: VALVE_ACK mit unpassender src/dst-Identitaet ignoriert")
         return
       end
-      pending[key] = nil
+      pending[id] = nil
+      self:_note_valve_reply(message.src)
       self._state.confirmed_valve_state = self._state.confirmed_valve_state or {}
-      self._state.confirmed_valve_state[key] = {
+      self._state.confirmed_valve_state[id] = {
         command_id = message.command_id,
         applied = message.applied == true,
         high = message.high,
@@ -1018,6 +1274,21 @@ function M:handle_valve_ack(message)
   end
 end
 
+-- Verarbeitet eine eingehende HOP_SCAN-Nachricht (siehe nodes/valve/hop_
+-- reporter.lua) -- optionale, passive Fuellstandsmeldung einer VALVE-Node
+-- ueber ihre lokal angeschlossene Kreuzungskiste. Reine Weiterleitung an
+-- hop_timing (falls konfiguriert); ohne hop_timing ein No-Op. Muss von der
+-- aufrufenden Rolle aus ihrem comms-Message-Handler aufgerufen werden, wie
+-- handle_valve_ack() oben.
+function M:handle_hop_scan(message)
+  if type(message) ~= "table" or message.type ~= "HOP_SCAN" then return end
+  -- Lebenszeichen, auch ohne hop_timing (seit v824, siehe valve_peers()).
+  self:_note_valve_reply(message.src)
+  if not self.hop_timing then return end
+  if type(message.src) ~= "string" or message.src == "" or type(message.items) ~= "table" then return end
+  self.hop_timing:record_scan(message.src, message.items, message.ts)
+end
+
 -- Periodisch von der aufrufenden Rolle aufzurufen -- prueft unbestaetigte
 -- Kommandos gegen ein Timeout und sendet sie erneut (begrenzte Versuche,
 -- danach wird auf das 20s-Fail-Safe der VALVE-Node vertraut).
@@ -1026,27 +1297,49 @@ local VALVE_ACK_MAX_RETRIES = 3
 function M:check_pending_acks()
   if not self.valve_modem or not self._state.pending_valve_acks then return end
   local now = os.epoch and os.epoch("utc") or 0
-  for key, entry in pairs(self._state.pending_valve_acks) do
+  for id, entry in pairs(self._state.pending_valve_acks) do
     if (now - (entry.sent_ts or 0)) >= VALVE_ACK_TIMEOUT_MS then
       if entry.retries >= VALVE_ACK_MAX_RETRIES then
-        self.warn_once("valve_ack_timeout:" .. key,
-          "RedstoneRouter: SET_VALVE an " .. tostring(entry.dst) .. " (" .. key .. ") nach " .. VALVE_ACK_MAX_RETRIES .. " Versuchen unbestaetigt -- verlasse mich auf VALVE-Fail-Safe")
-        self._state.pending_valve_acks[key] = nil
+        self.warn_once("valve_ack_timeout:" .. id,
+          "RedstoneRouter: SET_VALVE an " .. tostring(entry.dst) .. " (" .. id .. ") nach " .. VALVE_ACK_MAX_RETRIES .. " Versuchen unbestaetigt -- verlasse mich auf VALVE-Fail-Safe")
+        self._state.pending_valve_acks[id] = nil
       else
         entry.retries = entry.retries + 1
         entry.sent_ts = now
         pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
           type = "SET_VALVE", src = entry.src, dst = entry.dst,
-          command_id = entry.command_id, side = entry.side, high = entry.high, ts = now,
+          command_id = entry.command_id, high = entry.high, ts = now,
+          reply_channel = constants.channels.VALVE_REPLY,
         })
       end
     end
   end
 end
 
+-- Fuehrt fuer jeden VALVE-Node zusammen: Live-Erreichbarkeit (siehe
+-- _valve_link()), zuletzt angeforderten Zustand (siehe _set_valve()), die
+-- letzte Rueckmeldung des Ventils und die belieferten Reaktoren.
+--
+-- Je Ventil:
+--   online  -- comms fuehrt den Node und er ist nicht down (auch "stale")
+--   stale   -- sein letzter Heartbeat ist ueberfaellig
+--   link    -- "online" | "stale" | "offline" | "waiting" | "unknown"
+--   unknown -- link == "unknown": unter dieser Kennung hat sich seit dem
+--              Start nie ein VALVE-Node gemeldet (falsche ID in der Kette)
+--   waiting -- link == "waiting": noch nie gehoert, FUEL laeuft erst kurz
+--   last_seen_ms -- letzte Meldung (os.epoch("utc")), auch nachdem comms den
+--              Peer vergessen hat; nil = nie gehoert
+--   requested_state -- was WIR zuletzt angefordert haben ("BLOCKED"/"OPEN")
+--   ack_*   -- die letzte VALVE_ACK dieses Ventils, so wie der VALVE-Node sie
+--              gemeldet hat (applied/high/error, Zeitpunkt). Das ist die
+--              Aussage des Ventils ueber seinen eigenen Schreibvorgang, kein
+--              von FUEL geratener Zustand. nil = noch keine Rueckmeldung.
+--   ack_pending -- ein Kommando ist gesendet, die Rueckmeldung steht aus
 function M:get_valve_status()
   local requested = self._state.valve_requested or {}
-  local peers = self.comms and self.comms:get_peers() or {}
+  local confirmed = self._state.confirmed_valve_state or {}
+  local pending_acks = self._state.pending_valve_acks or {}
+  local peers = self:valve_peers()
 
   -- Reaktor-Zuordnung: jedes Ventil auf dem Pfad einer Route bekommt deren
   -- Reaktor-Label zugeordnet -- ein Ventil, das in MEHREREN Routen
@@ -1055,49 +1348,45 @@ function M:get_valve_status()
   local affected = {}
   for _, route in ipairs(self._state.routes or {}) do
     local label = route.label or route.reactor
-    for _, v in ipairs(route.path or {}) do
-      if v.integrator then
-        affected[v.integrator] = affected[v.integrator] or {}
-        local list = affected[v.integrator]
-        local already = false
-        for _, existing in ipairs(list) do if existing == label then already = true end end
-        if not already then list[#list + 1] = label end
-      end
+    for _, id in ipairs(route.path or {}) do
+      affected[id] = affected[id] or {}
+      local list = affected[id]
+      local already = false
+      for _, existing in ipairs(list) do if existing == label then already = true end end
+      if not already then list[#list + 1] = label end
     end
   end
 
-  local seen_names, out = {}, {}
-  for _, v in ipairs(self._state.all_valves) do
-    if v.integrator and not seen_names[v.integrator] then
-      seen_names[v.integrator] = true
-      local w = self._state.integrators[v.integrator]
-      local peer = w and w.network and peers[v.integrator] or nil
-      local online, stale, age_s
-      if w and w.network then
-        online = peer ~= nil and peer.down ~= true
-        stale = peer ~= nil and peer.stale == true
-        age_s = peer and peer.age or nil
-      elseif w and w.wrapped then
-        -- lokales Peripheral statt Netzwerk-VALVE -- "online" heisst hier
-        -- schlicht "gerade als Peripheral erreichbar".
-        online = true
-        stale = false
-        age_s = 0
-      else
-        online = false
-        stale = false
-        age_s = nil
-      end
-      out[#out + 1] = {
-        id = v.integrator,
-        configured = true,
-        online = online,
-        stale = stale,
-        age_s = age_s,
-        requested_state = requested[v.integrator .. "|" .. tostring(v.side)] or "UNKNOWN",
-        affected_routes = affected[v.integrator] or {},
-      }
+  local out = {}
+  for _, id in ipairs(self._state.all_valves) do
+    local link, peer = self:_valve_link(id, peers)
+    local seen = self._state.valve_seen[id]
+    local ack = confirmed[id]
+    -- Ausgeschrieben statt "ack and ack.applied or nil": das machte aus
+    -- applied == false (genau der Fehlerfall) still nil.
+    local ack_applied, ack_high, ack_error, ack_ms = nil, nil, nil, nil
+    if ack then
+      ack_applied, ack_high, ack_error, ack_ms = ack.applied, ack.high, ack.error, ack.confirmed_ts
     end
+    out[#out + 1] = {
+      id = id,
+      label = (peer and peer.label) or (seen and seen.label) or id,
+      configured = true,
+      online = peer ~= nil and peer.down ~= true,
+      stale = peer ~= nil and peer.stale == true,
+      link = link,
+      unknown = link == "unknown",
+      waiting = link == "waiting",
+      age_s = peer and peer.age or nil,
+      last_seen_ms = (peer and peer.last_seen) or (seen and seen.last_seen_ms) or nil,
+      requested_state = requested[id] or "UNKNOWN",
+      ack_applied = ack_applied,
+      ack_high = ack_high,
+      ack_error = ack_error,
+      ack_ms = ack_ms,
+      ack_pending = pending_acks[id] ~= nil,
+      affected_routes = affected[id] or {},
+    }
   end
   table.sort(out, function(a, b) return a.id < b.id end)
   return out
@@ -1117,7 +1406,7 @@ end
 --                                strukturell ungueltig (validate_tree()).
 --   ROUTING_REQUIRED_BUT_EMPTY -- redstone_tree konfiguriert und
 --                                strukturell gueltig, aber ohne ein
---                                einziges tatsaechliches Ventil (side) --
+--                                einziges tatsaechliches Ventil --
 --                                Routing ist offensichtlich beabsichtigt,
 --                                kann aber nichts absichern.
 --   ROUTING_VALID             -- redstone_tree konfiguriert, gueltig, und
@@ -1146,10 +1435,7 @@ function M:get_tree()
 end
 
 function M:get_path_to(target_id)
-  local path = find_path(self._state.routes, target_id) or {}
-  local sides = {}
-  for _, v in ipairs(path) do sides[#sides + 1] = v.side end
-  return sides
+  return find_path(self._state.routes, target_id) or {}
 end
 
 function M:get_active_route()
@@ -1171,9 +1457,9 @@ end
 function M:get_routing_table()
   local result = {}
   for _, route in ipairs(self._state.routes or {}) do
-    local sides = {}
-    for _, v in ipairs(route.path or {}) do sides[#sides + 1] = v.side end
-    result[#result + 1] = { reactor = route.reactor, label = route.label or route.reactor, path = sides }
+    local path_copy = {}
+    for i, id in ipairs(route.path or {}) do path_copy[i] = id end
+    result[#result + 1] = { reactor = route.reactor, label = route.label or route.reactor, path = path_copy }
   end
   return result
 end

@@ -1,16 +1,24 @@
--- Dedicated, testable controller for one Mekanism Logistical Sorter.
+-- Dedicated, testable controller for one Mekanism Logistical Sorter, with a
+-- redstone fallback for valves that have no sorter at all.
 --
--- The VALVE role uses the sorter's automatic-ejection mode as its only
--- actuator: blocked=true disables automatic ejection.  This module owns the
--- physical write/readback, command deduplication, sender pairing and the
--- optional one-colour status monitor.  The top-level main.lua only wires it
--- into CC:Tweaked services.
+-- The VALVE role prefers the sorter's automatic-ejection mode as its
+-- actuator: blocked=true disables automatic ejection. Whenever a sorter is
+-- resolvable, EVERY redstone side is actively held low -- the sorter's own
+-- physical redstone input must never be able to override the ejection state
+-- this module just wrote via the Mekanism API. Only when no sorter can be
+-- found at all does config.redstone_side (if set) become the actuator,
+-- using a plain redstone.setOutput()/getOutput() write+readback instead.
+-- This module owns the physical write/readback, command deduplication,
+-- sender pairing and the optional one-colour status monitor. The top-level
+-- main.lua only wires it into CC:Tweaked services.
 
 local M = {}
 M.__index = M
 
 local AUTO_MODE_READERS = { "getAutoMode", "isAutoMode", "getAutoEject", "isAutoEject" }
 local SEEN_COMMAND_LIMIT = 16
+local ALL_SIDES = { "top", "bottom", "left", "right", "front", "back" }
+local VALID_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
 
 local function now_ms(os_api)
   if os_api and type(os_api.epoch) == "function" then return os_api.epoch("utc") end
@@ -32,12 +40,16 @@ function M.new(opts)
     config = opts.config,
     config_path = opts.config_path,
     node_id = opts.node_id,
+    -- Anzeigename (installer/valve_naming.lua), geht mit jeder Ping-Antwort
+    -- an FUEL (Seite VENTILE, ROUTER). nil = keiner.
+    label = opts.label,
     constants = opts.constants,
     utils = opts.utils,
     log_prefix = opts.log_prefix or "VALVE",
     peripheral = opts.peripheral_api or peripheral,
     colors = opts.colors_api or colors,
     os = opts.os_api or os,
+    redstone = opts.redstone_api or redstone,
 
     current_high = nil,
     initialized = false,
@@ -47,11 +59,15 @@ function M.new(opts)
     sorter_resolved_name = nil,
     status_monitor = nil,
     status_monitor_last_color = nil,
+    status_monitor_painted_ts = nil,
     seen_commands = {},
     seen_order = {},
     pairing_persisted = opts.config.trusted_source ~= nil,
     last_pairing_error = nil,
     last_failsafe_attempt_ts = 0,
+    -- Antwortkanal zu FUEL, aus der letzten vertrauenswuerdigen SET_VALVE
+    -- gelernt (siehe reply_channel()). nil = noch keine: 6504.
+    learned_reply_channel = nil,
   }, M)
   return self
 end
@@ -107,13 +123,60 @@ function M:_read_sorter_auto_mode(sorter)
   return nil, nil, "readback_unavailable"
 end
 
+-- Haelt jede Redstone-Seite aktiv auf false, sobald ein Sorter ansteuerbar
+-- ist -- ein Sorter reagiert selbst auf ein eingehendes Redstone-Signal
+-- (typisches Mekanism-Verhalten), das wuerde die per Mekanism-API gesetzte
+-- Ejection unbemerkt uebersteuern. Laeuft bei jedem sorter-basierten Schreib-
+-- vorgang mit (nicht nur beim Ersterkennen) -- selbstheilend, falls extern
+-- doch mal ein Signal anliegt. pcall-geschuetzt: fehlt die Redstone-API in
+-- Tests/Sandboxes, ist das kein Fehler fuer den eigentlichen Ventil-Write.
+function M:_disable_all_redstone_sides()
+  local rs = self.redstone
+  if not rs or type(rs.setOutput) ~= "function" then return end
+  for _, side in ipairs(ALL_SIDES) do
+    pcall(rs.setOutput, side, false)
+  end
+end
+
+-- Redstone-Fallback: nur aktiv, wenn KEIN Sorter gefunden werden kann UND
+-- config.redstone_side auf eine der sechs gueltigen Seiten gesetzt ist.
+-- Ohne Sorter und ohne konfigurierte Seite bleibt das Ventil unsteuerbar
+-- (wie zuvor). high=true -> BLOCKED, exakt dieselbe Konvention wie
+-- nodes/fuel/redstone_router.lua's eigener redstone.setOutput()-Zweig.
+function M:_write_redstone_actuator(high)
+  local side = self.config.redstone_side
+  if not valid_string(side) or not VALID_SIDES[side] then
+    local label = self.config.sorter_name and ("'" .. tostring(self.config.sorter_name) .. "'")
+      or "automatic discovery failed"
+    return false, "sorter not found (" .. label .. ") and no redstone_side configured"
+  end
+  local rs = self.redstone
+  if not rs or type(rs.setOutput) ~= "function" then
+    return false, "redstone API unavailable"
+  end
+  local ok = pcall(rs.setOutput, side, high)
+  if not ok then
+    return false, "redstone.setOutput failed for side '" .. side .. "'"
+  end
+  if type(rs.getOutput) == "function" then
+    local ok_read, actual = pcall(rs.getOutput, side)
+    if ok_read and type(actual) == "boolean" then
+      if actual ~= high then
+        return false, "redstone readback mismatch side=" .. side
+          .. " expected=" .. tostring(high) .. " actual=" .. tostring(actual)
+      end
+    end
+  end
+  return true, nil, "redstone:" .. side
+end
+
 function M:_write_actuator(high)
   local sorter = self:_get_sorter()
   if not sorter then
-    local label = self.config.sorter_name and ("'" .. tostring(self.config.sorter_name) .. "'")
-      or "automatic discovery failed"
-    return false, "sorter not found (" .. label .. ")"
+    return self:_write_redstone_actuator(high)
   end
+
+  self:_disable_all_redstone_sides()
 
   -- high=true means BLOCKED, so automatic ejection must be disabled.
   local desired_auto = not high
@@ -148,19 +211,43 @@ function M:_get_status_monitor()
   return self.status_monitor
 end
 
+-- Spaetestens so oft wird der Statusmonitor neu gemalt, auch ohne
+-- Farbwechsel (v829, wie optional/ampel.lua): verliert der Monitor seinen
+-- Inhalt (Chunk neu geladen, Skala umgestellt), bliebe er sonst schwarz,
+-- bis das Ventil das naechste Mal schaltet.
+M.STATUS_MONITOR_REPAINT_MS = 10000
+
 function M:render_status_monitor()
   local mon = self:_get_status_monitor()
   if not mon then return end
   local color
   if not self.initialized or self.last_write_error then color = self.colors.orange
   else color = self.current_high and self.colors.red or self.colors.green end
-  if self.status_monitor_last_color == color then return end
+  local now = now_ms(self.os)
+  if self.status_monitor_last_color == color and self.status_monitor_painted_ts
+      and now - self.status_monitor_painted_ts < M.STATUS_MONITOR_REPAINT_MS then
+    return
+  end
   local ok = pcall(function()
     mon.setBackgroundColor(color)
     mon.clear()
   end)
-  if ok then self.status_monitor_last_color = color
-  else self.status_monitor = nil; self.status_monitor_last_color = nil end
+  if ok then
+    self.status_monitor_last_color = color
+    self.status_monitor_painted_ts = now
+  else
+    self.status_monitor = nil; self.status_monitor_last_color = nil; self.status_monitor_painted_ts = nil
+  end
+end
+
+-- Menschenlesbare Kennung des aktuell aktiven Aktors, fuer Logs/get_state():
+-- ein per Methodensignatur oder Konfig-Name aufgeloester Sorter hat Vorrang,
+-- sonst die konfigurierte Redstone-Fallback-Seite (falls gesetzt).
+function M:_actuator_label()
+  local sorter_label = self.sorter_resolved_name or self.config.sorter_name
+  if sorter_label then return tostring(sorter_label) end
+  if valid_string(self.config.redstone_side) then return "redstone:" .. self.config.redstone_side end
+  return "?"
 end
 
 function M:apply_valve(high, force_physical)
@@ -174,7 +261,7 @@ function M:apply_valve(high, force_physical)
   if not ok then
     self.last_write_error = tostring(err)
     self:render_status_monitor()
-    self:_log("Sorter write failed (" .. tostring(self.sorter_resolved_name or self.config.sorter_name or "?")
+    self:_log("Actuator write failed (" .. self:_actuator_label()
       .. "): " .. tostring(err), "ERROR")
     return false
   end
@@ -184,8 +271,8 @@ function M:apply_valve(high, force_physical)
   self.last_write_error = nil
   self.last_command_ts = now_ms(self.os)
   self:render_status_monitor()
-  self:_log(string.format("Sorter %s -> %s proof=%s",
-    tostring(self.sorter_resolved_name or self.config.sorter_name or "?"),
+  self:_log(string.format("Actuator %s -> %s proof=%s",
+    self:_actuator_label(),
     high and "BLOCKED" or "OPEN", tostring(proof or "write")), "INFO")
   return true
 end
@@ -200,22 +287,70 @@ function M:_remember_command(id, src, high)
   end
 end
 
-function M:_send_ack(reply_side, command_id, applied, high, err, dst, persisted)
+-- Antwortkanal fuer eine SET_VALVE (Funk-Hygiene v822): FUEL ab v822 nennt
+-- VALVE_REPLY (6506), den nur FUEL offen hat -- die anderen Ventile hoeren
+-- die Antwort dann nicht mehr mit. Alles andere (FUEL bis v821, ein
+-- unbekannter Kanal) heisst: wie bisher auf 6504.
+function M:_reply_channel_for(message)
+  local channels = self.constants.channels
+  local reply = type(message) == "table" and message.reply_channel or nil
+  if reply ~= nil and channels.VALVE_REPLY ~= nil and reply == channels.VALVE_REPLY then
+    return channels.VALVE_REPLY
+  end
+  return channels.VALVE
+end
+
+-- Der zuletzt von FUEL (vertrauenswuerdige SET_VALVE) gelernte
+-- Antwortkanal -- auch fuer HOP_SCAN und ROUTE_TEACH_PULSE (main.lua).
+-- Vor der ersten SET_VALVE: 6504, den hoert jede FUEL-Version.
+function M:reply_channel()
+  return self.learned_reply_channel or self.constants.channels.VALVE
+end
+
+function M:_send_ack(reply_side, command_id, applied, high, err, dst, persisted, channel)
   if not command_id or not reply_side or not self.peripheral
       or type(self.peripheral.wrap) ~= "function" then return end
   local ok, modem = pcall(self.peripheral.wrap, reply_side)
   if not ok or not modem or type(modem.transmit) ~= "function" then return end
-  pcall(modem.transmit, self.constants.channels.VALVE, self.constants.channels.VALVE, {
+  channel = channel or self.constants.channels.VALVE
+  pcall(modem.transmit, channel, channel, {
     type = "VALVE_ACK", command_id = command_id, applied = applied == true,
     high = high, error = err, src = self.node_id, dst = dst, persisted = persisted,
   })
+end
+
+-- Antwort auf FUELs Lebenszeichen-Abfrage (VALVE_PING, Rundruf auf 6504,
+-- seit v823). FUEL erfaehrt so, ob das Ventil da ist, ohne die Heartbeats
+-- aller Nodes mithoeren zu muessen (Funk-Hygiene Stufe 3). Nur fuer die
+-- vertraute Quelle -- oder fuer jede, solange das Ventil noch nicht gepaart
+-- ist (wie SET_VALVE). Die Antwort beruehrt NICHTS am Ventil: kein
+-- Schreiben am Aktor, keine Sicherungsfrist (last_command_ts), kein
+-- gelernter Antwortkanal -- das bleibt Sache von SET_VALVE.
+function M:_answer_ping(reply_side, message)
+  if not valid_string(message.src) then return false end
+  if self.config.trusted_source and message.src ~= self.config.trusted_source then return false end
+  if not reply_side or not self.peripheral or type(self.peripheral.wrap) ~= "function" then return false end
+  local ok, modem = pcall(self.peripheral.wrap, reply_side)
+  if not ok or not modem or type(modem.transmit) ~= "function" then return false end
+  local channel = self:_reply_channel_for(message)
+  pcall(modem.transmit, channel, channel, {
+    type = "VALVE_PONG", src = self.node_id, dst = message.src, label = self.label,
+    blocked = self.current_high, initialized = self.initialized == true,
+    error = self.last_write_error, ts = now_ms(self.os),
+  })
+  return true
 end
 
 function M:handle_event(event)
   if type(event) ~= "table" or event[1] ~= "modem_message" then return false end
   local reply_side, channel, message = event[2], event[3], event[5]
   if channel ~= self.constants.channels.VALVE then return false end
+  if type(message) == "table" and message.type == "VALVE_PING" then
+    self:_answer_ping(reply_side, message)
+    return false
+  end
   if type(message) ~= "table" or message.type ~= "SET_VALVE" or message.dst ~= self.node_id then return false end
+  local reply_channel = self:_reply_channel_for(message)
   if not valid_string(message.src) then
     self:_log("SET_VALVE without valid src ignored", "WARN")
     return false
@@ -232,13 +367,17 @@ function M:handle_event(event)
     self:_log("SET_VALVE from untrusted source ignored: " .. tostring(message.src), "WARN")
     return false
   end
+  if self.learned_reply_channel ~= reply_channel then
+    self.learned_reply_channel = reply_channel
+    self:_log("Antwortkanal zu FUEL: " .. tostring(reply_channel), "INFO")
+  end
 
   local seen = self.seen_commands[message.command_id]
   if seen and (seen.src ~= message.src or seen.high ~= message.high) then
     self:_log("SET_VALVE command_id reuse with different payload rejected: "
       .. tostring(message.command_id), "WARN")
     self:_send_ack(reply_side, message.command_id, false, self.current_high,
-      "COMMAND_ID_REUSE", message.src, self.pairing_persisted)
+      "COMMAND_ID_REUSE", message.src, self.pairing_persisted, reply_channel)
     return false
   end
 
@@ -248,7 +387,7 @@ function M:handle_event(event)
   if not applied then
     self:_send_ack(reply_side, message.command_id, false, self.current_high,
       self.last_write_error, message.src,
-      self.config.trusted_source ~= nil and self.pairing_persisted or false)
+      self.config.trusted_source ~= nil and self.pairing_persisted or false, reply_channel)
     return false
   end
 
@@ -263,7 +402,7 @@ function M:handle_event(event)
       self:_log("trusted_source pairing was not persisted (" .. self.last_pairing_error
         .. "); fail-safe BLOCKED=" .. tostring(blocked_ok), "ERROR")
       self:_send_ack(reply_side, message.command_id, false, self.current_high,
-        "PAIRING_PERSIST_FAILED:" .. self.last_pairing_error, message.src, false)
+        "PAIRING_PERSIST_FAILED:" .. self.last_pairing_error, message.src, false, reply_channel)
       return false
     end
     self.pairing_persisted = true
@@ -273,7 +412,7 @@ function M:handle_event(event)
 
   self:_remember_command(message.command_id, message.src, message.high)
   self:_send_ack(reply_side, message.command_id, true, self.current_high, nil,
-    message.src, self.pairing_persisted)
+    message.src, self.pairing_persisted, reply_channel)
   return true
 end
 
@@ -296,12 +435,19 @@ function M:tick_failsafe(stale_command_s, retry_ms)
 end
 
 function M:get_state()
+  local sorter_label = self.sorter_resolved_name or self.config.sorter_name
   return {
     current_high = self.current_high,
     initialized = self.initialized,
     last_write_error = self.last_write_error,
     last_command_ts = self.last_command_ts,
-    sorter_name = self.sorter_resolved_name or self.config.sorter_name,
+    sorter_name = sorter_label,
+    -- "sorter" wenn ein Sorter aufloesbar ist (auch wenn der letzte Schreib-
+    -- vorgang fehlschlug -- der Sorter bleibt der bevorzugte Aktor), sonst
+    -- "redstone" wenn eine Fallback-Seite konfiguriert ist, sonst "none".
+    actuator_mode = (self.sorter_device ~= nil or sorter_label ~= nil) and "sorter"
+      or (valid_string(self.config.redstone_side) and "redstone" or "none"),
+    redstone_side = self.config.redstone_side,
     trusted_source = self.config.trusted_source,
     pairing_persisted = self.pairing_persisted,
     pairing_error = self.last_pairing_error,

@@ -121,7 +121,7 @@ local base = GITHUB_RAW..ref.."/xreactor/"
 -- da /xreactor bei der Erstinstallation noch nicht existiert.
 local MODULE_NAMES = {
   "http", "manifest", "stage", "ui", "journal", "plan_validator",
-  "reactor_naming",
+  "reactor_naming", "valve_naming",
 }
 local module_src = {}
 for _, name in ipairs(MODULE_NAMES) do
@@ -153,6 +153,7 @@ local ui_mod             = load_module("ui",               module_src.ui)
 local journal_mod        = load_module("journal",         module_src.journal)
 local plan_validator_mod = load_module("plan_validator",  module_src.plan_validator)
 local reactor_naming_mod = load_module("reactor_naming",  module_src.reactor_naming)
+local valve_naming_mod   = load_module("valve_naming",     module_src.valve_naming)
 
 local init_fn, init_syntax_err = load(init_src, "=init", "t", _ENV)
 if not init_fn then
@@ -177,6 +178,7 @@ init_body({
   journal_mod = journal_mod,
   plan_validator_mod = plan_validator_mod,
   reactor_naming_mod = reactor_naming_mod,
+  valve_naming_mod = valve_naming_mod,
   ref = ref,
 })
 

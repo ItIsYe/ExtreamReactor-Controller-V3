@@ -6,7 +6,7 @@ local ui_controller = require('master.ui_controller')
 
 local captured
 local controller = ui_controller.new({
- constants = { roles={ENERGY_NODE='ENERGY_NODE',RT_NODE='RT_NODE',WATER_NODE='WATER_NODE',FUEL_NODE='FUEL_NODE',REPROCESSOR_NODE='REPROCESSOR_NODE'}, status_levels={OK='OK',WARNING='WARNING',EMERGENCY='EMERGENCY',LIMITED='LIMITED',OFFLINE='OFFLINE',MANUAL='MANUAL'}, node_states={OFF='OFF'} },
+ constants = { roles={ENERGY_NODE='ENERGY_NODE',RT_NODE='RT_NODE',FUEL_NODE='FUEL_NODE',REPROCESSOR_NODE='REPROCESSOR_NODE'}, status_levels={OK='OK',WARNING='WARNING',EMERGENCY='EMERGENCY',LIMITED='LIMITED',OFFLINE='OFFLINE',MANUAL='MANUAL'}, node_states={OFF='OFF'} },
  health = { reasons_list=function() return {} end, summarize_bindings=function() return nil end },
  config = { energy_warn_pct=25, energy_crit_pct=15 },
  nodes = { A={id='A', role='ENERGY_NODE', status='OK', stored=1000, capacity=5000, aggregate_stored=2000, aggregate_capacity=10000, input=12, output=6, matrices={{id='m1', stored=1000, capacity=5000}} } },

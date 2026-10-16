@@ -72,44 +72,15 @@ function M.build_common_model(args)
   return model
 end
 
+-- Die Zielwahl fuer Logs ist absichtlich kein UI-Control mehr. Diese beiden
+-- Kompatibilitaetsfunktionen bleiben bestehen, damit Rollen, die sie noch
+-- aufrufen, weder beim Rendern noch beim Touch-Handling brechen. Es wird
+-- nichts gezeichnet und ein Touch kann den Log-Modus nicht mehr veraendern.
 function M.render_log_mode_button(target, utils_ref, x, y, w)
-  local CC_BLACK = 32768
-  local CC_WHITE = 1
-  local CC_GREEN = 32
-  local CC_GRAY  = 256
-  if not utils_ref then return end
-  if type(target.setBackgroundColor) ~= "function" then return end
-  local mode = utils_ref.get_log_mode and utils_ref.get_log_mode() or "all"
-  local modes = { "all", "disk", "remote", "terminal", "none" }
-  local labels = { all = "All ", disk = "Disk", remote = "Rmt ", terminal = "Term", none = "Off " }
-  local btn_w = 4
-  local cx = (x or 2)
-  target.setBackgroundColor(CC_BLACK)
-  target.setTextColor(CC_GRAY)
-  target.setCursorPos(cx, y or 2)
-  target.write("Log:")
-  cx = cx + 4
-  for _, m in ipairs(modes) do
-    target.setCursorPos(cx, y or 2)
-    target.setBackgroundColor(mode == m and CC_GREEN or CC_GRAY)
-    target.setTextColor(mode == m and CC_BLACK or CC_WHITE)
-    target.write(labels[m] or m)
-    target.setBackgroundColor(CC_BLACK)
-    cx = cx + btn_w
-  end
+  return nil
 end
 
 function M.handle_log_mode_touch(tx, ty, btn_y, utils_ref, x)
-  if not utils_ref or ty ~= (btn_y or 0) then return false end
-  local modes = { "all", "disk", "remote", "terminal", "none" }
-  local cx = (x or 2) + 4
-  for _, m in ipairs(modes) do
-    if tx >= cx and tx < cx + 4 then
-      if utils_ref.set_log_mode then utils_ref.set_log_mode(m) end
-      return true
-    end
-    cx = cx + 4
-  end
   return false
 end
 

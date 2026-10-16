@@ -70,7 +70,12 @@ end
 -- Hilfsfunktion: baut einen Standard-Check fuer "ist ein wireless Modem
 -- vorhanden" — von fast jeder Rolle nutzbar, spart Boilerplate im Aufrufer.
 function M.check_wireless_modem()
-  local ok = pcall(function()
+  -- pcall(f) returns (true, f()...) on success -- capturing only the first
+  -- value here previously kept pcall's OWN success flag (almost always
+  -- true, since the inner function never actually errors) instead of the
+  -- inner function's real true/false modem-found result, so this check
+  -- silently reported "OK" even with no wireless modem attached.
+  local pcall_ok, found = pcall(function()
     if not peripheral or type(peripheral.getNames) ~= "function" then return false end
     local names = peripheral.getNames()
     for _, name in ipairs(names) do
@@ -84,8 +89,8 @@ function M.check_wireless_modem()
     end
     return false
   end)
-  local found = ok
-  return { name = "Ender Modem", ok = found == true, detail = found and nil or "kein wireless Modem gefunden" }
+  found = pcall_ok and found == true
+  return { name = "Ender Modem", ok = found, detail = found and nil or "kein wireless Modem gefunden" }
 end
 
 return M

@@ -21,9 +21,15 @@ local M = {}
 --                                  eigene, ungegatete Kopie mehr)
 --   ctx.log(msg, level)         — Logging
 function M.run(ctx)
+  -- Hier stand os.sleep(): das wartet auf genau EINEN Timer, und CC:Tweaked
+  -- verwirft Ereignisse, sobald 256 in der Warteschlange stehen -- Timer
+  -- eingeschlossen. Ging er verloren, stand dieser Thread bis zum Neustart
+  -- still, und die Speicherwerte an MASTER froren ein. Der Taktgeber aus
+  -- nodes/support/runtime.lua macht nach Intervall + Schonzeit weiter.
+  local wait_for_cycle = require("nodes.support.runtime").make_cycle_waiter("energy_matrix", "ENERGY-Matrix")
   while true do
-    -- Kurz schlafen damit Heartbeat-Coroutine laufen kann
-    os.sleep(ctx.receive_timeout_s or 0.5)
+    -- Kurz warten, damit die Heartbeat-Coroutine laufen kann
+    wait_for_cycle(ctx.receive_timeout_s or 0.5)
     -- Matrix-/Storage-Sampling-Services ticken (koennen blockieren)
     local ok, err = pcall(function()
       ctx.services:tick()

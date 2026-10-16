@@ -2,6 +2,7 @@ local M = {}
 local rt_sync = require("master.rt_sync")
 local support_status = require("master.support_status")
 local config_edits_lib = require("master.config_edits")
+local profile_ops = require("master.runtime_ops_profile")
 
 function M.new(opts)
   local constants = assert(opts.constants, "constants required")
@@ -76,9 +77,13 @@ function M.new(opts)
     if value == "MASTER" then return constants.roles.MASTER end
     if value == "ENERGY" or value == "ENERGY-NODE" or value == "ENERGYNODE" then return constants.roles.ENERGY_NODE end
     if value == "FUEL" or value == "FUEL-NODE" or value == "FUELNODE" then return constants.roles.FUEL_NODE end
-    if value == "WATER" or value == "WATER-NODE" or value == "WATERNODE" then return constants.roles.WATER_NODE end
     if value == "REPROCESSING" or value == "REPROCESSOR" or value == "REPROCESSOR-NODE" or value == "REPROCESSING-NODE" then return constants.roles.REPROCESSOR_NODE end
     if value == "VALVE" or value == "FUEL-VALVE" or value == "VALVE-NODE" or value == "FUELVALVE" then return constants.roles.VALVE_NODE end
+    -- LOG und LOG_COLLECTOR sind ueberall sonst (role_descriptor/start.lua's
+    -- ROLE_ENTRY) bereits gleichwertige Aliase desselben Node-Typs -- ohne
+    -- diesen Zweig fehlte hier als einziger Rolle die sonst ueberall
+    -- vorhandene Gross-/Trennzeichen-Toleranz.
+    if value == "LOG" or value == "LOG-COLLECTOR" or value == "LOGCOLLECTOR" then return constants.roles.LOG_COLLECTOR end
     return raw
   end
 
@@ -108,19 +113,36 @@ function M.new(opts)
     end
   end
 
+  -- node.health.status uses the health module's own OK/DEGRADED/DOWN enum;
+  -- node.status (read everywhere else -- rt_sync.lua's evaluate_rt_node()/
+  -- mode_sync_action(), startup_sequencer.lua, the master UI badges) expects
+  -- the separate constants.status_levels enum (OK/LIMITED/WARNING/EMERGENCY/
+  -- OFFLINE/MANUAL). Translate at this boundary instead of copying the raw
+  -- health.status value straight across: "DEGRADED"/"DOWN" matched none of
+  -- those consumers' checks, so a comms-degraded or fully offline node was
+  -- silently never recognized as OFFLINE/WARNING outside of node.health
+  -- itself (e.g. rt_sync.lua kept treating an offline RT node as
+  -- controllable and assignable, since its OFFLINE guard never matched).
+  local function health_status_to_level(status)
+    if status == health.status.DOWN then return constants.status_levels.OFFLINE end
+    if status == health.status.DEGRADED then return constants.status_levels.WARNING end
+    if status == health.status.OK then return constants.status_levels.OK end
+    return nil
+  end
+
   local function assign_node_status_from_health(node, origin)
     local previous_status = node.status
     local health_payload = node.health
     local computed = previous_status
     if health_payload and health_payload.status then
-      computed = health_payload.status
+      computed = health_status_to_level(health_payload.status) or previous_status or constants.status_levels.OK
     end
     local reasons = reasons_to_set(health_payload and health_payload.reasons)
     local shutdown_state = node.last_setpoints and node.last_setpoints.assignment_state
     local workflow_stage = node.shutdown_workflow and node.shutdown_workflow.stage or nil
     local controlled_shutdown = shutdown_state == "shutdown" or shutdown_state == "shed" or shutdown_state == "standby" or
         workflow_stage == "RAMPDOWN" or workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
-    if controlled_shutdown and computed == health.status.DEGRADED then
+    if controlled_shutdown and computed == constants.status_levels.WARNING then
       if reasons[health.reasons.COMMS_DOWN] ~= true and reasons[health.reasons.PROTO_MISMATCH] ~= true and reasons[health.reasons.DISCOVERY_FAILED] ~= true then
         computed = constants.status_levels.OK
         log(("Node %s suppresses degraded during controlled shutdown: state=%s assign=%s reasons=%s source=%s"):format(
@@ -137,7 +159,7 @@ function M.new(opts)
   local function ack_matches_last_setpoints(node, result)
     if type(result) ~= "table" or result.ok == false then return false end
     local target = result.command_target
-    local expected_target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET
+    local expected_target = constants.command_targets.SET_SETPOINTS
     if target ~= expected_target then return false end
     local value = result.command_value
     local last = node and node.last_setpoints
@@ -196,6 +218,9 @@ function M.new(opts)
     rt.registry = payload.registry or rt.registry
     rt.snapshot = payload.snapshot or rt.snapshot
     rt.ramp_state = payload.ramp_state or rt.ramp_state
+    -- Was die Node selbst als Problem meldet (nodes/rt/rt2_problems.lua),
+    -- bei jeder Meldung neu: ein leeres oder fehlendes Feld heisst "keins".
+    rt.problems = type(payload.problems) == "table" and payload.problems or {}
     if type(payload.turbines) == "table" then rt.turbine_count = #payload.turbines end
     if type(payload.reactors) == "table" then rt.reactor_count = #payload.reactors end
 
@@ -229,6 +254,18 @@ function M.new(opts)
     rt.capacity_source  = payload.capacity_source or rt.capacity_source
     rt.capacity_stable_turbines  = number_or_nil(payload.capacity_stable_turbines) or rt.capacity_stable_turbines
     rt.capacity_total_turbines   = number_or_nil(payload.capacity_total_turbines) or rt.capacity_total_turbines
+    -- Wieviele Turbinen der Knoten nachweislich gleichzeitig tragen kann.
+    -- Ein dampfbegrenzter Knoten faehrt bewusst nur einen Teil seiner
+    -- Flotte; ohne diesen Wert sieht das von hier aus wie ein Defekt.
+    -- Nur v2-Knoten schicken ihn -- bei v1 bleibt er schlicht nil.
+    rt.capacity_sustainable_turbines = number_or_nil(payload.capacity_sustainable_turbines)
+      or rt.capacity_sustainable_turbines
+    -- Wieviele Turbinen gleichzeitig im Zielband stehen muessen, damit das
+    -- Einlernen zaehlt (80 % der Flotte). ui_controller.lua baut daraus
+    -- "EINLERNEN: x/y Turbinen im Zielband" -- ohne diese Zeile stand dort
+    -- dauerhaft "x/0".
+    rt.capacity_required_turbines = number_or_nil(payload.capacity_required_turbines)
+      or rt.capacity_required_turbines
     if rt.capacity_ready == true then node.capacity_ready = true end
     node.capacity_max   = rt.capacity_max or node.capacity_max
     -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0
@@ -311,8 +348,16 @@ function M.new(opts)
       if target ~= "BASELOAD" and target ~= "PEAK" and target ~= "IDLE" then
         return false, "Ungueltiges Profil: " .. tostring(params.profile)
       end
-      rt_ref.state.active_profile = target
-      rt_ref.state.power_target = 0 -- erzwingt Neuberechnung im naechsten sample_trends()-Zyklus
+      -- Direkt ueber runtime_ops_profile.apply_profile() (derselbe Pfad wie
+      -- der "profile"-UI-Button in ui_controller.lua), statt power_target
+      -- nur auf 0 zu setzen und auf einen spaeteren sample_trends()-Zyklus
+      -- zu hoffen: dieser rechnet den neuen Sollwert nur im Auto-Profil-
+      -- Modus neu -- im manuellen Modus blieb power_target sonst dauerhaft
+      -- auf 0, bis ein Bediener manuell am physischen UI eingriff.
+      if rt_ref.state.rt_global_off_hold then
+        return false, "Profil-Wechsel ignoriert: RT-OFF-Hold ist aktiv"
+      end
+      profile_ops.apply_profile(rt_ref, target)
       return true, "Profil gesetzt: " .. target
     elseif action == "maintenance_toggle" then
       local node_id = params.node_id
@@ -343,7 +388,9 @@ function M.new(opts)
         nodes[mismatch_id].health = nodes[mismatch_id].health or health.new({})
         nodes[mismatch_id].health.status = health.status.DEGRADED
         nodes[mismatch_id].health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
-        nodes[mismatch_id].status = health.status.DEGRADED
+        -- node.status uses constants.status_levels, not health.status --
+        -- see health_status_to_level()/assign_node_status_from_health() above.
+        nodes[mismatch_id].status = constants.status_levels.WARNING
         nodes[mismatch_id].last_seen = os.epoch("utc")
         nodes[mismatch_id].last_seen_str = master_time_label()
         nodes[mismatch_id].proto_ver = message.payload.proto_ver
@@ -366,7 +413,7 @@ function M.new(opts)
     if existing and existing.sender_id and sender_id ~= "UNKNOWN"
         and existing.sender_id ~= sender_id
         and existing.last_seen and (os.epoch("utc") - existing.last_seen) < 30000 then
-      log(("WARN: Duplicate node_id detected id=%s role=%s existing_sender=%s new_sender=%s -- assign unique node_id in /xreactor/config/node_id.txt"):format(
+      log(("WARN: Duplicate node_id detected id=%s role=%s existing_sender=%s new_sender=%s -- assign unique node_id in /xreactor_config/node_id.txt"):format(
         tostring(id), tostring(role_hint or normalize_role(message.role)),
         tostring(existing.sender_id), tostring(sender_id)
       ))
@@ -398,6 +445,10 @@ function M.new(opts)
       assign_node_status_from_health(nodes[id], "hello")
       nodes[id].state = constants.node_states.OFF
       if nodes[id].role == constants.roles.RT_NODE then sequencer:enqueue(id) end
+      -- Die Node hat neu gestartet und kennt ihre Sollwerte nicht mehr: beim
+      -- naechsten Abgleich sofort senden, nicht erst nach der Auffrischung
+      -- (rt_sync.setpoint_send_due, "first").
+      nodes[id].last_setpoints_ts = nil
       mark_rt_sync_dirty(nodes[id], "hello")
     elseif message.type == constants.message_types.HEARTBEAT then
       nodes[id].state = message.payload.state
@@ -507,6 +558,27 @@ function M.new(opts)
         else
           log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN")
         end
+        -- Fix (Log-Analyse 2026-09-18, disk8.zip): eine Node kann nach einem
+        -- Master-Verbindungsabbruch dauerhaft in AUTONOM stecken bleiben,
+        -- waehrend node.mode im Master noch "MASTER" zeigt -- der Status-
+        -- Payload-basierte Mode-Abgleich (runtime_ops_rt.sync_rt_node)
+        -- erkannte den Rueckfall in diesem Fall nie, sodass NIE ein neues
+        -- SET_MODE gesendet wurde: node.mode == node.desired_mode ("MASTER")
+        -- blieb fuer den Abgleich unveraendert "gleich", waehrend die Node
+        -- jedes SET_SETPOINTS ununterbrochen mit reason_code=INVALID_STATE
+        -- ablehnte (beobachtet: 20+ Minuten Dauerschleife, node-102). Ein
+        -- INVALID_STATE-ACK ist der direkteste, unzweideutigste Beweis, den
+        -- der Master fuer den echten RT-Modus bekommen kann -- zuverlaessiger
+        -- als auf den naechsten Status-Payload zu warten. node.mode wird
+        -- deshalb hier sofort verworfen (nicht auf einen bestimmten Modus
+        -- geraten -- der Fehlertext haengt vom tatsaechlichen RT-Zustand ab),
+        -- damit der naechste sync_rt_node()-Lauf den Mismatch garantiert
+        -- erkennt und sofort ein neues SET_MODE nachsendet.
+        if reason_code == "INVALID_STATE" and nodes[id].mode ~= nil then
+          log(("Node %s mode desync detected via rejected command (INVALID_STATE) -- forcing SET_MODE re-sync"):format(tostring(id)), "WARN")
+          nodes[id].mode = nil
+          mark_rt_sync_dirty(nodes[id], "mode_desync")
+        end
       end
       sequencer:notify_ack(id, result.module_id)
       local workflow_stage = nodes[id].shutdown_workflow and nodes[id].shutdown_workflow.stage or nil
@@ -518,7 +590,7 @@ function M.new(opts)
       if not redundant_setpoint_ack or needs_workflow_followup then
         mark_rt_sync_dirty(nodes[id], "ack_applied")
       else
-        log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
+        log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)), "DEBUG")
       end
       -- Korreliert dieses ACK_APPLIED gegen einen evtl. laufenden
       -- Config-Editor-Edit (per message_id/ack_for).

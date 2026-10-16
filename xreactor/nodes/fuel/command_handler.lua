@@ -42,7 +42,7 @@ function M.handle(message, ctx)
   else
     return sch.reject_unsupported(devices)
   end
-  return sch.finish(devices, true)
+  return sch.finish(devices, true, nil, sch.is_routine and sch.is_routine(command) or false)
 end
 
 return M

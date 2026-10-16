@@ -7,7 +7,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5,
 }
@@ -25,14 +25,25 @@ local telemetry_service = require("services.telemetry_service")
 local support_runtime = require("nodes.support.runtime")
 local role_descriptor = require("nodes.valve.role_descriptor")
 local valve_controller = require("nodes.valve.controller")
+local hop_reporter_lib = require("nodes.valve.hop_reporter")
+local valve_local_ui = require("nodes.valve.local_ui")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.VALVE_NODE,
   node_id = "VALVE-1",
   debug_logging = false,
   reset_log_on_start = true,
+  -- Built-in terminal: 1.0 normal layout, 0.5 compact density.
+  -- term has no setTextScale(), so this does not change the physical font.
+  ui_scale = 0.5,
   wireless_modem = nil,
   sorter_name = nil,
+  -- Redstone-Fallback-Seite, NUR verwendet wenn kein Sorter gefunden werden
+  -- kann (siehe nodes/valve/controller.lua). nil = kein Fallback konfiguriert
+  -- -> Ventil bleibt ohne Sorter unsteuerbar, wie zuvor.
+  redstone_side = nil,
+  hop_chest = nil,
+  hop_scan_interval = 4,
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval = 5,
@@ -44,7 +55,7 @@ local DEFAULT_CONFIG = {
   }
 }
 
-local VALVE_USER_CONFIG_PATH = "/xreactor/config/valve.lua"
+local VALVE_USER_CONFIG_PATH = "/xreactor_config/valve.lua"
 if not fs.exists(VALVE_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -70,11 +81,39 @@ if config.sorter_name ~= nil and (type(config.sorter_name) ~= "string" or config
   add_config_warning("sorter_name ungueltig, wird ignoriert (automatische Suche)")
   config.sorter_name = nil
 end
+local VALID_REDSTONE_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+if config.redstone_side ~= nil and (type(config.redstone_side) ~= "string" or not VALID_REDSTONE_SIDES[config.redstone_side]) then
+  add_config_warning("redstone_side ungueltig, wird ignoriert (top/bottom/left/right/front/back erlaubt)")
+  config.redstone_side = nil
+end
+if config.hop_chest ~= nil and (type(config.hop_chest) ~= "string" or config.hop_chest == "") then
+  add_config_warning("hop_chest ungueltig, wird ignoriert (keine HOP_SCAN-Meldungen)")
+  config.hop_chest = nil
+end
+if type(tonumber(config.hop_scan_interval)) ~= "number" or tonumber(config.hop_scan_interval) <= 0 then
+  add_config_warning("hop_scan_interval ungueltig, verwende Default 4")
+  config.hop_scan_interval = 4
+end
+local valve_ui_scale = tonumber(config.ui_scale)
+if valve_ui_scale ~= 0.5 and valve_ui_scale ~= 1.0 then
+  add_config_warning("ui_scale ungueltig; erlaubt sind 1.0 und 0.5; verwende 1.0")
+  config.ui_scale = 1.0
+else
+  config.ui_scale = valve_ui_scale
+end
 
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
   config_meta = config_meta, config_warnings = config_warnings
 })
+
+-- Clear display name assigned once by the installer (installer/valve_
+-- naming.lua) -- read-only here, never written back. Broadcast on every
+-- outgoing message as comms_service's "label" so FUEL's routing UI can
+-- show it instead of the raw node_id (see core/comms.lua's peer.label).
+local valve_name_cfg = utils.load_config("/xreactor_config/valve_name.lua", { name = nil })
+local valve_label = type(valve_name_cfg.name) == "string" and valve_name_cfg.name ~= ""
+  and valve_name_cfg.name or nil
 
 local valve_health = health.new({})
 local desired_high = config.default_blocked ~= false
@@ -82,6 +121,7 @@ local controller = valve_controller.new({
   config = config,
   config_path = CONFIG.CONFIG_PATH,
   node_id = node_id,
+  label = valve_label,
   constants = constants,
   utils = utils,
   log_prefix = CONFIG.LOG_PREFIX,
@@ -129,6 +169,38 @@ else
     .. tostring(valve_modem_error or "kein Wireless Modem"), "ERROR")
 end
 
+-- Auto-Erkennung NUR wenn config.hop_chest nicht gesetzt ist UND genau eine
+-- (Sorter/Wireless-Modem ausgenommene) Inventory-Peripherie gefunden wird --
+-- bei mehreren Kandidaten wird bewusst nicht geraten, nur geloggt, damit der
+-- Nutzer manuell in der Config waehlen kann (siehe hop_reporter.lua).
+local hop_chest_name = config.hop_chest
+if hop_chest_name == nil then
+  local sorter_name = controller.sorter_resolved_name or config.sorter_name
+  local detected, candidates = hop_reporter_lib.autodetect_chest_name(
+    peripheral, { sorter_name, valve_modem_name })
+  if detected then
+    hop_chest_name = detected
+    utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste automatisch erkannt: " .. tostring(detected), "INFO")
+  elseif #candidates > 1 then
+    utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste nicht eindeutig (" .. #candidates
+      .. " Kandidaten: " .. table.concat(candidates, ", ")
+      .. ") -- bitte hop_chest manuell in " .. CONFIG.CONFIG_PATH .. " setzen", "WARN")
+  end
+end
+
+local hop_reporter = hop_reporter_lib.new({ hop_chest = hop_chest_name })
+if hop_reporter:is_enabled() then
+  utils.log(CONFIG.LOG_PREFIX, "Hop-Kiste erkannt: " .. tostring(hop_chest_name), "INFO")
+elseif config.hop_chest ~= nil then
+  utils.log(CONFIG.LOG_PREFIX, "hop_chest konfiguriert (" .. tostring(config.hop_chest)
+    .. "), aber nicht erreichbar -- keine HOP_SCAN-Meldungen", "WARN")
+end
+
+-- Vorgezogen (statt erst unten bei hop_scan_report deklariert) -- die lokale
+-- Terminal-UI liest diesen Wert bereits in ihrem get_hop_status()-Closure,
+-- das VOR der hop_scan_report-Deklaration erzeugt wird.
+local last_hop_scan_ms = 0
+
 local teach_input_state = false
 local function check_teach_input()
   local any_high = false
@@ -140,16 +212,59 @@ local function check_teach_input()
     end
   end
   if any_high and not teach_input_state and valve_modem then
-    pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    -- Auf dem von FUEL gelernten Antwortkanal (Funk-Hygiene v822, siehe
+    -- controller.lua's reply_channel); vor der ersten SET_VALVE 6504.
+    local reply = controller:reply_channel()
+    pcall(valve_modem.transmit, reply, reply, {
       type = "ROUTE_TEACH_PULSE", src = node_id,
     })
   end
   teach_input_state = any_high
 end
 
-local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX })
+-- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821) -- eine
+-- VALVE-Node braucht von den anderen gar nichts, nur MASTER.
+local comms = comms_service.new({ config = config, log_prefix = CONFIG.LOG_PREFIX, label = valve_label,
+  payload_filter = comms_service.follower_payload_filter(),
+  -- Funk-Hygiene v822: Meldungen anderer Nodes braucht ein Ventil nicht.
+  listen_uplink = false })
+-- Lokale 51x19-Terminal-UI am Ventil-Computer selbst -- rein lesend. Seit
+-- 2026-09-29 gibt es dort keine Bedienung mehr (der Sperrknopf ist raus,
+-- siehe local_ui.lua-Kopfkommentar). Alle Closures liefern nur bereits
+-- vorhandenen Zustand, kein neuer Zugriff auf Peripherie/Netzwerk.
+local valve_ui = valve_local_ui.new({
+  controller = controller,
+  node_id = node_id,
+  label = valve_label,
+  modem_name = valve_modem_name,
+  ui_scale = config.ui_scale,
+  is_master_reachable = function() return comms:is_master_reachable() end,
+  get_comms_diagnostics = function() return comms:get_diagnostics() end,
+  get_hop_status = function()
+    return {
+      configured = hop_chest_name ~= nil,
+      enabled = hop_reporter:is_enabled(),
+      chest = hop_chest_name,
+      interval_s = tonumber(config.hop_scan_interval) or 4,
+      last_scan_ms = last_hop_scan_ms,
+      modem_ready = valve_modem ~= nil,
+    }
+  end,
+})
 local services = service_manager.new()
+-- Eigene, langsamere Service-Gruppe fuer Telemetry (siehe run_slow_loop
+-- weiter unten): comms/valve_channel/valve_failsafe/teach_input_poll/
+-- status_monitor_render sind sicherheits-/zeitkritisch und bleiben in
+-- "services" (der "fast"-Gruppe), damit ein Telemetry-Tick sie nie verzoegert.
+local slow_services = service_manager.new()
 services:add(comms)
+-- Nur noch die Groessenaenderung des Terminals (term_resize) -- die lokale
+-- UI wertet keine Klicks mehr aus, es gibt dort nichts mehr zu bedienen.
+-- Kostet praktisch nichts und bleibt deshalb in der "fast"-Gruppe; das
+-- Rendering selbst (teurer) liegt in slow_services, siehe unten.
+services:add({ name = "valve_local_ui_input", wants_events = true, tick = function(_self, _dt, event)
+  if event then valve_ui:handle_event(event) end
+end })
 services:add({ name = "valve_channel", wants_events = true, tick = function(_self, dt, event)
   if event then controller:handle_event(event) end
 end })
@@ -163,6 +278,15 @@ end })
 services:add({ name = "teach_input_poll", tick = function() check_teach_input() end })
 services:add({ name = "status_monitor_render", tick = function() controller:render_status_monitor() end })
 
+-- Lokales Terminal-Rendering bleibt in slow_services, damit ein teures
+-- Zeichnen valve_channel/valve_failsafe/den physischen Aktorpfad nie
+-- verzoegern kann (siehe Kommentar bei "slow"-Gruppe oben).
+slow_services:add({
+  name = "valve_local_ui_render",
+  init = function() valve_ui:render(true) end,
+  tick = function() valve_ui:render(false) end,
+})
+
 local function build_status_payload()
   local master_reachable = comms:is_master_reachable()
   local state = controller:get_state()
@@ -173,20 +297,42 @@ local function build_status_payload()
   if not actuator_ready then valve_health.reasons[health.reasons.CONTROL_DEGRADED] = true end
   valve_health.last_seen_ts = os.epoch("utc")
   local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"), role = config.role, node_id = node_id,
+    role = config.role, node_id = node_id,
     health = { status = valve_health.status, reasons = health.reasons_list(valve_health),
       last_seen_ts = valve_health.last_seen_ts },
     master_connected = master_reachable,
     queue = comms and comms:get_diagnostics().queue_depth or 0,
   })
-  payload.blocked = state.initialized and state.current_high or nil
-  payload.actuator_ready = actuator_ready
-  payload.actuator_name = state.sorter_name
-  payload.write_error = state.last_write_error
+  -- Kommunikations-Durchgang 2026-09-29: blocked, actuator_ready,
+  -- actuator_name, actuator_mode und write_error hatten keinen Leser.
+  -- Die eigene Oberflaeche (local_ui.lua) liest state.* direkt, FUELs
+  -- router_scada.lua nur die Peer-Liste (id/label/down), und MASTER zeigt
+  -- von einem VALVE-Knoten nur die allgemeinen Felder. Ein klemmender
+  -- Aktor bleibt sichtbar: er setzt actuator_ready=false und damit
+  -- CONTROL_DEGRADED in health.reasons -- und das liest MASTER.
   return payload
 end
 
-services:add(telemetry_service.new({
+-- Passive Fuellstandsmeldung fuer nodes/fuel/hop_timing.lua -- rein
+-- lesend, kein Aktor-Zugriff, deshalb in der "slow"-Gruppe (siehe
+-- Kommentar oben): eine verzoegerte Kisten-Lesung darf den Ventil-
+-- Failsafe/die Kommandoverarbeitung nie beeintraechtigen. No-Op solange
+-- hop_reporter:is_enabled() false ist (keine/keine erreichbare hop_chest).
+slow_services:add({ name = "hop_scan_report", tick = function()
+  if not hop_reporter:is_enabled() or not valve_modem then return end
+  local now = os.epoch and os.epoch("utc") or 0
+  local interval_ms = (tonumber(config.hop_scan_interval) or 4) * 1000
+  if now - last_hop_scan_ms < interval_ms then return end
+  local items = hop_reporter:scan()
+  if not items then return end
+  last_hop_scan_ms = now
+  local reply = controller:reply_channel()
+  pcall(valve_modem.transmit, reply, reply, {
+    type = "HOP_SCAN", src = node_id, items = items, ts = now,
+  })
+end })
+
+slow_services:add(telemetry_service.new({
   comms = comms,
   status_interval = config.status_interval or config.heartbeat_interval,
   heartbeat_interval = config.heartbeat_interval,
@@ -200,6 +346,7 @@ services:add(telemetry_service.new({
       actuator_ready = state.initialized and state.last_write_error == nil,
       write_error = state.last_write_error,
       actuator_name = state.sorter_name,
+      actuator_mode = state.actuator_mode,
       trusted_source = state.trusted_source,
       pairing_persisted = state.pairing_persisted,
       pairing_error = state.pairing_error,
@@ -208,16 +355,37 @@ services:add(telemetry_service.new({
 }))
 
 services:init()
+slow_services:init()
 local initial_state = controller:get_state()
 utils.log(CONFIG.LOG_PREFIX,
   "VALVE-Node gestartet: sorter=" .. tostring(initial_state.sorter_name or "auto")
+    .. " actuator_mode=" .. tostring(initial_state.actuator_mode)
     .. " node_id=" .. tostring(node_id), "INFO")
 
 local quiesce_handshake = _G.__xreactor_update_handshake
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() end,
-  quiesce_handshake and {
-    handshake = quiesce_handshake,
-    -- Always force a fresh sorter write/readback attempt. current_high is a
-    -- cache, not evidence that an externally changed/reset sorter is blocked.
-    on_quiesce = function() return controller:apply_valve(true, true) end
-  } or nil)
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop()): "fast" traegt comms/valve_channel/valve_failsafe/
+-- teach_input_poll/status_monitor_render (Sicherheits-/Aktorlogik + lokales
+-- Display), "slow" nur Telemetry -- ein Telemetry-Tick soll die
+-- Ventil-Failsafe/-Sicherheitslogik nie verzoegern.
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        quiesce_opts = quiesce_handshake and {
+          handshake = quiesce_handshake,
+          -- Always force a fresh sorter write/readback attempt. current_high is a
+          -- cache, not evidence that an externally changed/reset sorter is blocked.
+          on_quiesce = function() return controller:apply_valve(true, true) end
+        } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({ interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

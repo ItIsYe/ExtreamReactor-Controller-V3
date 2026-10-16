@@ -83,10 +83,14 @@ for _, node in ipairs({
   assert_true(init_idx > last_add_idx,
     node.label .. ': services:init() must come after every services:add(...) registration')
 
-  local loop_idx = source:find('support_runtime.run_event_loop(', 1, true)
-  assert_true(loop_idx ~= nil, node.label .. ': expected a support_runtime.run_event_loop(...) call')
+  -- Seit der Aufteilung in fast_loop/slow_loop (2026-09-06, siehe nodes/
+  -- support/runtime.lua's run_fast_loop()/run_slow_loop()) ist es
+  -- run_fast_loop(...), das comms:handle_event(event) vor dem ersten Tick
+  -- ausfuehrt -- dieselbe Race-Condition wie vormals bei run_event_loop().
+  local loop_idx = source:find('support_runtime.run_fast_loop(', 1, true)
+  assert_true(loop_idx ~= nil, node.label .. ': expected a support_runtime.run_fast_loop(...) call')
   assert_true(init_idx < loop_idx,
-    node.label .. ': services:init() must be called BEFORE run_event_loop() -- otherwise self.comms stays nil ' ..
+    node.label .. ': services:init() must be called BEFORE run_fast_loop() -- otherwise self.comms stays nil ' ..
     'until the first tick, and an early modem_message event crashes the node (see services/comms_service.lua)')
 end
 

@@ -39,6 +39,48 @@ local RT_CONFIG_VERSION_INTERVAL_MIGRATION = 5
 local LEGACY_REACTOR_ADJUST_INTERVAL = 5.0
 local LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL = 1.0
 
+-- Dieselbe Mechanik fuer comms.peer_timeout_s: 12.0 war der Default, bei
+-- dem der MASTER (Heartbeat alle 5s, alle anderen Rollen 2s) nur ~2
+-- Heartbeats verlieren durfte und dadurch als DOWN gemeldet wurde,
+-- obwohl er lief. Ohne diese Migration behielte jede bereits
+-- installierte /xreactor_config/rt.lua den alten Wert dauerhaft --
+-- validate_config() fasst eine valide Zahl nicht an.
+local RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION = 6
+local LEGACY_PEER_TIMEOUT_S = 12.0
+
+-- Und dieselbe Mechanik noch einmal fuer safety.measurement_grace_samples.
+-- Der Schluessel kam mit Schema v6 neu dazu, und core/utils.lua's
+-- migrate_config() fuellt fehlende Defaults nicht nur ein, es PERSISTIERT
+-- sie auch. Eine Installation, die v6 schon gesehen hat, traegt also die
+-- damaligen 200 Takte (20 s) auf Platte -- ein geaenderter Default waere
+-- dort nie angekommen. Mit v7 gilt die Betreibervorgabe von 30 Minuten.
+local RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION = 7
+local LEGACY_MEASUREMENT_GRACE_SAMPLES = 200
+-- v8: die Entprellung der Sicherheitsgrenzen wird in REGELTAKTEN gezaehlt,
+-- und der Takt ist seit dem 10-Hz-Umbau zehnmal kuerzer. Die historischen
+-- 3 Takte bedeuteten damit nur noch 300 ms (siehe nodes/rt/config.lua).
+-- Wie bei jeder Migration hier: nur der bekannte ALTE DEFAULT wird
+-- angehoben -- ein bewusst anders gesetzter Wert bleibt stehen.
+local RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION = 8
+local LEGACY_TRIP_SAMPLES = 3
+local LEGACY_TRIP_SAMPLE_KEYS = {
+  "temperature_trip_samples",
+  "coolant_trip_samples",
+  "coolant_invalid_grace_samples",
+}
+-- v9: feste Geraetelisten (reactors/turbines) werden EINMAL geleert -- die
+-- Ausnahme von der Regel oben, bewusst. Geschrieben hat solche Listen bis
+-- v813 nur ein Fehler: die Touch-Skalierung des Schirms (nodes/rt/main.lua's
+-- on_scale_change) persistierte die ganze Config samt dem GEFUNDENEN
+-- Geraetestand. Beim naechsten Start galt der als feste Liste: neue oder
+-- nach einem Modem-Reconnect umbenannte Turbinen wurden nicht mehr
+-- gebunden, ohne sichtbare Meldung. Von Hand traegt niemand 50 Turbinen je
+-- Knoten ein, und der Betreiber hat entschieden (2026-10-08): die Zahl der
+-- Turbinen ergibt sich immer aus dem Scan. Eine NACH v9 von Hand gesetzte
+-- Liste bleibt stehen (die Migration laeuft nur einmal).
+local RT_CONFIG_VERSION_DEVICE_LIST_RESET = 9
+M.DEVICE_LIST_RESET_NOTE = "feste Geraeteliste entfernt"
+
 function M.migrate_schema_version(config_values, defaults, add_warning)
   if type(config_values) ~= "table" then
     return false
@@ -60,6 +102,59 @@ function M.migrate_schema_version(config_values, defaults, add_warning)
         add_warning(string.format(
           "autonom.reactor_adjust_interval_individual migrated from historical default %s -> %s (config schema v%d)",
           tostring(LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL), tostring(defaults.autonom.reactor_adjust_interval_individual), RT_CONFIG_VERSION_INTERVAL_MIGRATION))
+        changed = true
+      end
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION then
+    local comms_cfg = type(config_values.comms) == "table" and config_values.comms or nil
+    local default_comms = type(defaults.comms) == "table" and defaults.comms or nil
+    if comms_cfg and default_comms and comms_cfg.peer_timeout_s == LEGACY_PEER_TIMEOUT_S then
+      comms_cfg.peer_timeout_s = default_comms.peer_timeout_s
+      add_warning(string.format(
+        "comms.peer_timeout_s migrated from historical default %s -> %s (config schema v%d)",
+        tostring(LEGACY_PEER_TIMEOUT_S), tostring(default_comms.peer_timeout_s), RT_CONFIG_VERSION_PEER_TIMEOUT_MIGRATION))
+      changed = true
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION then
+    local safety_cfg = type(config_values.safety) == "table" and config_values.safety or nil
+    local default_safety = type(defaults.safety) == "table" and defaults.safety or nil
+    if safety_cfg and default_safety
+        and safety_cfg.measurement_grace_samples == LEGACY_MEASUREMENT_GRACE_SAMPLES then
+      safety_cfg.measurement_grace_samples = default_safety.measurement_grace_samples
+      add_warning(string.format(
+        "safety.measurement_grace_samples migrated from historical default %s -> %s (config schema v%d)",
+        tostring(LEGACY_MEASUREMENT_GRACE_SAMPLES),
+        tostring(default_safety.measurement_grace_samples),
+        RT_CONFIG_VERSION_MEASUREMENT_GRACE_MIGRATION))
+      changed = true
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION then
+    local safety_cfg = type(config_values.safety) == "table" and config_values.safety or nil
+    local default_safety = type(defaults.safety) == "table" and defaults.safety or nil
+    if safety_cfg and default_safety then
+      for _, key in ipairs(LEGACY_TRIP_SAMPLE_KEYS) do
+        if safety_cfg[key] == LEGACY_TRIP_SAMPLES and default_safety[key] ~= nil then
+          safety_cfg[key] = default_safety[key]
+          add_warning(string.format(
+            "safety.%s migrated from historical default %s -> %s (config schema v%d)",
+            key, tostring(LEGACY_TRIP_SAMPLES), tostring(default_safety[key]),
+            RT_CONFIG_VERSION_TRIP_SAMPLES_MIGRATION))
+          changed = true
+        end
+      end
+    end
+  end
+  if from_version < RT_CONFIG_VERSION_DEVICE_LIST_RESET then
+    for _, key in ipairs({ "reactors", "turbines" }) do
+      local list = config_values[key]
+      if type(list) == "table" and #list > 0 then
+        add_warning(string.format(
+          "%s: %s (%d Eintraege) -- die Geraete werden wieder per Scan gefunden (config schema v%d)",
+          key, M.DEVICE_LIST_RESET_NOTE, #list, RT_CONFIG_VERSION_DEVICE_LIST_RESET))
+        config_values[key] = {}
         changed = true
       end
     end
@@ -177,6 +272,18 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     config_values.safety.coolant_invalid_grace_samples = defaults.safety.coolant_invalid_grace_samples
     add_warning("safety.coolant_invalid_grace_samples missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_invalid_grace_samples))
   end
+  if type(config_values.safety.coolant_trip_escalation_count) ~= "number" then
+    config_values.safety.coolant_trip_escalation_count = defaults.safety.coolant_trip_escalation_count
+    add_warning("safety.coolant_trip_escalation_count missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_trip_escalation_count))
+  end
+  if type(config_values.safety.coolant_trip_escalation_window_s) ~= "number" then
+    config_values.safety.coolant_trip_escalation_window_s = defaults.safety.coolant_trip_escalation_window_s
+    add_warning("safety.coolant_trip_escalation_window_s missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_trip_escalation_window_s))
+  end
+  if type(config_values.safety.coolant_recovery_confirm_ms) ~= "number" then
+    config_values.safety.coolant_recovery_confirm_ms = defaults.safety.coolant_recovery_confirm_ms
+    add_warning("safety.coolant_recovery_confirm_ms missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_recovery_confirm_ms))
+  end
   if type(config_values.autonom) ~= "table" then
     config_values.autonom = utils.deep_copy(defaults.autonom)
     add_warning("autonom missing/invalid; defaulting to autonom defaults")
@@ -277,6 +384,14 @@ function M.validate_config(config_values, defaults, add_warning, utils)
   -- Veraltete Felder bereinigen
   autonom.min_rods = nil
   autonom.max_rods = nil
+  -- Der engine-Schalter ist mit v769 entfallen (v1 ist entfernt, rt2_*.lua
+  -- ist der Regler). Ein Altbestand-Feld wird entfernt statt validiert --
+  -- stehen zu lassen waere schlimmer als loeschen: es sah wie eine Wahl aus
+  -- und war keine mehr, und sein alter Default war "v1".
+  if config_values.engine ~= nil then
+    config_values.engine = nil
+    add_warning("engine-Feld entfernt: es gibt nur noch einen Regler (rt2)")
+  end
   if type(config_values.monitor_interval) ~= "number" or config_values.monitor_interval <= 0 then
     config_values.monitor_interval = defaults.monitor_interval
     add_warning("monitor_interval missing/invalid; defaulting to " .. tostring(defaults.monitor_interval))
@@ -412,6 +527,9 @@ function M.apply_runtime_defaults(config, defaults, runtime)
   config.safety.coolant_hysteresis = config.safety.coolant_hysteresis or defaults.safety.coolant_hysteresis
   config.safety.coolant_trip_samples = config.safety.coolant_trip_samples or defaults.safety.coolant_trip_samples
   config.safety.coolant_invalid_grace_samples = config.safety.coolant_invalid_grace_samples or defaults.safety.coolant_invalid_grace_samples
+  config.safety.coolant_trip_escalation_count = config.safety.coolant_trip_escalation_count or defaults.safety.coolant_trip_escalation_count
+  config.safety.coolant_trip_escalation_window_s = config.safety.coolant_trip_escalation_window_s or defaults.safety.coolant_trip_escalation_window_s
+  config.safety.coolant_recovery_confirm_ms = config.safety.coolant_recovery_confirm_ms or defaults.safety.coolant_recovery_confirm_ms
   config.heartbeat_interval = config.heartbeat_interval or defaults.heartbeat_interval
   config.autonom = config.autonom or {}
 

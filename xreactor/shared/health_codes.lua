@@ -7,7 +7,11 @@ local health_codes = {
   DISCOVERY_FAILED = "DISCOVERY_FAILED",
   CONTROL_DEGRADED = "CONTROL_DEGRADED",
   PROTO_MISMATCH = "PROTO_MISMATCH",
-  COMMS_DOWN = "COMMS_DOWN"
+  COMMS_DOWN = "COMMS_DOWN",
+  STALE_DATA = "STALE_DATA",
+  -- Ein Timer-Ereignis ging verloren (nodes/support/runtime.lua). Die Node
+  -- laeuft weiter; der Grund zeigt, dass es passiert ist.
+  TIMER_LOST = "TIMER_LOST"
 }
 
 return health_codes

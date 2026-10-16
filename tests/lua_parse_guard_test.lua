@@ -2,16 +2,16 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 local files = {
   'xreactor/start.lua',
-  'xreactor/core/turbine_regulator.lua',
   'xreactor/nodes/energy/main.lua',
   'xreactor/nodes/fuel/main.lua',
   'xreactor/nodes/reprocessor/main.lua',
   'xreactor/nodes/rt/main.lua',
   'xreactor/nodes/rt/status_snapshot.lua',
-  'xreactor/nodes/rt/startup_diagnostics.lua',
-  'xreactor/nodes/water/main.lua',
+  'xreactor/nodes/rt/reactor_control.lua',
+  'xreactor/nodes/rt/turbine_control.lua',
   'xreactor/services/alert_service.lua',
-  'xreactor/master/ui/alerts.lua'
+  -- master/ui/alerts.lua ist seit v835 entfallen (Seite MELDUNGEN).
+  'xreactor/master/ui/alarms.lua'
 }
 
 for _, path in ipairs(files) do

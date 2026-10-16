@@ -5,7 +5,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- ui_controller.lua (keine Boot-Seiteneffekte -- M.new()'s "c = opts"
 -- macht controller.handle_action() unabhaengig von der schweren
 -- build_models()-Maschinerie testbar) und beweist:
---  1. fuel_reserve_adjust/water_target_adjust/reactor_fill_target_adjust
+--  1. fuel_reserve_adjust/reactor_fill_target_adjust
 --     lesen den aktuellen Wert jetzt aus get_config_edit_model() statt aus
 --     c.state.*_pct, und schreiben c.state.*_pct NICHT MEHR optimistisch
 --     (der alte Bug: der Monitor zeigte den neuen Wert sofort an, auch
@@ -73,23 +73,23 @@ do
   assert_true(math.abs(set_calls[1] - 0.55) < 0.0001, 'confirmed 50% + 5% delta must send 0.55, got ' .. tostring(set_calls[1]))
 end
 
--- 1c. water_target_adjust: same pattern, plus a failed send must still
---     surface an alarm.
+-- 1c. fuel_reserve_adjust: a failed send must still surface an alarm.
+--     (Lief bis v829 ueber das Wasser-Ziel, das mit seiner Node entfallen ist.)
 do
   local alarm_calls = {}
   local controller = ui_controller_lib.new({
     state = {},
     calc = {
       get_config_edit_model = function(key, fallback)
-        if key == 'water_target' then return { target = 'ALL', confirmed_value = 1000, pending = nil } end
+        if key == 'fuel_reserve' then return { target = 'ALL', confirmed_value = 1000, pending = nil } end
         return { target = 'ALL', confirmed_value = fallback, pending = nil }
       end,
-      set_water_target = function(new_val) return false, 'kein WATER-Node gefunden' end,
+      set_fuel_reserve = function(new_val) return false, 'kein FUEL-Node gefunden' end,
       add_alarm = function(sender, severity, msg) alarm_calls[#alarm_calls + 1] = { sender = sender, severity = severity, msg = msg } end,
     },
   })
-  local handled = controller.handle_action({ type = 'water_target_adjust', delta = -250 })
-  assert_true(handled, 'water_target_adjust must be handled even when the send fails')
+  local handled = controller.handle_action({ type = 'fuel_reserve_adjust', delta = -250 })
+  assert_true(handled, 'fuel_reserve_adjust must be handled even when the send fails')
   assert_eq(#alarm_calls, 1, 'a failed send must still raise exactly one alarm')
 end
 

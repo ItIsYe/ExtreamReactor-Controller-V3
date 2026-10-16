@@ -1,9 +1,14 @@
 -- CONFIG
+--
+-- REPROCESSOR-Node: befuellt mehrere Reprocessor-Maschinen mit Cyanite
+-- ueber einen gemeinsamen Mekanism Logistical Sorter (siehe feed_router.lua
+-- fuer die volle Erklaerung des physischen Aufbaus). Kein Ventil-Baum, kein
+-- eigener Computer-Anschluss an den Reprocessor-Maschinen selbst -- alles
+-- laeuft passiv ueber farbige Logistical Transporter.
 local CONFIG = {
   DEFAULT_ROLE = "REPROCESSOR-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "REPROC-1", -- Default node_id used if none is set.
   DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
-  DEFAULT_BUFFERS = { "chemical_tank_0" }, -- Default buffer peripheral names.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
@@ -20,42 +25,50 @@ local CONFIG = {
   DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  -- Feed-Logik für die REPROCESSOR-Node.
+  -- Feed-Logik fuer die REPROCESSOR-Node.
   --
-  -- Reprocessoren haben KEINEN eigenen Computer-Port — der Füllstand kann
-  -- nicht direkt abgefragt werden. Statt Füllstand-basiertem Nachfüllen wird
-  -- in zufälligen Abständen reihum jeder Reprocessor mit genau
-  -- feed_amount (Standard 2) Cyanite befüllt — das Minimum damit der
-  -- Reprocessor überhaupt arbeitet.
+  -- Reprocessoren haben KEINEN eigenen Computer-Port -- der Fuellstand kann
+  -- nicht direkt abgefragt werden. Statt Fuellstand-basiertem Nachfuellen
+  -- wird in zufaelligen Abstaenden reihum jeder Reprocessor mit genau
+  -- feed_amount (Standard 2) Cyanite befuellt -- das Minimum damit der
+  -- Reprocessor ueberhaupt arbeitet.
   --
   DEFAULT_FEED = {
-    enabled            = false,
+    enabled            = false, -- Muss im Router-UI ("FEEDING") explizit eingeschaltet werden.
     me_bridge          = "me_bridge",
+    -- Logistical Sorter, dessen Default-Farbe pro Feed auf die des
+    -- aktuellen Ziels gesetzt wird (adapters/logistical_sorter.lua).
+    -- Leer/Name nicht gefunden -> Fallback-Suche per Methodensignatur,
+    -- genau wie bei me_bridge.
+    sorter             = nil,
+    -- sorter_chest: die SORTER-KISTE -- die eine Kiste, an der der Sorter
+    -- physisch sitzt (ME-Bridge-Exportziel). Kein Default -- muss ueber
+    -- das Router-UI gewaehlt werden (siehe config_normalizer.lua's Warnung).
+    sorter_chest       = nil,
     waste_item         = "bigreactors:cyanite_ingot",
-    feed_amount        = 2,      -- Items pro Befüllung (Minimum zum Arbeiten)
-    interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befüllungen
-    interval_max_s     = 60,     -- Höchst-Wartezeit zwischen Befüllungen (zufällig dazwischen)
-    valve_open_ms       = 2000,  -- Wie lange das Ventil offen bleibt
+    feed_amount        = 2,      -- Items pro Befuellung: ganze, gerade Zahl, mindestens 2 (Reprocessor braucht immer 2)
+    interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befuellungen
+    interval_max_s     = 60,     -- Hoechst-Wartezeit zwischen Befuellungen (zufaellig dazwischen)
+    -- Stufen nach ME-Bestand: je volle stock_per_level Cyanit im ME eine
+    -- Stufe -- je Stufe 2 Barren mehr (hoechstens max_amount) und eine um
+    -- interval_cut_per_level kuerzere Pause (hoechstens um
+    -- max_interval_cut). Vorgaben auch in feed_router.BOOST_DEFAULTS.
+    boost = {
+      enabled                = true,
+      stock_per_level        = 1000,
+      max_amount             = 16,
+      interval_cut_per_level = 0.10,
+      max_interval_cut       = 0.50,
+    },
     discovery_interval = 60,
     --
-    -- targets: eine Eintrag pro Reprocessor-Inlet (kein reactor_port nötig!)
+    -- targets: ein Eintrag pro Reprocessor
     --   label = Anzeigename
-    --   inlet = Transporter/Chest direkt am Reprocessor-Eingang
-    -- { label = "Reprocessor A", inlet = "mekanism:transporter_2" },
+    --   color = Sorter-Farbe fuer diesen Reprocessor (Mekanism EnumColor,
+    --           siehe adapters/logistical_sorter.lua's COLORS) -- per
+    --           Router-UI zuweisbar (nodes/reprocessor/color_router_ui.lua)
+    -- { label = "Reprocessor A", color = "RED" },
     targets            = {},
-    --
-    -- redstone_tree: gleiches Format wie bei der Fuel-Node (siehe
-    -- nodes/fuel/config.lua) -- eine flache Route pro Ziel mit geordnetem
-    -- 'path'. Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
-    -- { reactor = "Reprocessor A", label = "Reprocessor A",
-    --   path = { { side = "right" }, { side = "top" } } },
-    -- { reactor = "Reprocessor B", label = "Reprocessor B",
-    --   path = { { side = "right" }, { side = "bottom" } } },
-    --   -- ^ "right" ist hier ein gemeinsames Trunk-Ventil ("Arm A") vor
-    --   -- beiden Reprocessor-Zweigen -- einfach in beiden Pfaden
-    --   -- wiederholt, keine Verschachtelung noetig.
-    -- Hinweis: "reactor"-Feld referenziert hier den target.label.
-    redstone_tree      = {},
   },
 }
 -- "feed" muss als separate Zuweisung NACH dem CONFIG-Tabellenkonstruktor

@@ -10,12 +10,11 @@ local function short(value, suffix)
   return string.format("%.0f%s", n, suffix or "")
 end
 
-local function state_key(state)
-  local s = tostring(state or "unknown")
-  if s == "ok" then return "OK" end
-  if s == "error" then return "EMERGENCY" end
-  if s == "unsupported" then return "WARNING" end
-  return "LIMITED"
+local function age_text(seconds)
+  if type(seconds) ~= "number" then return "n/a" end
+  if seconds < 60 then return string.format("%ds", seconds) end
+  if seconds < 3600 then return string.format("%dm", math.floor(seconds / 60)) end
+  return string.format("%dh", math.floor(seconds / 3600))
 end
 
 function M.new(opts)
@@ -32,7 +31,7 @@ function M.new(opts)
     if w >= 42 then
       mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING")
       mux.status_dot(mon, math.floor(w * 0.38), 3, tostring(model.status or "OK"), status)
-      mux.status_dot(mon, math.floor(w * 0.70), 3, "PROCESS LINK", status)
+      mux.status_dot(mon, math.floor(w * 0.70), 3, "FEED LINK", status)
     end
     return mon.getSize()
   end
@@ -41,63 +40,87 @@ function M.new(opts)
     mux.section(mon, x, y, w, "> " .. title, status, icon)
   end
 
-  local function totals(payload)
-    local stored, capacity, active = 0, 0, 0
-    local buffers = payload.buffers or {}
-    for _, b in ipairs(buffers) do
-      stored = stored + (tonumber(b.stored) or 0)
-      capacity = capacity + (tonumber(b.capacity) or 0)
-      if b.process_state == "ok" then active = active + 1 end
-    end
-    return stored, capacity, active, buffers
-  end
-
   local function overview(mon, model)
     local w, h = header(mon, model, "REPROCESSING NODE", "1/4", "recycle")
     local p = model.payload or {}
-    local stored, capacity, active, buffers = totals(p)
-    local ratio = capacity > 0 and math.max(0, math.min(1, stored / capacity)) or 0
     local feed = p.feed or {}
-    local routes_active = tonumber(feed.active_routes or feed.active or feed.routes_active) or 0
-    local routes_total = tonumber(feed.total_routes or feed.total or feed.routes_total) or 0
-    local key = p.standby and "LIMITED" or model.status == "OK" and "OK" or "WARNING"
-    local banner = p.standby and "AUFBEREITUNG STANDBY" or model.status == "OK" and "AUFBEREITUNG NORMAL" or "AUFBEREITUNG WARNING"
+    local req = p.requirements or {}
 
-    mux.banner(mon, 2, 5, w - 3, "> " .. banner, key, nil)
+    local routes_total = tonumber(feed.target_count) or 0
+    local feed_enabled = feed.enabled == true
+    -- Feeding kann eingeschaltet sein und trotzdem nichts bewegen, wenn
+    -- ME-Bridge/Sorter/Sorter-Kiste fehlen -- ready fasst genau das
+    -- zusammen, damit die Bannerfarbe nicht faelschlich OK zeigt.
+    local ready = req.me_bridge == true and req.sorter == true and req.sorter_chest_present == true
+    local key = (feed_enabled and ready) and (model.status == "OK" and "OK" or "WARNING")
+      or (feed_enabled and "WARNING" or "LIMITED")
+    local banner
+    if not feed_enabled then
+      banner = "FEEDING AUS"
+    elseif not ready then
+      banner = "FEEDING AN, ABER NICHT BEREIT"
+    else
+      banner = "FEEDING AKTIV"
+    end
+
+    -- Auf einem Monitor, der groesser ist als das urspruengliche Referenz-
+    -- Layout (~19 Content-Zeilen ab Zeile 5), blieb der untere Teil des
+    -- Bildschirms schlicht leer -- alle Bloecke standen auf fixen
+    -- Zeilennummern statt sich proportional zu verteilen. Gleiches Muster
+    -- wie nodes/rt/mockup_pages.lua's render_overview(): scale bleibt bei
+    -- 1.0 (Original-Abstaende) auf kleinen Monitoren, waechst nur wenn
+    -- mehr Platz da ist.
+    local content_top = 5
+    local content_bottom = math.max(content_top + 19, h - 2)
+    local content_h = content_bottom - content_top
+    local scale = math.max(1.0, content_h / 19)
+    local function y_at(offset) return content_top + math.floor(offset * scale) end
+
+    mux.banner(mon, 2, y_at(0), w - 3, "> " .. banner, key, nil)
 
     if w >= 54 then
       local gap = 1
       local cw = math.floor((w - 4 - gap * 2) / 3)
-      mux.metric_card(mon, 2, 7, cw, 4, { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" })
-      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = active > 0 and "OK" or "LIMITED", icon = "recycle" })
-      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
+      mux.metric_card(mon, 2, y_at(2), cw, 4, { label = "FEEDING", value = feed_enabled and "AN" or "AUS", status = feed_enabled and "OK" or "OFFLINE", icon = "config" })
+      mux.metric_card(mon, 2 + cw + gap, y_at(2), cw, 4, { label = "ZIELE", value = tostring(routes_total), status = routes_total > 0 and "OK" or "WARNING", icon = "recycle" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, y_at(2), cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
     else
-      mux.kpi_strip(mon, 2, 7, w - 3, {
-        { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" },
-        { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = "OK", icon = "recycle" },
+      mux.kpi_strip(mon, 2, y_at(2), w - 3, {
+        { label = "FEEDING", value = feed_enabled and "AN" or "AUS", status = feed_enabled and "OK" or "OFFLINE", icon = "config" },
+        { label = "ZIELE", value = tostring(routes_total), status = routes_total > 0 and "OK" or "WARNING", icon = "recycle" },
         { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
       })
     end
 
-    section_arrow(mon, 2, 12, w - 3, "PUFFER AUSLASTUNG", key, "storage")
-    mux.outlined_progress(mon, 2, 14, w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
-    mux.data_row(mon, 2, 15, w - 3, { label = short(stored) .. " / " .. short(capacity), value = "BUFFER", status = "text", icon = "storage" })
+    section_arrow(mon, 2, y_at(7), w - 3, "NAECHSTER FEED", key, "recycle")
+    local next_in = tonumber(feed.next_feed_in_s)
+    -- Barren je Lieferung und Stufe nach ME-Bestand (feed_router v828)
+    local amount_text = ""
+    if feed_enabled and tonumber(feed.feed_amount) then
+      amount_text = "  " .. tostring(feed.feed_amount) .. " Barren"
+      if (tonumber(feed.boost_level) or 0) > 0 then
+        amount_text = amount_text .. ", Stufe " .. tostring(feed.boost_level)
+      end
+    end
+    mux.data_row(mon, 2, y_at(9), w - 3, {
+      label = feed_enabled and ((next_in and (tostring(next_in) .. "s") or "-") .. amount_text) or "FEEDING AUS",
+      value = "IN", status = feed_enabled and "text" or "OFFLINE", icon = "recycle",
+    })
 
     if h >= 20 then
       local cw = math.floor((w - 5 - 3) / 4)
       local items = {
-        { label = "STORED", value = short(stored), status = key, icon = "storage" },
-        { label = "CAPACITY", value = short(capacity), status = "LIMITED", icon = "storage" },
-        { label = "ROUTEN", value = string.format("%d/%d", routes_active, routes_total), status = routes_active > 0 and "OK" or "LIMITED", icon = "network" },
-        { label = "MODE", value = p.standby and "STANDBY" or "ACTIVE", status = key, icon = "config" },
+        { label = "LETZTES ZIEL", value = tostring(feed.last_target or "-"), status = "text", icon = "recycle" },
+        { label = "LETZTER FEED", value = age_text(feed.last_feed_age_s), status = feed.last_feed_age_s and "OK" or "LIMITED", icon = "recycle" },
+        { label = "GESAMT", value = short(feed.total_feeds), status = "text", icon = "recycle" },
+        { label = "FEHLER", value = feed.last_error and "JA" or "NEIN", status = feed.last_error and "WARNING" or "OK", icon = "warning" },
       }
-      for i, item in ipairs(items) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 17, cw, 4, item) end
+      for i, item in ipairs(items) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), y_at(12), cw, 4, item) end
     end
 
-    if h >= 25 then
-      section_arrow(mon, 2, 22, w - 3, "VERARBEITUNGSLINIEN", "LIMITED", "recycle")
-      local b = buffers[1]
-      mux.data_row(mon, 2, 24, w - 3, { label = b and tostring(b.id or "LINE 1") or "KEINE LINIE", value = b and tostring(b.process_state or "unknown"):upper() or "-", status = b and state_key(b.process_state) or "WARNING", icon = "recycle" })
+    if h >= 25 and feed.last_error then
+      section_arrow(mon, 2, y_at(17), w - 3, "LETZTER FEHLER", "WARNING", "warning")
+      mux.data_row(mon, 2, y_at(19), w - 3, { label = tostring(feed.last_error), value = "", status = "WARNING", icon = "warning" })
     end
 
     return mux.footer_nav(mon, h, w, { center = "REPROCESSING" })
@@ -106,14 +129,14 @@ function M.new(opts)
   local function details(mon, model)
     local w, h = header(mon, model, "REPROCESSING DETAILS", "2/4", "recycle")
     local p = model.payload or {}
-    local stored, capacity, active, buffers = totals(p)
-    local ratio = capacity > 0 and math.max(0, math.min(1, stored / capacity)) or 0
+    local feed = p.feed or {}
+    local targets = feed.targets or {}
 
     local top = {
-      { label = "BUFFER", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" },
-      { label = "ACTIVE", value = tostring(active), status = active > 0 and "OK" or "LIMITED", icon = "recycle" },
-      { label = "FILL", value = string.format("%.0f%%", ratio * 100), status = "LIMITED", icon = "storage" },
-      { label = "STANDBY", value = p.standby and "YES" or "NO", status = p.standby and "LIMITED" or "OK", icon = "config" },
+      { label = "ZIELE", value = tostring(#targets), status = #targets > 0 and "OK" or "WARNING", icon = "recycle" },
+      { label = "GESAMT FEEDS", value = short(feed.total_feeds), status = "text", icon = "recycle" },
+      { label = "LETZTER FEED", value = age_text(feed.last_feed_age_s), status = feed.last_feed_age_s and "OK" or "LIMITED", icon = "recycle" },
+      { label = "FEEDING", value = feed.enabled and "AN" or "AUS", status = feed.enabled and "OK" or "OFFLINE", icon = "config" },
     }
 
     if w >= 54 then
@@ -123,25 +146,46 @@ function M.new(opts)
       mux.kpi_strip(mon, 2, 5, w - 3, top)
     end
 
-    section_arrow(mon, 2, 10, w - 3, "BUFFER / PROCESS STATE", "LIMITED", "recycle")
+    section_arrow(mon, 2, 10, w - 3, "REPROCESSOR-ZIELE", "LIMITED", "recycle")
     local y = 12
-    for _, b in ipairs(buffers) do
-      if y > h - 7 then break end
-      local key = state_key(b.process_state)
-      local pct = tonumber(b.percent) and math.max(0, math.min(1, tonumber(b.percent) / 100)) or 0
-      mux.card(mon, 2, y, w - 3, 6, { title = tostring(b.id or "BUFFER") .. "   " .. tostring(b.process_state or "unknown"):upper(), status = key, icon = "recycle" })
-      mux.kpi_strip(mon, 4, y + 1, w - 7, {
-        { label = "STORED", value = short(b.stored), status = key, icon = "storage" },
-        { label = "CAP", value = short(b.capacity), status = "LIMITED", icon = "storage" },
-        { label = "FILL", value = b.percent and string.format("%.1f%%", b.percent) or "n/a", status = key, icon = "storage" },
-        { label = "STATE", value = tostring(b.process_state or "unknown"):upper(), status = key, icon = "recycle" },
+    for i, t in ipairs(targets) do
+      if y > h - 2 then break end
+      local is_last = t.label == feed.last_target
+      mux.data_row(mon, 2, y, w - 3, {
+        label = string.format("%d. %s", i, tostring(t.label or "?")),
+        value = tostring(t.color or "?"),
+        status = is_last and "OK" or "text", icon = "recycle",
       })
-      mux.outlined_progress(mon, 4, y + 4, w - 7, pct, key, b.percent and string.format("%.1f%%", b.percent) or "n/a")
-      y = y + 7
+      y = y + 1
     end
 
-    if #buffers == 0 then mux.warning_box(mon, 2, 12, w - 3, { "Keine Buffer gefunden", "Discovery / Binding pruefen" }, "WARNING") end
+    if #targets == 0 then mux.warning_box(mon, 2, 12, w - 3, { "Keine Reprocessor-Ziele konfiguriert", "Im Router-UI hinzufuegen." }, "WARNING") end
     return mux.footer_nav(mon, h, w, { center = "PROCESS DETAILS" })
+  end
+
+  -- "Was wird gebraucht, was ist verbunden" -- fasst alle fuer die
+  -- Reprocessor-Rotation noetigen Peripherals/Verbindungen (ME-Bridge,
+  -- Sorter, SORTER-KISTE, Wireless-Modem, Monitor) in einer einzigen
+  -- Liste zusammen, statt das aus Registry-/Feed-Einzelanzeigen
+  -- zusammenraten zu muessen (main.lua's build_requirements()).
+  local function append_requirement_rows(rows, req)
+    if not req then return end
+    local function add(label, ok, extra)
+      local suffix = extra and extra ~= "" and (" (" .. tostring(extra) .. ")") or ""
+      rows[#rows + 1] = { text = label .. ": " .. (ok and "OK" or "FEHLT") .. suffix, status = ok and "OK" or "WARNING" }
+    end
+    add("ME-BRIDGE", req.me_bridge, req.me_bridge_name)
+    add("SORTER", req.sorter, req.sorter_name)
+    -- Einmalige Einstellung (Single Item aus, Auto an); nil = noch nicht
+    -- versucht (FEEDING aus).
+    if req.sorter_setup_ok ~= nil then
+      add("SORTER-EINSTELLUNG", req.sorter_setup_ok,
+        req.sorter_setup_ok and "Single aus, Auto an" or req.sorter_setup_error)
+    end
+    add("SORTER-KISTE", req.sorter_chest_present, req.sorter_chest_name)
+    add("WIRELESS-MODEM", req.wireless_modem)
+    rows[#rows + 1] = { text = "MONITOR: " .. (req.monitor_is_term and "TERMINAL (Fallback)" or (req.monitor and "OK" or "FEHLT")),
+      status = req.monitor and "OK" or "WARNING" }
   end
 
   local function diagnostics(mon, model)
@@ -164,6 +208,7 @@ function M.new(opts)
 
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, alerts)
+    append_requirement_rows(rows, model.payload and model.payload.requirements)
 
     if w >= 58 then
       local left_w = math.floor((w - 5) / 2)

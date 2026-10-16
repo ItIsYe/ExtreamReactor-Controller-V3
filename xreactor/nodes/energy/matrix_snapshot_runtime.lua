@@ -267,9 +267,31 @@ function runtime:poll_static_components(now_ts, groups)
   self.component_cursor = idx
 end
 
+-- UNBEKANNTE Kapazitaet wird nicht erfunden.
+--
+-- Bis v814 fiel die Kapazitaet einer Matrix, deren getCapacity noch nie
+-- gelesen war (erster Takt nach dem Start, ER2-Variante ohne die Methode,
+-- Lesefehler), auf ihren Inhalt zurueck: capacity = stored, also scheinbar
+-- 100 % voll. Das ging so ueber Funk:
+--
+--   * MASTER (core/alert_rules.lua) meldete MATRIX_NEAR_FULL fuer eine
+--     Matrix, deren Fuellstand niemand kannte;
+--   * die Gesamtanzeigen auf ENERGY und MASTER rechneten den erfundenen
+--     Nenner mit und zeigten einen zu hohen Gesamtfuellstand.
+--
+-- Den Lastabwurf hat es nicht ausgeloest -- eine Matrix ohne vollstaendige
+-- Probe markiert den Schnappschuss als veraltet (missing), und
+-- master/runtime_ops_profile.lua laesst veraltete ENERGY-Knoten aus.
+--
+-- Dieselbe Regel wie in storage_snapshot_runtime.lua: Zaehler und Nenner
+-- nur gemeinsam. Eine Matrix ohne bekannte Kapazitaet traegt weder zu
+-- total.stored noch zu total.capacity bei; ihr Inhalt steht in
+-- total.stored_all, ihre Anzahl in total.capacity_unknown, ihr eigener
+-- Fuellstand ist nil ("n/a"), nicht 100 %.
 function runtime:rebuild_snapshot(now_ts, groups, diag)
   local matrices = {}
-  local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false }
+  local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false,
+    stored_all = 0, capacity_unknown = 0 }
   local stale_after_ms = math.max(1000, math.floor((tonumber(self.config.matrix_metric_poll_interval) or 2.0) * 4000))
   local snapshot_stale = false
 
@@ -278,7 +300,8 @@ function runtime:rebuild_snapshot(now_ts, groups, diag)
     local dynamic = self.dynamic_cache[tostring(group.key)] or {}
     local static = self.static_cache[tostring(group.key)] or {}
     local stored = tonumber(dynamic.stored or dynamic.last_good_stored) or 0
-    local capacity = tonumber(dynamic.capacity or dynamic.last_good_capacity) or stored
+    local capacity = tonumber(dynamic.capacity or dynamic.last_good_capacity)
+    local capacity_known = capacity ~= nil and capacity > 0
     local input, output = dynamic.input, dynamic.output
     local stored_ts = tonumber(dynamic.stored_good_ts) or 0
     local capacity_ts = tonumber(dynamic.capacity_good_ts) or 0
@@ -298,15 +321,23 @@ function runtime:rebuild_snapshot(now_ts, groups, diag)
       total.input = total.input + (tonumber(input) or 0)
       total.output = total.output + (tonumber(output) or 0)
     end
-    total.stored = total.stored + stored
-    total.capacity = total.capacity + capacity
+    total.stored_all = total.stored_all + stored
+    if capacity_known then
+      total.stored = total.stored + stored
+      total.capacity = total.capacity + capacity
+    else
+      total.capacity_unknown = total.capacity_unknown + 1
+    end
 
     local label = reader and (reader.alias or reader.name) or tostring(group.key)
     matrices[#matrices + 1] = {
       id = group.key, key = group.key, name = reader and reader.name or group.key,
       alias = label, label = label, reader = reader and reader.name or nil,
       ports = port_names, port_count = #port_names,
-      stored = stored, capacity = capacity, percent = capacity > 0 and (stored / capacity) or 0,
+      stored = stored,
+      capacity = capacity_known and capacity or nil,
+      percent = capacity_known and (stored / capacity) or nil,
+      capacity_known = capacity_known,
       input = tonumber(input), output = tonumber(output), cells = tonumber(static.cells),
       providers = tonumber(static.providers), total_ports = tonumber(static.ports),
       valid = has_last_good,
@@ -325,14 +356,24 @@ function runtime:rebuild_snapshot(now_ts, groups, diag)
     }
   end
 
-  local total_percent = total.capacity > 0 and (total.stored / total.capacity) or 0
+  -- Gesamtfuellstand: ueber die Matrizen mit bekannter Kapazitaet. Gibt es
+  -- Matrizen, aber von keiner die Kapazitaet, ist er unbekannt (nil) --
+  -- weder 100 % noch 0 %. Ohne Matrizen bleibt er 0 wie bisher.
+  local total_percent
+  if total.capacity > 0 then
+    total_percent = total.stored / total.capacity
+  elseif #matrices == 0 then
+    total_percent = 0
+  end
   self.last_snapshot = {
     ts = now_ts,
     matrices = matrices,
     total = {
       stored = total.stored, capacity = total.capacity, percent = total_percent,
       input = total.has_flow and total.input or nil,
-      output = total.has_flow and total.output or nil
+      output = total.has_flow and total.output or nil,
+      stored_all = total.stored_all,
+      capacity_unknown = total.capacity_unknown
     },
     freshness_ms = now_ts - self.last_poll_ts,
     stale = snapshot_stale,

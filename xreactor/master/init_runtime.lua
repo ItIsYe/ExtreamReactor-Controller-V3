@@ -1,5 +1,34 @@
 local M = {}
 
+-- AUX-View-Persistenz: welche View jeder AUX-Monitor (4.+, per Touch
+-- umschaltbar) zuletzt zeigte, ueberlebt einen MASTER-Neustart. Ohne das
+-- fielen alle AUX-Monitore nach jedem Neustart auf die erste View im
+-- Zyklus zurueck, unabhaengig davon was der Operator zuletzt eingestellt
+-- hatte. Gleiche Nutzerdatei wie master/ui_controller.lua's
+-- persist_master_settings() (PEAK/IDLE/AUTO-UPDATE), nur ein zusaetzliches
+-- Feld -- kein Manifest-Eintrag, uebersteht Auto-Updates. Schluessel ist
+-- die stabile Registry-ID des physischen Monitors (siehe
+-- core/monitor_manager.lua), nicht sein CC:Tweaked-Peripheriename, damit
+-- die Zuordnung auch nach einem Kabel-/Reconnect-bedingten Namenswechsel
+-- stabil bleibt.
+local AUX_VIEW_STATE_PATH = "/xreactor_config/master.lua"
+
+local function load_aux_view_keys(ctx)
+  local ok, cfg = pcall(ctx.utils.load_config, AUX_VIEW_STATE_PATH, {})
+  if ok and type(cfg) == "table" and type(cfg.aux_views) == "table" then
+    return cfg.aux_views
+  end
+  return {}
+end
+
+local function save_aux_view_key(ctx, monitor_id, view_key)
+  local ok, cfg = pcall(ctx.utils.load_config, AUX_VIEW_STATE_PATH, {})
+  cfg = (ok and type(cfg) == "table") and cfg or {}
+  cfg.aux_views = cfg.aux_views or {}
+  cfg.aux_views[tostring(monitor_id)] = view_key
+  pcall(ctx.utils.write_config, AUX_VIEW_STATE_PATH, cfg)
+end
+
 -- Fix P5: ctx-Interface ist bewusst flach gehalten für CC:Tweaked-Kompatibilität,
 -- aber die Felder sind jetzt in logische Gruppen dokumentiert:
 --
@@ -30,7 +59,7 @@ function M.run(ctx)
     scale = resolved_scale,
     min_width = min_monitor_width,
     min_height = min_monitor_height,
-    path = "/xreactor/config/registry_master_monitors.json"
+    path = "/xreactor_config/registry_master_monitors.json"
   })
   ctx.refs.view_manager = ctx.multiview_ui.new({
     layout_path = ctx.layout_config_path,
@@ -39,20 +68,22 @@ function M.run(ctx)
       energy = { label = "Energy", render = ctx.energy_ui.render, interval = 1.0 },
       rt = { label = "RT", render = ctx.rt_ui.render, hit_test = ctx.rt_ui.hit_test, interval = 1.0 },
       resources = { label = "Resources", render = ctx.resources_ui.render, interval = 2.0 },
-      alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
-      alarms = { label = "Logs", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.handle_input, interval = 1.0 },
+      -- Seite MELDUNGEN (v835) -- ersetzt "Logs" und "Alerts".
+      alarms = { label = "Meldungen", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.hit_test, interval = 1.0 },
       maintenance = { label = "Maintenance", render = ctx.maintenance_ui.render, hit_test = ctx.maintenance_ui.hit_test, interval = 1.0 },
       updates = { label = "Updates", render = ctx.updates_ui.render, interval = 2.0 },
       system_map = { label = "System Map", render = ctx.system_map_ui.render, interval = 2.0 },
       config_editor = { label = "Config", render = ctx.config_editor_ui.render, hit_test = ctx.config_editor_ui.hit_test, interval = 1.0 },
     },
-    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms", "maintenance", "updates", "system_map", "config_editor" },
+    view_order = { "overview", "rt", "energy", "resources", "alarms", "maintenance", "updates", "system_map", "config_editor" },
     on_action = function(action)
       if ctx.refs.ui_controller then
         return ctx.refs.ui_controller.handle_action(action)
       end
       return false, "ui-controller-missing"
-    end
+    end,
+    persisted_view_keys = load_aux_view_keys(ctx),
+    on_aux_view_change = function(monitor_id, view_key) save_aux_view_key(ctx, monitor_id, view_key) end
   })
   ctx.utils.log("MASTER", "View manager initialized for primary roles: monitor1=overview monitor2=rt monitor3=energy", "INFO")
   ctx.refresh_monitors(true)
@@ -143,7 +174,6 @@ function M.run(ctx)
       get_rt_global_off_hold = ctx.get_rt_global_off_hold,
       set_rt_global_off_hold = ctx.set_rt_global_off_hold,
       set_fuel_reserve = ctx.set_fuel_reserve,
-      set_water_target = ctx.set_water_target,
       set_reactor_fill_target = ctx.set_reactor_fill_target,
       get_auto_update_enabled = ctx.get_auto_update_enabled,
       set_auto_update_enabled = ctx.set_auto_update_enabled

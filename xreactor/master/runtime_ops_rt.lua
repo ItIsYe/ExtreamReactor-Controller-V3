@@ -43,11 +43,11 @@ function M.sync_rt_node(runtime, node, reason)
     if not node._learning_logged or (now - (node._learning_logged or 0)) > 10000 then
       node._learning_logged = now
       runtime.log((
-        "RT node still learning capacity node=%s stable_samples=%s stable_turbines=%s/%s"
+        "RT node still learning capacity node=%s im Zielband=%s/%s von %s Turbinen"
       ):format(
         tostring(node.id),
-        tostring(rt.capacity_stable_samples or 0),
         tostring(rt.capacity_stable_turbines or 0),
+        tostring(rt.capacity_required_turbines or 0),
         tostring(rt.capacity_total_turbines or 0)
       ), "INFO")
     end
@@ -249,7 +249,13 @@ function M.check_timeouts(runtime)
     if should_mark_down then
       if node.status ~= runtime.libs.constants.status_levels.OFFLINE then runtime.log("Node offline: " .. tostring(node.id)) end
       if not node.down_since then node.down_since = now end
-      node.status = runtime.libs.health.status.DOWN
+      -- node.status uses constants.status_levels, not health.status (which
+      -- is what node.health.status below uses) -- setting it to
+      -- health.status.DOWN ("DOWN") previously meant the OFFLINE checks in
+      -- rt_sync.lua (evaluate_rt_node()/mode_sync_action()) and
+      -- startup_sequencer.lua never matched, so a comms-down RT node could
+      -- still be treated as controllable/assignable by the sequencer.
+      node.status = runtime.libs.constants.status_levels.OFFLINE
       node.offline = true; node.stale = true; node.recovering = false; node.managed = false
       node.health = node.health or runtime.libs.health.new({})
       node.health.status = runtime.libs.health.status.DOWN
@@ -257,22 +263,45 @@ function M.check_timeouts(runtime)
       node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN] = true
       if last_seen and (now - last_seen) >= runtime.tuning.node_offline_purge_after_ms then stale_nodes[#stale_nodes + 1] = node.id end
     elseif node.health and node.health.reasons then
+      -- Only treat this as an actual reconnect (log line + alert-service
+      -- clear) when COMMS_DOWN was really set on this node before. This
+      -- elseif branch used to run for every healthy node on every single
+      -- check_timeouts() pass (every node not currently should_mark_down),
+      -- so it logged "Node ... reconnected — COMMS_DOWN alert cleared" and
+      -- called alert_service:_clear_alert() for nodes that were never down
+      -- in the first place -- hundreds of spurious log lines/alert calls
+      -- per minute across the whole fleet, drowning out real reconnects and
+      -- adding needless remote-log/alert-service load.
+      local was_down = node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN]
       node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN] = nil
       node.down_since = nil; node.down_pending_since = nil; node.offline = false; node.stale = false; node.recovering = false; node.managed = true
-      -- Alert clearen wenn Node wieder online kommt
-      if runtime.refs and runtime.refs.alert_service then
-        local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))
-        pcall(function() runtime.refs.alert_service:_clear_alert(down_key, os.epoch("utc")) end)
+      if was_down then
+        -- War die Node weg, hat sie womoeglich neu gestartet: Sollwerte beim
+        -- naechsten Abgleich sofort senden (rt_sync.setpoint_send_due).
+        node.last_setpoints_ts = nil
+        -- Alert clearen wenn Node wieder online kommt
+        if runtime.refs and runtime.refs.alert_service then
+          local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))
+          pcall(function() runtime.refs.alert_service:_clear_alert(down_key, os.epoch("utc")) end)
+        end
         runtime.log(("Node %s reconnected — COMMS_DOWN alert cleared"):format(tostring(node.id)), "INFO")
       end
     end
   end
   for _, node_id in ipairs(stale_nodes) do
     local node = runtime.state.nodes[node_id]
-    if node and node.status == runtime.libs.health.status.DOWN then
-      runtime.log(("Node stale purged from managed set: %s"):format(tostring(node_id)), "INFO")
-      node.managed = false
-      node.active = false
+    if node and node.status == runtime.libs.constants.status_levels.OFFLINE then
+      -- Actually remove the entry (not just flag it managed=false/active=false
+      -- as before) -- runtime.state.nodes is iterated in full every tick by
+      -- ui_controller.lua, rt_sync.lua, alert_rules.lua, housekeeping.lua and
+      -- every AUX monitor's view, so a node that stays "purged" but never
+      -- removed keeps costing full-table-iteration time forever. Only
+      -- reachable after node_offline_purge_after_ms (default 120s) of
+      -- confirmed offline status, so this is a long-gone node, not a
+      -- transient blip -- same retention-then-delete pattern comms.lua
+      -- already uses for its own peer table (peer_retention_s).
+      runtime.log(("Node stale purged: %s"):format(tostring(node_id)), "INFO")
+      runtime.state.nodes[node_id] = nil
     end
   end
 end

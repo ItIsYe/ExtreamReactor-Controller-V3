@@ -241,24 +241,24 @@ function router:handle_input(event)
   elseif kind == "monitor_touch" or kind == "mouse_click" then
     local x, y = event[3], event[4]
     local prev = self.footer.prev
-    if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then
+    if prev and y >= prev.y and y <= (prev.y2 or prev.y) and x >= prev.x1 and x <= prev.x2 then
       self:prev()
       return true
     end
     local next_btn = self.footer.next
-    if next_btn and y == next_btn.y and x >= next_btn.x1 and x <= next_btn.x2 then
+    if next_btn and y >= next_btn.y and y <= (next_btn.y2 or next_btn.y) and x >= next_btn.x1 and x <= next_btn.x2 then
       self:next()
       return true
     end
     local list = self.list_controls
     if list then
       local list_prev = list.prev
-      if list_prev and y == list_prev.y and x >= list_prev.x1 and x <= list_prev.x2 then
+      if list_prev and y >= list_prev.y and y <= (list_prev.y2 or list_prev.y) and x >= list_prev.x1 and x <= list_prev.x2 then
         if list.on_prev then list.on_prev() end
         return true
       end
       local list_next = list.next
-      if list_next and y == list_next.y and x >= list_next.x1 and x <= list_next.x2 then
+      if list_next and y >= list_next.y and y <= (list_next.y2 or list_next.y) and x >= list_next.x1 and x <= list_next.x2 then
         if list.on_next then list.on_next() end
         return true
       end
@@ -422,10 +422,10 @@ function router:render(mon, model)
     if not width or not height then return true end
     if type(page_footer) == "table" and page_footer.left and page_footer.right then
       self.footer.prev = {
-        x1 = page_footer.left.x1, x2 = page_footer.left.x2, y = page_footer.left.y,
+        x1 = page_footer.left.x1, x2 = page_footer.left.x2, y = page_footer.left.y, y2 = page_footer.left.y2,
       }
       self.footer.next = {
-        x1 = page_footer.right.x1, x2 = page_footer.right.x2, y = page_footer.right.y,
+        x1 = page_footer.right.x1, x2 = page_footer.right.x2, y = page_footer.right.y, y2 = page_footer.right.y2,
       }
       self.footer.indicator = nil
       return true

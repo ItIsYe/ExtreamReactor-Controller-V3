@@ -29,16 +29,23 @@ local function config_for(config, reactor)
   local lg = type(config) == "table" and config.logistics or nil
   for _, entry in ipairs(type(lg) == "table" and lg.reactors or {}) do
     local rid = entry.reactor_id or entry.reactor_port
-    local label = entry.name or entry.label
     if (rid ~= nil and reactor.reactor_id ~= nil and tostring(rid) == tostring(reactor.reactor_id))
-        or (label ~= nil and reactor.label ~= nil and tostring(label) == tostring(reactor.label)) then
+        or (entry.label ~= nil and reactor.label ~= nil and tostring(entry.label) == tostring(reactor.label)) then
       return entry
     end
   end
   return {}
 end
 
-local function route_context(rs_router)
+-- valve_status_override lets a caller that already fetched get_valve_status()
+-- this cycle (e.g. status_snapshot.lua, which also needs it for
+-- payload.valve_summary) pass that same list through instead of paying for
+-- another full comms:get_peers() + valve-list rebuild -- get_valve_status()
+-- allocates a fresh table across every known peer and sorts every valve, so
+-- calling it twice per status cycle doubles that cost for nothing (both
+-- calls return the same data in the same cycle). Falls back to fetching it
+-- itself when no override is given, unchanged for any other caller.
+local function route_context(rs_router, valve_status_override)
   if type(rs_router) ~= "table" then
     return { state = "ROUTING_NOT_CONFIGURED", routes = {}, valves = {} }
   end
@@ -56,12 +63,14 @@ local function route_context(rs_router)
   end
 
   local valves = {}
-  if type(rs_router.get_valve_status) == "function" then
+  local valve_list = valve_status_override
+  if valve_list == nil and type(rs_router.get_valve_status) == "function" then
     local ok, value = pcall(rs_router.get_valve_status, rs_router)
-    if ok and type(value) == "table" then
-      for _, valve in ipairs(value) do
-        if type(valve) == "table" and valve.id ~= nil then valves[tostring(valve.id)] = valve end
-      end
+    if ok and type(value) == "table" then valve_list = value end
+  end
+  if type(valve_list) == "table" then
+    for _, valve in ipairs(valve_list) do
+      if type(valve) == "table" and valve.id ~= nil then valves[tostring(valve.id)] = valve end
     end
   end
 
@@ -92,12 +101,17 @@ local function route_state(ctx, reactor)
 
   local route = find_route(ctx, reactor)
   if not route then return "ROUTE_MISSING" end
+  -- path[i] is a plain VALVE-Node id string (see redstone_router.lua) --
+  -- no {side=,integrator=} step tables since the 2026-09-03 flat-path
+  -- rewrite.
+  -- VALVE_UNKNOWN/VALVE_WAITING: siehe redstone_router.lua _valve_link() --
+  -- die Kennung meldet sich nie bzw. FUEL laeuft erst kurz.
   for _, step in ipairs(route.path or {}) do
-    if type(step) == "table" and step.integrator ~= nil then
-      local valve = ctx.valves[tostring(step.integrator)]
-      if not valve or valve.online ~= true then return "VALVE_OFFLINE" end
-      if valve.stale == true then return "VALVE_STALE" end
-    end
+    local valve = ctx.valves[tostring(step)]
+    if valve and valve.unknown == true then return "VALVE_UNKNOWN" end
+    if valve and valve.waiting == true then return "VALVE_WAITING" end
+    if not valve or valve.online ~= true then return "VALVE_OFFLINE" end
+    if valve.stale == true then return "VALVE_STALE" end
   end
   return "ROUTE_READY"
 end
@@ -121,7 +135,19 @@ function M.enrich(summary, opts)
   summary.reactors = type(summary.reactors) == "table" and summary.reactors or {}
 
   local now = tonumber(opts.now_ms) or (os.epoch and os.epoch("utc") or 0)
-  local route_ctx = route_context(opts.rs_router)
+  local route_ctx = route_context(opts.rs_router, opts.valve_status)
+  -- Wie viele Reaktoren das NETZ kennt. Damit laesst sich "die konfigurierte
+  -- Kennung gibt es nicht" von "es kommen gar keine Daten" unterscheiden --
+  -- zwei Lagen, die auf dem Schirm gleich aussahen und verschiedene
+  -- Handlungen brauchen (siehe fuel_status_network.known_reactor_count).
+  local network_reactors = 0
+  if type(opts.fuel_status) == "table" then
+    local ok_count, value = pcall(function()
+      return require("nodes.fuel.fuel_status_network").known_reactor_count(opts.fuel_status)
+    end)
+    if ok_count and type(value) == "number" then network_reactors = value end
+  end
+  summary.network_reactor_count = network_reactors
   local counts = { configured = 0, ready = 0, blocked = 0, stale = 0, missing = 0 }
   local fuel_counts = { fresh = 0, stale = 0, missing = 0 }
 
@@ -156,15 +182,18 @@ function M.enrich(summary, opts)
       reactor.fuel_amount = valid_entry and entry.fuel_amount or nil
       reactor.fuel_capacity = valid_entry and entry.fuel_capacity or nil
 
-      reactor.configured_inlet = cfg.inlet
-      reactor.item = cfg.item
       reactor.request_below = tonumber(cfg.request_below)
       reactor.fill_amount = tonumber(cfg.fill_amount)
       reactor.min_in_me = tonumber(cfg.min_in_me)
+      reactor.resupply_cooldown_s = tonumber(cfg.resupply_cooldown_s)
 
       reactor.route_state = route_state(route_ctx, reactor)
 
-      if summary.enabled ~= true or summary.bridge == nil or reactor.connected ~= true or blocked_route(reactor.route_state) then
+      -- export_chest is the ONE shared hand-off point every reactor's
+      -- delivery exports into (see logistics_router.lua) -- a missing one
+      -- blocks ALL reactors, the same way a missing bridge does.
+      if summary.enabled ~= true or summary.bridge == nil or summary.export_chest == nil
+          or reactor.connected ~= true or blocked_route(reactor.route_state) then
         reactor.operational_state = "BLOCKED"
         counts.blocked = counts.blocked + 1
       elseif reactor.fuel_data_state == "STALE" then
@@ -176,6 +205,14 @@ function M.enrich(summary, opts)
       else
         reactor.operational_state = "READY"
         counts.ready = counts.ready + 1
+      end
+
+      local last = summary.last_delivery
+      if type(last) == "table" and last.reactor_id ~= nil and reactor.reactor_id ~= nil
+          and tostring(last.reactor_id) == tostring(reactor.reactor_id) then
+        reactor.last_item = last.item
+        reactor.last_element = last.element
+        reactor.last_delivery_ts = last.finished_ts
       end
 
       if request_matches(summary.current_request, reactor) then

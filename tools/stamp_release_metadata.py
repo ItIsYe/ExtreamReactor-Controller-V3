@@ -35,6 +35,7 @@ ENTRY_RE = re.compile(r'\{\s*path\s*=\s*"([^"]+)"')
 MANIFEST_VERSION_RE = re.compile(r'manifest_version\s*=\s*(\d+)')
 MANIFEST_ID_RE = re.compile(r'manifest_id\s*=\s*"([^"]+)"')
 HASH_ALGO_RE = re.compile(r'hash_algo\s*=\s*"([^"]+)"')
+PAYLOAD_DIGEST_RE = re.compile(r'payload_digest\s*=\s*"([0-9a-f]+)"')
 
 
 def crc32_hex(data: bytes) -> str:
@@ -46,6 +47,7 @@ def parse_manifest_metadata() -> dict[str, object]:
     version_match = MANIFEST_VERSION_RE.search(text)
     id_match = MANIFEST_ID_RE.search(text)
     hash_match = HASH_ALGO_RE.search(text)
+    digest_match = PAYLOAD_DIGEST_RE.search(text)
     entries = ENTRY_RE.findall(text)
     if not version_match or not id_match:
         raise SystemExit("manifest.lua is missing manifest_version or manifest_id")
@@ -54,6 +56,8 @@ def parse_manifest_metadata() -> dict[str, object]:
         "manifest_id": id_match.group(1),
         "hash_algo": hash_match.group(1) if hash_match else "crc32",
         "manifest_file_count": len(entries),
+        # Inhalts-Pruefsumme, von scripts/manifest_sync.py gepflegt.
+        "payload_digest": digest_match.group(1) if digest_match else None,
     }
 
 
@@ -75,6 +79,8 @@ def render_release(args: argparse.Namespace, manifest: dict[str, object], instal
         f'  commit_sha = "{args.commit_sha}",\n'
         f'  source_ref = "{source_ref}",\n'
         f'  manifest_id = "{manifest["manifest_id"]}",\n'
+        + (f'  payload_digest = "{manifest["payload_digest"]}",\n' if manifest["payload_digest"] else "")
+        +
         f'  manifest_version = {manifest["manifest_version"]},\n'
         f'  manifest_file_count = {manifest["manifest_file_count"]},\n'
         f'  hash_algo = "{manifest["hash_algo"]}",\n'

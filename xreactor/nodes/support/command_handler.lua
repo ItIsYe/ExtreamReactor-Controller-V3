@@ -22,12 +22,16 @@ local function value_label(command)
 end
 
 local function log_with_devices(devices, level, message)
-  local logger = type(devices) == "table" and devices.command_logger or nil
-  if type(logger) == "function" then
-    local ok = pcall(logger, level or "INFO", message)
-    if ok then return end
-  end
   utils.log("SUPPORT", message, level or "INFO")
+end
+
+-- Kommandos, die im Normalbetrieb regelmaessig wiederkommen und kein
+-- Ereignis sind: Empfang und Erfolg nur als DEBUG (Funk-Hygiene v821 --
+-- jede INFO-Zeile geht per Funk an den Log-Sammler). MASTERs Fuellstand-
+-- Relais an FUEL kommt alle 10 s. Fehler bleiben WARN.
+local ROUTINE_TARGETS = { FUEL_STATUS = true }
+function M.is_routine(command)
+  return type(command) == "table" and ROUTINE_TARGETS[tostring(command.target)] == true
 end
 
 function M.parse_node_command(message, opts)
@@ -73,7 +77,7 @@ function M.parse_node_command(message, opts)
     return nil, { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
   end
 
-  log_parse("INFO", ("Command received target=%s value=%s from=%s node=%s"):format(
+  log_parse(M.is_routine(command) and "DEBUG" or "INFO", ("Command received target=%s value=%s from=%s node=%s"):format(
     command_label(command), value_label(command), tostring(message.sender_id or message.src or "?"), tostring(node_id or "?")
   ))
 
@@ -87,13 +91,14 @@ function M.reject_unsupported(devices)
   return result
 end
 
--- Optionales drittes `extra`-Argument, damit Aufrufer wie WATER's
--- SET_TARGET dem ACK_APPLIED-Ergebnis zusaetzliche, ehrliche Felder
--- mitgeben koennen (z.B. `persisted = false` nach einem fehlgeschlagenen
+-- Optionales drittes `extra`-Argument, damit Aufrufer dem ACK_APPLIED-
+-- Ergebnis zusaetzliche, ehrliche Felder mitgeben koennen (z.B. `persisted = false` nach einem fehlgeschlagenen
 -- Config-Write) ohne `ok=true` zu verfaelschen.
-function M.finish(devices, ok, extra)
+-- quiet: Erfolg nur als DEBUG (Routine-Kommando, siehe is_routine()).
+function M.finish(devices, ok, extra, quiet)
   stamp_result(devices, ok and "ok" or "failed")
-  log_with_devices(devices, ok and "INFO" or "WARN", ("Command %s"):format(ok and "applied" or "failed"))
+  local level = ok and (quiet and "DEBUG" or "INFO") or "WARN"
+  log_with_devices(devices, level, ("Command %s"):format(ok and "applied" or "failed"))
   local result = { ok = ok and true or false }
   if type(extra) == "table" then
     for k, v in pairs(extra) do result[k] = v end

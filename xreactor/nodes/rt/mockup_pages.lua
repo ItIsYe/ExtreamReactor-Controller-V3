@@ -44,16 +44,47 @@ end
 
 local function capacity_key(model)
   if model.capacity_ready then return "OK" end
-  if num(model.capacity_stable_samples, 0) > 0 then return "LIMITED" end
+  -- Fortschritt heisst: es stehen schon Turbinen im Zielband. Hier stand
+  -- frueher capacity_stable_samples -- ein Feld aus v1s Lernverfahren, das
+  -- seit dem rt2-Regler niemand mehr fuellt. Die Farbe war damit immer rot,
+  -- egal wie weit das Einlernen war.
+  if num(model.capacity_stable_turbines, 0) > 0 then return "LIMITED" end
   return "WARNING"
 end
 
 local function rt_status(model)
-  if not model.capacity_ready then return "KAPAZITAET WIRD GELERNT", "LIMITED" end
+  -- assignment_state (vom Master zugewiesen) muss VOR capacity_ready geprueft
+  -- werden: ein Knoten, den der Master bewusst geparkt/heruntergefahren hat
+  -- (shutdown/shed/standby, siehe master/rt_sync.lua -- 0-Kapazitaet-Knoten
+  -- sortieren dort immer ans Ende und bekommen genau diese assignment_states),
+  -- zeigte sonst faelschlich "KAPAZITAET WIRD GELERNT" statt seines tatsaechlichen
+  -- Zustands an, obwohl der Reaktor schlicht abgeschaltet ist (gemeldet
+  -- 2026-09-17: "die nod ist in kapazitaet lerne aber raktor ist aus").
   local assignment = tostring(model.assignment_state or "")
   if assignment == "shutdown" then return "SYSTEM FAHRT HERUNTER", "muted" end
   if assignment == "shed" or assignment == "standby" then return "WARTET AUF LASTZUWEISUNG", "muted" end
   if assignment == "startup" then return "SYSTEM FAHRT HOCH", "LIMITED" end
+  -- Was MASTER als "RT meldet ein Problem" anzeigt, steht hier zuerst --
+  -- der Betreiber schaut genau dafuer auf diesen Schirm (rt2_problems.lua).
+  local problems = type(model.problems) == "table" and model.problems or {}
+  if #problems > 0 then
+    local more = #problems > 1 and string.format(" (+%d)", #problems - 1) or ""
+    return "PROBLEM: " .. tostring(problems[1]) .. more, "WARNING"
+  end
+  -- Waehrend des Einlernens faehrt die ganze Flotte auf Zieldrehzahl und
+  -- die MASTER-Vorgabe ist uebersteuert. Das gehoert deutlich dran, sonst
+  -- sieht es wie eine Fehlfunktion aus ("warum laufen alle?").
+  if tostring(model.capacity_source or "") == "LEARNING" then
+    return string.format("EINLERNEN: %d/%d IM ZIELBAND",
+      num(model.capacity_stable_turbines, 0), num(model.capacity_required_turbines, 0)), "LIMITED"
+  end
+  if not model.capacity_ready then return "NOCH KEIN AUSSTOSS GEMESSEN", "LIMITED" end
+  -- Die Notbremse hat gegriffen: der Messpunkt wurde nie erreicht, es gilt
+  -- nur der rohe Hoechstausstoss. MASTER teilt dann gegen eine zu kleine
+  -- Zahl auf -- das gehoert sichtbar.
+  if tostring(model.capacity_source or "") == "OBSERVED" then
+    return "LEISTUNG NUR GESCHAETZT", "LIMITED"
+  end
   local s = snapshot(model)
   local target = num(model.target_power, num(s.target_power, 0))
   local actual = num(s.actual_output, 0)
@@ -71,7 +102,10 @@ local function page_header(mon, model, title, page, icon)
   local w = ({ mon.getSize() })[1]
   if w >= 40 then
     mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), master_key(model))
-    mux.status_dot(mon, math.floor(w * 0.35), 3, model.capacity_ready and "CAP READY" or "LEARNING", capacity_key(model))
+    mux.status_dot(mon, math.floor(w * 0.35), 3,
+      model.capacity_ready and "CAP READY"
+        or (tostring(model.capacity_source or "") == "LEARNING" and "EINLERNEN" or "KEIN AUSSTOSS"),
+      capacity_key(model))
     mux.status_dot(mon, math.floor(w * 0.68), 3, tostring(model.assignment_state or "-"):upper(), model.assignment_state == "active" and "OK" or "LIMITED")
   end
   return mon.getSize()
@@ -187,11 +221,12 @@ function M.render_turbines(mon, model)
   local y = 12
   if w >= 50 then
     mux.table_header(mon, 2, y, w - 3, {
-      { label = "ID", width = 16 }, { label = "RPM", width = 10 }, { label = "FLOW", width = 11 }, { label = "STATUS", width = 8 },
+      { label = "ID", width = 16 }, { label = "RPM", width = 8 }, { label = "FLOW", width = 8 },
+      { label = "SPULE", width = 7 }, { label = "REGLER", width = 14 },
     })
   else
     mux.table_header(mon, 2, y, w - 3, {
-      { label = "ID", width = 10 }, { label = "RPM", width = 7 }, { label = "FLOW", width = 7 }, { label = "ST", width = 5 },
+      { label = "ID", width = 10 }, { label = "RPM", width = 6 }, { label = "FLOW", width = 6 }, { label = "REGLER", width = 12 },
     })
   end
   y = y + 2
@@ -202,11 +237,20 @@ function M.render_turbines(mon, model)
     local ind = t.bound == false and "OFFLINE" or t.inductor == true and "ON" or t.inductor == false and "OFF" or "?"
     local key = ind == "ON" and "OK" or ind == "OFFLINE" and "EMERGENCY" or ind == "OFF" and "EMERGENCY" or "muted"
     local id = tostring(t.id or ("T-" .. string.format("%02d", i)))
+    -- Der Grund der letzten Reglerentscheidung. Ohne ihn zeigt diese
+    -- Tabelle nur, was die Hardware tut -- und das laeuft auch dann
+    -- weiter, wenn niemand mehr stellt (die Liste entsteht aus einem
+    -- eigenen Leseaufruf, siehe monitor_ui.build_turbine_status).
+    local reason = tostring(t.flow_reason or "-")
     local line
     if w >= 50 then
-      line = string.format("%-16s %-10s %-11s %-8s", mux.fit(id, 16), t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-", ind)
+      line = string.format("%-16s %-8s %-8s %-7s %-14s", mux.fit(id, 16),
+        t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-",
+        ind, mux.fit(reason, 14))
     else
-      line = string.format("%-10s %-7s %-7s %-5s", mux.fit(id, 10), t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-", ind)
+      line = string.format("%-10s %-6s %-6s %-12s", mux.fit(id, 10),
+        t.rpm and string.format("%.0f", t.rpm) or "-", t.flow and short(t.flow) or "-",
+        mux.fit(reason, 12))
     end
     mux.data_row(mon, 2, y, w - 3, { label = line, value = "", status = key })
     y = y + 1
@@ -228,10 +272,10 @@ function M.render_reactors(mon, model)
   local w, h = page_header(mon, model, "REAKTOREN", "3/4", "reactor")
   local s = snapshot(model)
   local reactors = s.reactors or {}
-  local count = math.min(2, #reactors)
+  local count = #reactors
 
   local top = {
-    { label = "GESAMT", value = tostring(count) .. "/2", status = count > 0 and "OK" or "WARNING", icon = "reactor" },
+    { label = "GESAMT", value = tostring(count), status = count > 0 and "OK" or "WARNING", icon = "reactor" },
     { label = "AVG TEMP", value = short(s.avg_temp, "C"), status = "OK", icon = "temperature" },
     { label = "DAMPF", value = short(s.steam_amount), status = "LIMITED", icon = "flow" },
     { label = "MASTER", value = tostring(model.master_state or "?"), status = master_key(model), icon = "master" },
@@ -306,8 +350,19 @@ function M.render_diagnostics(mon, model)
   mux.data_row(mon, 2, 15, w - 3, { label = "TARGET STEAM", value = short(model.target_steam), status = "text", icon = "flow" })
 
   section_arrow(mon, 2, 17, w - 3, "SYSTEM", capacity_key(model), "storage")
-  mux.data_row(mon, 2, 19, w - 3, { label = "CAPACITY", value = (model.capacity_ready and "READY " or "LEARNING ") .. short(model.capacity_max, "RF/t"), status = capacity_key(model), icon = "storage" })
-  mux.data_row(mon, 2, 20, w - 3, { label = "RETRIES", value = tostring(retries), status = retries > 0 and "LIMITED" or "OK", icon = "network" })
+  mux.data_row(mon, 2, 19, w - 3, { label = "CAPACITY", value = (model.capacity_ready and "READY "
+    or (tostring(model.capacity_source or "") == "LEARNING" and "EINLERNEN " or "KEIN AUSSTOSS "))
+    .. short(model.capacity_max, "RF/t"), status = capacity_key(model), icon = "storage" })
+  -- Hier stand RETRIES -- doppelt, die Karte RETRY/TO oben zeigt denselben
+  -- Wert. Jetzt: verlorene und verspaetete Timer-Ereignisse der Lauf-
+  -- Schleifen (nodes/support/runtime.lua). Ein verlorener Timer hat die Node
+  -- frueher bis zum Neustart stillgelegt; heute laeuft sie weiter, und hier
+  -- steht, dass es passiert ist.
+  local loop = model.loop_stats or {}
+  local timers_lost, timers_late = num(loop.lost, 0), num(loop.late, 0)
+  mux.data_row(mon, 2, 20, w - 3, { label = "TIMER LOST / LATE",
+    value = tostring(timers_lost) .. " / " .. tostring(timers_late),
+    status = timers_lost > 0 and "WARNING" or (timers_late > 0 and "LIMITED" or "OK"), icon = "network" })
   mux.data_row(mon, 2, 21, w - 3, { label = "QUEUE DROP / DEDUP", value = tostring(queue_dropped) .. " / " .. tostring(dedupe_hits), status = queue_dropped > 0 and "WARNING" or "OK", icon = "network" })
   mux.data_row(mon, 2, 22, w - 3, { label = "LAST COMMAND", value = tostring(model.last_command or "none") .. " / " .. tostring(model.last_command_ts or "-"), status = "text", icon = "config" })
 
@@ -327,18 +382,28 @@ function M.render_diagnostics(mon, model)
     }
   end
 
+  -- Zuerst die eigenen Probleme (dieselben Zeilen, die MASTER als "RT
+  -- meldet ein Problem" zeigt, rt2_problems.lua), dann MASTERs Meldungen
+  -- zu dieser Node.
   local alerts = model.local_alerts or {}
+  local problems = type(model.problems) == "table" and model.problems or {}
+  local rows = {}
+  for _, line in ipairs(problems) do
+    rows[#rows + 1] = { label = "PROBLEM", value = tostring(line), status = "WARNING", icon = "warning" }
+  end
+  for _, a in ipairs(alerts) do
+    local sev = tostring(a.severity or "INFO")
+    local key = sev == "CRITICAL" and "EMERGENCY" or (sev == "WARN" or sev == "WARNING") and "WARNING" or "LIMITED"
+    rows[#rows + 1] = { label = tostring(a.code or sev), value = tostring(a.title or a.message or "alert"), status = key, icon = "warning" }
+  end
   if h >= 26 then
-    section_arrow(mon, 2, 23, w - 3, "AKTIVE ALARME", #alerts > 0 and "WARNING" or "OK", "warning")
-    if #alerts == 0 then
-      mux.data_row(mon, 2, 25, w - 3, { label = "Keine aktiven Alarme", value = "", status = "OK", icon = "ok" })
+    section_arrow(mon, 2, 23, w - 3, "PROBLEME / ALARME", #rows > 0 and "WARNING" or "OK", "warning")
+    if #rows == 0 then
+      mux.data_row(mon, 2, 25, w - 3, { label = "Keine Probleme, keine Alarme", value = "", status = "OK", icon = "ok" })
     else
       local y = 25
-      for i = 1, math.min(#alerts, math.max(0, h - y - 1)) do
-        local a = alerts[i]
-        local sev = tostring(a.severity or "INFO")
-        local key = sev == "CRITICAL" and "EMERGENCY" or (sev == "WARN" or sev == "WARNING") and "WARNING" or "LIMITED"
-        mux.data_row(mon, 2, y, w - 3, { label = tostring(a.code or sev), value = tostring(a.title or a.message or "alert"), status = key, icon = "warning" })
+      for i = 1, math.min(#rows, math.max(0, h - y - 1)) do
+        mux.data_row(mon, 2, y, w - 3, rows[i])
         y = y + 1
       end
     end

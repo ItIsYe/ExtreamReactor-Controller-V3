@@ -1,14 +1,11 @@
 local non_rt_config = require("core.non_rt_config")
+local logistical_sorter = require("adapters.logistical_sorter")
+local feed_router = require("nodes.reprocessor.feed_router")
 
 local M = {}
 
 function M.normalize(config_values, defaults, add_warning, utils)
   non_rt_config.apply_common(config_values, defaults, add_warning, utils)
-
-  if type(config_values.buffers) ~= "table" then
-    config_values.buffers = utils.deep_copy(defaults.buffers)
-    add_warning("buffers missing/invalid; defaulting to configured list")
-  end
 
   -- Normalize feed config block (random-interval Cyanite supply to reprocessors).
   if config_values.feed == nil then
@@ -25,32 +22,78 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(fd.me_bridge) ~= "string" then
     fd.me_bridge = d.me_bridge or "me_bridge"
   end
+  if type(fd.sorter) ~= "string" or fd.sorter == "" then fd.sorter = nil end
   if type(fd.waste_item) ~= "string" then
     fd.waste_item = d.waste_item or "bigreactors:cyanite_ingot"
   end
-  if type(fd.feed_amount) ~= "number" or fd.feed_amount <= 0 then
-    fd.feed_amount = d.feed_amount or 2
+  -- Der Reprocessor braucht immer 2 Cyanit auf einmal: feed_amount ist eine
+  -- ganze, gerade Zahl, mindestens 2 (feed_router.normalize_feed_amount).
+  -- Ein fehlender/kaputter Wert faellt wie bisher auf die Vorgabe zurueck.
+  local raw_amount = fd.feed_amount
+  if type(raw_amount) ~= "number" or raw_amount <= 0 then
+    raw_amount = d.feed_amount or feed_router.MIN_FEED_AMOUNT
   end
+  local amount = feed_router.normalize_feed_amount(raw_amount)
+  if type(fd.feed_amount) == "number" and fd.feed_amount > 0 and amount ~= fd.feed_amount then
+    add_warning(string.format(
+      "feed.feed_amount %s -> %d (Reprocessor braucht immer 2 Cyanit: ganze, gerade Zahl, mindestens 2)",
+      tostring(fd.feed_amount), amount))
+  end
+  fd.feed_amount = amount
+  -- Stufen nach ME-Bestand (v828): fehlt der Block in einer alten Config,
+  -- gelten die Vorgaben aus feed_router.BOOST_DEFAULTS.
+  fd.boost = feed_router.normalize_boost(fd.boost, add_warning)
   if type(fd.interval_min_s) ~= "number" or fd.interval_min_s <= 0 then
     fd.interval_min_s = d.interval_min_s or 20
   end
   if type(fd.interval_max_s) ~= "number" or fd.interval_max_s < fd.interval_min_s then
     fd.interval_max_s = math.max(d.interval_max_s or 60, fd.interval_min_s)
   end
-  if type(fd.valve_open_ms) ~= "number" or fd.valve_open_ms <= 0 then
-    fd.valve_open_ms = d.valve_open_ms or 2000
-  end
   if type(fd.discovery_interval) ~= "number" or fd.discovery_interval <= 0 then
     fd.discovery_interval = d.discovery_interval or 60
   end
   if type(fd.targets) ~= "table" then fd.targets = {} end
-  if type(fd.redstone_tree) ~= "table" then fd.redstone_tree = {} end
+
+  -- active_colors: welche Sorter-Farben per Router-UI (FARBEN-Seite)
+  -- ueberhaupt zur Auswahl stehen -- reine UI-Praeferenz, feed_router.lua
+  -- liest sie nie (Targets tragen ihre zugewiesene Farbe direkt). Nur
+  -- grob absichern, dass ein korrupter Wert die Seite nicht crasht.
+  if type(fd.active_colors) ~= "table" then fd.active_colors = nil end
+
+  -- sorter_chest (die SORTER-KISTE) ist das tatsaechliche ME-Bridge-
+  -- Exportziel (siehe feed_router.lua) -- genau wie FUEL's logistics.
+  -- export_chest (siehe nodes/fuel/config_normalizer.lua) muss ein
+  -- fehlendes Exportziel laut und deutlich gewarnt werden, statt sich
+  -- hinter einem Platzhalter-Default zu verstecken.
+  if type(fd.sorter_chest) ~= "string" or fd.sorter_chest == "" then fd.sorter_chest = nil end
+  if #fd.targets > 0 and fd.sorter_chest == nil then
+    add_warning("feed.sorter_chest (SORTER-KISTE) fehlt; Feeding bleibt wirkungslos bis im Router-UI eine Sorter-Kiste gewaehlt wurde")
+  end
+  if #fd.targets > 0 and fd.sorter == nil then
+    add_warning("feed.sorter fehlt; Feeding bleibt wirkungslos bis im Router-UI ein Logistical Sorter gewaehlt wurde")
+  end
+
   for i, t in ipairs(fd.targets) do
-    if not t.inlet then
-      add_warning(string.format("feed.targets[%d] missing inlet", i))
-    end
     if not t.label then
       add_warning(string.format("feed.targets[%d] missing label", i))
+    end
+    if not logistical_sorter.is_valid_color(t.color) then
+      -- A color saved under a since-removed legacy name (e.g. a config
+      -- edition update tightened adapters/logistical_sorter.lua's COLORS
+      -- to the confirmed-correct list) must be upgraded to its current
+      -- replacement instead of the route silently breaking on the next
+      -- boot -- an already-configured route must survive an update.
+      local migrated = logistical_sorter.migrate_legacy_color(t.color)
+      if migrated then
+        add_warning(string.format("feed.targets[%d] (%s) color %s migrated to %s",
+          i, tostring(t.label or "?"), tostring(t.color), migrated))
+        t.color = migrated
+      else
+        add_warning(string.format("feed.targets[%d] (%s) invalid/missing color; feeding for this target will be skipped until fixed",
+          i, tostring(t.label or "?")))
+      end
+    else
+      t.color = t.color:upper()
     end
   end
 end

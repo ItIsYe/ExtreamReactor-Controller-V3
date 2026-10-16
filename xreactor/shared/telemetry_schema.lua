@@ -1,50 +1,10 @@
+-- Nur .version wird tatsaechlich gelesen (services/telemetry_service.lua
+-- stempelt es als payload.meta.schema_version). Ein frueheres .base/.roles
+-- Feldverzeichnis wurde nirgends konsumiert und war laengst veraltet (z.B.
+-- fehlte WATER.clusters komplett, FUEL listete nur 1 von ~8 echten
+-- Top-Level-Feldern) -- entfernt statt gepflegt, da niemand es liest.
 local telemetry_schema = {
   version = 1,
-  base = {
-    node_id = "string",
-    role = "string",
-    proto_ver = "table",
-    build = "table",
-    health = "table",
-    bindings = "table",
-    devices = "table"
-  },
-  roles = {
-    ENERGY = {
-      total = "table",
-      matrices = "table",
-      storages = "table"
-    },
-    RT = {
-      turbines = "table",
-      reactors = "table",
-      control_mode = "string",
-      ramp_state = "table"
-    },
-    FUEL = {
-      sources = "table"
-    },
-    WATER = {
-      total_water = "number",
-      buffers = "table"
-    },
-    REPROCESSOR = {
-      buffers = "table",
-      standby = "boolean"
-    },
-    LOG = {
-      received = "number",
-      written = "number",
-      dropped = "number",
-      log_root = "string"
-    },
-    LOG_COLLECTOR = {
-      received = "number",
-      written = "number",
-      dropped = "number",
-      log_root = "string"
-    }
-  }
 }
 
 return telemetry_schema

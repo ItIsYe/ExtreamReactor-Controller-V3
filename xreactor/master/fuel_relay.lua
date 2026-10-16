@@ -4,6 +4,14 @@ local reactor_identity = require("core.reactor_identity")
 
 local M = {}
 
+-- Alle 10 s, ohne Quittung (Funk-Hygiene v821, Betreiberentscheidung).
+-- FUEL hoert die RT-Statusmeldungen direkt mit (nodes/fuel/
+-- fuel_status_network.lua's make_overhear_service) -- das Relais ist der
+-- Rueckweg fuer den Fall, dass das nicht klappt. Bis v820 lief es alle 4 s
+-- als quittiertes Kommando: je Lauf zwei Quittungen zurueck, eine davon mit
+-- der kompletten Tabelle als Echo, alles als Rundruf an jeden Rechner der
+-- Anlage. Eine neu auftauchende FUEL-Node bekommt den Stand weiterhin
+-- sofort (nodes_changed unten), nicht erst nach dem Intervall.
 local RELAY_INTERVAL_MS = 10000
 local MAX_SAMPLE_AGE_MS = 60000
 local MAX_REACTORS = 256
@@ -73,17 +81,33 @@ local function collect_reactor_fuel(runtime)
   return out
 end
 
+-- Stabiler Fingerabdruck der aktuell bekannten FUEL-Nodes. Taucht eine neu
+-- auf (Kaltstart, Reboot), darf sie nicht bis zu RELAY_INTERVAL_MS auf
+-- ihren ersten Fuellstand warten -- sie hat nach dem Boot gar keine Daten,
+-- nicht nur leicht veraltete.
+local function fuel_node_key(ids)
+  table.sort(ids)
+  return table.concat(ids, ",")
+end
+
 function M.tick(runtime)
   local constants = runtime.libs.constants
   local now = os.epoch("utc")
   runtime.state._fuel_relay_last = runtime.state._fuel_relay_last or 0
-  if now - runtime.state._fuel_relay_last < RELAY_INTERVAL_MS then return end
 
   local fuel_nodes = {}
   for id, node in pairs(runtime.state.nodes or {}) do
     if node.role == constants.roles.FUEL_NODE then fuel_nodes[#fuel_nodes + 1] = id end
   end
-  if #fuel_nodes == 0 then return end
+  if #fuel_nodes == 0 then
+    runtime.state._fuel_relay_nodes = nil
+    return
+  end
+
+  local node_key = fuel_node_key(fuel_nodes)
+  local nodes_changed = node_key ~= runtime.state._fuel_relay_nodes
+  if not nodes_changed and now - runtime.state._fuel_relay_last < RELAY_INTERVAL_MS then return end
+  runtime.state._fuel_relay_nodes = node_key
 
   local snapshot = collect_reactor_fuel(runtime)
   runtime.state._fuel_relay_last = now
@@ -91,7 +115,7 @@ function M.tick(runtime)
     runtime.refs.comms:send_command(id, {
       target = constants.command_targets.FUEL_STATUS,
       value = snapshot,
-    })
+    }, { no_ack = true })
   end
 end
 

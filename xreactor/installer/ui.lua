@@ -20,7 +20,6 @@ local ROLES = {
   { key = "master",       label = "MASTER"       },
   { key = "rt",           label = "RT"           },
   { key = "energy",       label = "ENERGY"       },
-  { key = "water",        label = "WATER"        },
   { key = "fuel",         label = "FUEL"         },
   -- Schlanker Node-Typ (separater Computer, per Wireless Modem
   -- angesteuert, schaltet lokal redstone.setOutput()); organisatorisch

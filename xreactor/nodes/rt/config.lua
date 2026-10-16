@@ -1,15 +1,39 @@
 -- CURRENT_VERSION gibt config_normalizer.lua's migrate_schema_version()
--- einen Ansatzpunkt: eine persistierte config/rt.lua mit dem historischen
--- reactor_adjust_interval-Default wird beim naechsten Boot gezielt auf
--- den neuen Default migriert (nicht blind ueberschrieben, falls der
--- Nutzer bewusst einen anderen Wert gesetzt hat), und die Migration wird
--- als abgeschlossen persistiert, damit sie nur einmal laeuft.
-local CURRENT_VERSION = 5
+-- einen Ansatzpunkt: eine persistierte config/rt.lua mit einem historischen
+-- Default (reactor_adjust_interval, comms.peer_timeout_s) wird beim
+-- naechsten Boot gezielt auf den neuen Default migriert (nicht blind
+-- ueberschrieben, falls der Nutzer bewusst einen anderen Wert gesetzt
+-- hat), und die Migration wird als abgeschlossen persistiert, damit sie
+-- nur einmal laeuft.
+local CURRENT_VERSION = 9
+
+-- Auto-generated per computer via os.getComputerID(), same pattern as
+-- installer/valve_naming.lua's "VALVE-<id>" and utils.normalize_node_id()'s
+-- own empty-value fallback -- guarantees a unique node_id out of the box
+-- across multiple RT computers, without requiring the operator to manually
+-- edit /xreactor_config/rt.lua (two RTs both defaulting to a fixed "RT-1"
+-- made the master unable to tell them apart). Only applies to a FRESH
+-- install: utils.load_config() only falls back to this default when
+-- /xreactor_config/rt.lua doesn't exist yet -- an already-configured RT's
+-- persisted node_id (even a manually-set "RT-1") is never touched.
+local DEFAULT_NODE_ID = "RT-" .. tostring(os and os.getComputerID and os.getComputerID() or 1)
 
 return {
   version = CURRENT_VERSION,
   role = "RT-NODE",
-  node_id = "RT-1",
+  node_id = DEFAULT_NODE_ID,
+  -- Es gibt keinen "engine"-Schalter mehr. Bis v768 waehlte dieses Feld
+  -- zwischen v1 (state_handlers/module_lifecycle/turbine_control/
+  -- reactor_control) und v2 (rt2_*.lua) -- und "v1" war der DEFAULT, jede
+  -- frisch angelegte rt.lua lief also im alten Regler. v1 ist entfernt;
+  -- rt2_*.lua ist der Regler der RT-Node. Ein noch in einer alten rt.lua
+  -- stehendes engine-Feld wird beim naechsten Schreiben entfernt (siehe
+  -- config_normalizer.lua) und hat vorher keine Wirkung.
+  --
+  -- Mehrere Reaktoren je Knoten sind unterstuetzt: sie speisen dasselbe
+  -- Dampfnetz und regeln unabhaengig aus IHREM eigenen Tank (siehe
+  -- RT_ENGINE_V2.md, Abschnitt "Mehrere Reaktoren"). Die Turbinenzahl ist
+  -- ebenfalls nicht begrenzt (nachgemessen bis 100).
   debug_logging = true,
   reset_log_on_start = true,
   log_dir = "/disk/xreactor_logs",
@@ -20,6 +44,7 @@ return {
 
   reactors = {},
   turbines = {},
+
 
   heartbeat_interval = 2,
   status_interval = 5,
@@ -38,7 +63,18 @@ return {
     backoff_cap_s = 6.0,
     dedupe_ttl_s = 30,
     dedupe_limit = 200,
-    peer_timeout_s = 12.0,
+    -- 20s statt der frueheren 12s: der MASTER ist die einzige Rolle, die
+    -- ihren Heartbeat nur alle 5s sendet (alle Nodes: 2s). Bei 12s durfte
+    -- der MASTER also nur ~2 Heartbeats verlieren, eine Node dagegen 6 --
+    -- er war damit der mit Abstand kippanfaelligste Peer, obwohl er lief.
+    -- Ein einziger blockierender Discovery-Scan im Slow-Loop (alle 10s,
+    -- synchrone Peripherie-Calls ueber alle Turbinen, haelt die ganze
+    -- Lua-VM an) reichte, um ihn auf DOWN zu setzen. 20s geben ihm
+    -- dieselbe Toleranz von ~4 verpassten Heartbeats.
+    -- rt2_master_link.TIMEOUT_MS wird bewusst mitgezogen, damit
+    -- Zustandsmaschine (MASTER/AUTONOM) und Health-Check/Anzeige
+    -- weiterhin dieselbe Schwelle benutzen.
+    peer_timeout_s = 20.0,
     queue_limit = 200,
     drop_simulation = 0
   },
@@ -46,14 +82,85 @@ return {
   safety = {
     max_temperature = 2000,
     temperature_hysteresis = 50,
-    temperature_trip_samples = 3,
+    -- Entprellung der Sicherheitsgrenzen, GEZAEHLT IN REGELTAKTEN.
+    --
+    -- Der Regeltakt liegt bei 10 Hz (nodes/rt/main.lua's RECEIVE_TIMEOUT).
+    -- 3 Takte sind damit 300 ms -- diese Werte stammen aus der Zeit des
+    -- langsamen v1-Reglers, wo dieselbe 3 noch mehrere Sekunden bedeutete.
+    -- Mit dem 10-Hz-Takt entprellen sie praktisch nichts mehr: drei
+    -- aufeinanderfolgende Aussetzer der Messung reichen fuer eine
+    -- Abschaltung.
+    --
+    -- 10 Takte = 1 Sekunde. Das ist weiterhin schnell (eine echte
+    -- Ueberschreitung haelt an und wird in einer Sekunde erkannt), aber es
+    -- ueberlebt einen einzelnen zuckenden Messwert -- und gerade der
+    -- Kuehlmittelanteil zuckt, wenn der Tank einen Augenblick leerlaeuft.
+    --
+    -- Die Grenzwerte selbst bleiben unveraendert; entprellt wird nur, wie
+    -- lange eine Ueberschreitung anhalten muss.
+    temperature_trip_samples = 10,
     max_rpm = 1800,
     min_water = 0.2,
     coolant_hysteresis = 0.05,
-    coolant_trip_samples = 3,
-    coolant_invalid_grace_samples = 3
+    coolant_trip_samples = 10,
+    coolant_invalid_grace_samples = 10,
+    -- Wie viele Regeltakte eine Sicherheitsmessung (Temperatur oder
+    -- Kuehlmittel) ausfallen darf, bevor der Messausfall SELBST eine
+    -- Sicherheitslage ist. 18000 Takte sind bei 10 Hz 30 MINUTEN
+    -- (Betreibervorgabe -- die Abwaegung steht in
+    -- nodes/rt/rt2_safety.lua).
+    --
+    -- Der Ausfall ist ab dem ERSTEN Takt sichtbar (temperature_available/
+    -- coolant_available im Sicherheitsergebnis). Die Schonfrist bestimmt
+    -- nur, ab wann daraus eine Abschaltung wird.
+    --
+    -- Gezaehlt wird nur ein Kanal, der auf diesem Reaktor schon einmal
+    -- gelesen wurde: ein passiv gekuehlter Reaktor und eine noch nicht
+    -- gebundene Peripherie loesen damit nie aus.
+    measurement_grace_samples = 18000,
+    -- Eskalation: wenn ein Reaktor innerhalb von coolant_trip_escalation_window_s
+    -- coolant_trip_escalation_count mal in SAFE getrippt ist (wiederholtes
+    -- Auslösen statt einem einzelnen Ereignis), wird der automatische
+    -- SAFE-Exit für diesen Reaktor gesperrt. Die Sperre löst sich von selbst
+    -- wieder, sobald der reale (nicht gefilterte) Kühlmittel-Messwert für
+    -- mindestens coolant_recovery_confirm_ms ununterbrochen über der
+    -- Recovery-Schwelle liegt -- kein manueller Eingriff nötig.
+    coolant_trip_escalation_count = 4,
+    coolant_trip_escalation_window_s = 600,
+    coolant_recovery_confirm_ms = 4000
   },
 
+  -- ── NICHT MEHR AUSGEWERTETE ABSCHNITTE ────────────────────────────────
+  --
+  -- Was hier unter `autonom` und `rails` steht, liest der rt2-Regler NICHT.
+  -- Es ist Erbe des v1-Reglers, der mit v768 entfernt wurde. Die Abschnitte
+  -- bleiben stehen, weil bestehende Installationen sie auf Platte haben und
+  -- core/utils.lua's migrate_config() fehlende Schluessel sonst bei jedem
+  -- Boot neu ergaenzen und persistieren wuerde.
+  --
+  -- WARUM DAS HIER STEHT: diese Werte sind ueber den Config-Editor am MASTER
+  -- bearbeitbar. Wer dort an `rails.coil.engage_rpm`, `rails.turbine_flow.*`
+  -- oder `rails.reactor_rods.min` dreht, aendert am Verhalten des Reglers
+  -- NICHTS -- und das sieht von aussen wie ein kaputter Editor aus. Die
+  -- wirksamen Werte liegen im Quelltext, je mit ihrer Begruendung:
+  --
+  --   Zieldrehzahl, Zielband, Spulenschwellen, Durchflussgrenzen,
+  --   Schrittweiten, Vorhalt            -> nodes/rt/rt2_turbine.lua
+  --   Stabgrenzen, Tanksollwert, Totband,
+  --   Stellrate der Staebe              -> nodes/rt/rt2_reactor.lua
+  --   Einlernen (Zielband, Mindestanteil,
+  --   Reserve, Stabilitaetsfenster)     -> nodes/rt/rt2_orchestrator.lua
+  --
+  -- Eine Ausnahme: `rails.reactor_rods.min/.max` wertet
+  -- nodes/rt/reactor_control.lua weiterhin aus -- aber ausschliesslich fuer
+  -- die EINMALIGE Anfangsstellung beim Start und fuer den Update-Quiesce,
+  -- nicht fuer die laufende Regelung. Dass dort 80 steht, waehrend der
+  -- Regler mit rt2_reactor.ROD_MIN = 70 arbeitet, ist deshalb kein
+  -- Widerspruch in der Regelung, aber eine Stolperstelle beim Lesen.
+  --
+  -- Der Abschnitt `safety` dagegen IST wirksam (nodes/rt/rt2_safety.lua ueber
+  -- core/safety.lua), ebenso `comms`, `channels`, `heartbeat_interval`,
+  -- `status_interval`, `scan_interval`, `monitor_*` und `reactors`/`turbines`.
   autonom = {
     -- control_rod_level: nicht mehr aktiv genutzt (INITIAL_ROD_LEVEL in CONFIG übernimmt).
     -- Bleibt als Dokumentation erhalten, wird aber nicht ausgewertet.
@@ -66,8 +173,8 @@ return {
     -- regulator_min_rods / regulator_max_rods: ENTFERNT.
     -- Kanonische Rod-Grenzen stehen jetzt ausschließlich in rails.reactor_rods.min/.max.
     -- 0.10s entspricht der verbindlichen 10-Hz-Vorgabe fuer die
-    -- Fuel-Rod-Regelung; Stabilitaet kommt ueber EMA/Deadband/Hysterese/
-    -- Ramp-Limits in core/control_rails.lua, nicht ueber ein langsames
+    -- Fuel-Rod-Regelung; Stabilitaet kommt ueber Deadband/Proportionalband/
+    -- Schrittbegrenzung in rt2_reactor.lua, nicht ueber ein langsames
     -- aeusseres Intervall. Gilt nur fuer Erstinstallationen und
     -- fehlende/ungueltige Werte -- bestehende persistierte Configs
     -- behalten ihren Wert bis manuell angepasst.

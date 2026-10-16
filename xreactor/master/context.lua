@@ -12,7 +12,8 @@ local function clamp(v, fb, mn, mx)
 end
 
 function M.normalize_config(config)
-  config.heartbeat_interval = clamp(config.heartbeat_interval, 5, 1, 60)
+  -- Fallback identisch zu master/config.lua's DEFAULT_HEARTBEAT_INTERVAL.
+  config.heartbeat_interval = clamp(config.heartbeat_interval, 2, 1, 60)
   config.status_interval = clamp(config.status_interval or config.heartbeat_interval, config.heartbeat_interval, 1, 60)
   config.rt_default_mode = config.rt_default_mode or "MASTER"
   config.rt_setpoints = config.rt_setpoints or {}
@@ -38,6 +39,13 @@ function M.normalize_config(config)
   config.energy_crit_pct       = cpct(config.energy_crit_pct, 15)
   if config.energy_crit_pct > config.energy_warn_pct then config.energy_crit_pct = config.energy_warn_pct end
   config.matrix_warn_full_pct  = cpct(config.matrix_warn_full_pct, 90)
+  config.alarm_energy_low_pct  = cpct(config.alarm_energy_low_pct, 10)
+  config.alarm_energy_low_clear_pct = cpct(config.alarm_energy_low_clear_pct, 15)
+  if config.alarm_energy_low_clear_pct < config.alarm_energy_low_pct then
+    config.alarm_energy_low_clear_pct = config.alarm_energy_low_pct
+  end
+  config.alarm_auto_ack_min    = clamp(config.alarm_auto_ack_min or 30, 30, 1, 1440)
+  config.alarm_reack_window_min = clamp(config.alarm_reack_window_min or 30, 30, 0, 1440)
   config.rpm_warn_low          = clamp(config.rpm_warn_low  or 800,  800,  0, 5000)
   config.rpm_crit_high         = clamp(config.rpm_crit_high or 1800, 1800, 0, 10000)
   if config.rpm_crit_high < config.rpm_warn_low then config.rpm_crit_high = config.rpm_warn_low end
@@ -59,7 +67,7 @@ function M.normalize_config(config)
   table.sort(config.alert_mute_durations)
   config.alert_log_muted_events = config.alert_log_muted_events == nil and true or config.alert_log_muted_events
   config.alert_state_path = type(config.alert_state_path) == "string"
-    and config.alert_state_path or "/xreactor/config/alerts_state.lua"
+    and config.alert_state_path or "/xreactor_config/alerts_state.lua"
   return config
 end
 
@@ -84,7 +92,7 @@ function M.new_runtime(opts)
       trends = (opts and opts.trends) or nil,
     },
     tuning = {
-      layout_config_path = (opts and opts.layout_config_path) or "/xreactor/config/master_ui_layout.json",
+      layout_config_path = (opts and opts.layout_config_path) or "/xreactor_config/master_ui_layout.json",
       node_offline_purge_after_ms = (opts and opts.node_offline_purge_after_ms) or 120000,
       rt_sync_batch_window_ms = (opts and opts.rt_sync_batch_window_ms) or 250,
       rt_shutdown_candidate_stability_ms = (opts and opts.rt_shutdown_candidate_stability_ms) or 1500,

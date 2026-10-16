@@ -63,9 +63,21 @@ function M.run(ctx)
     end
   end
 
+  -- Beide Timer ueber make_timer_guard: bis v813 wurde jeder nur neu
+  -- gestellt, wenn genau sein Ereignis kam. CC:Tweaked verwirft Ereignisse,
+  -- sobald 256 in der Warteschlange stehen -- Timer eingeschlossen. Ging der
+  -- Dienste-Timer verloren, standen Telemetrie, Discovery und Schirm (und die
+  -- Quiesce-Pruefung) bis zum Neustart; ging der Heartbeat-Timer verloren,
+  -- kam der Heartbeat nur noch aus Funknachrichten und dem Matrix-Thread.
+  -- Jetzt gilt ein Timer, der Intervall + Schonzeit ausbleibt, beim
+  -- naechsten Ereignis als abgelaufen. WANN ein Heartbeat gesendet wird,
+  -- entscheidet weiter allein ctx.send_heartbeat_if_due() -- unveraendert.
+  local support_runtime = require("nodes.support.runtime")
   local tick_interval_s = ctx.tick_interval_s or 0.5
-  local hb_timer = os.startTimer(ctx.heartbeat_interval_ms() / 1000)
-  local svc_timer = os.startTimer(tick_interval_s)
+  local hb_guard = support_runtime.make_timer_guard("energy_heartbeat", "ENERGY-Heartbeat")
+  local svc_guard = support_runtime.make_timer_guard("energy_services", "ENERGY-Dienste")
+  hb_guard.start(ctx.heartbeat_interval_ms() / 1000)
+  svc_guard.start(tick_interval_s)
 
   -- ENERGY hat keine physischen Aktoren zu quiescen -- der Handler
   -- bestaetigt sofort einen sicheren Zustand und verlaesst kontrolliert
@@ -95,10 +107,12 @@ function M.run(ctx)
       if ctx.services then ctx.services:tick(nil, event) end
     elseif ev == "key" then
       ctx.services:tick(nil, event)
-    elseif ev == "timer" and event[2] == hb_timer then
+    end
+    if hb_guard.due(event) then
       maybe_heartbeat()
-      hb_timer = os.startTimer(ctx.heartbeat_interval_ms() / 1000)
-    elseif ev == "timer" and event[2] == svc_timer then
+      hb_guard.start(ctx.heartbeat_interval_ms() / 1000)
+    end
+    if svc_guard.due(event) then
       tick_services()
       if quiesce_handshake and update_handshake.is_quiesce_requested(quiesce_handshake) then
         update_handshake.mark_safe_outputs_applied(quiesce_handshake)
@@ -106,7 +120,7 @@ function M.run(ctx)
         ctx.log("Quiesce angefordert -- Heartbeat-Thread wird kontrolliert beendet", "WARN")
         return "quiesced"
       end
-      svc_timer = os.startTimer(tick_interval_s)
+      svc_guard.start(tick_interval_s)
     end
   end
 end

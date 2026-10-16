@@ -6,12 +6,67 @@ local function nonempty_string(value)
   return type(value) == "string" and value:match("%S") ~= nil
 end
 
+-- Blutonium ist aus dem FUEL-System heraus (siehe reserve_items in
+-- nodes/fuel/main.lua): ein Reaktor haelt nur eine Brennstoffsorte, und der
+-- Wechsel Uran <-> Blutonium nach ME-Bestand hat den Access Port verstopft.
+-- Bis v824 stand Blutonium in der ausgelieferten Liste, und FUEL schreibt
+-- seine Config samt reserve_items zurueck -- gespeicherte Configs enthalten
+-- es also noch und werden hier bereinigt.
+local function is_blutonium_entry(entry)
+  if type(entry.element) == "string" and entry.element:lower() == "blutonium" then
+    return true
+  end
+  return type(entry.item) == "string" and entry.item:lower():find("blutonium", 1, true) ~= nil
+end
+
 function M.normalize(config_values, defaults, add_warning, utils)
   non_rt_config.apply_common(config_values, defaults, add_warning, utils)
+
+  local ui_scale = tonumber(config_values.ui_scale)
+  if ui_scale ~= 0.5 and ui_scale ~= 1.0 then
+    config_values.ui_scale = tonumber(defaults.ui_scale) or 1.0
+    add_warning("ui_scale invalid; supported values are 1.0 and 0.5; defaulting to "
+      .. tostring(config_values.ui_scale))
+  else
+    config_values.ui_scale = ui_scale
+  end
 
   if config_values.storage_bus ~= nil and type(config_values.storage_bus) ~= "string" then
     config_values.storage_bus = defaults.storage_bus
     add_warning("storage_bus invalid; defaulting to " .. tostring(defaults.storage_bus))
+  end
+  if config_values.reserve_items ~= nil and type(config_values.reserve_items) ~= "table" then
+    config_values.reserve_items = defaults.reserve_items
+    add_warning("reserve_items invalid; defaulting to shipped item list")
+  elseif type(config_values.reserve_items) == "table" then
+    local cleaned = {}
+    local blutonium_dropped = 0
+    for i, entry in ipairs(config_values.reserve_items) do
+      if type(entry) == "table" and nonempty_string(entry.item) then
+        if is_blutonium_entry(entry) then
+          blutonium_dropped = blutonium_dropped + 1
+        else
+          cleaned[#cleaned + 1] = entry
+        end
+      else
+        add_warning(string.format("reserve_items[%d] invalid; ignoring", i))
+      end
+    end
+    if blutonium_dropped > 0 then
+      add_warning(string.format(
+        "reserve_items: %d Blutonium-Eintrag/-Eintraege ignoriert -- FUEL liefert nur noch Uran "
+          .. "(Reaktor haelt nur eine Brennstoffsorte)", blutonium_dropped))
+      -- Hat erst das Herausfiltern die Liste geleert, gilt die ausgelieferte
+      -- Liste -- sonst haette FUEL gar keinen Brennstoff mehr zu liefern.
+      if #cleaned == 0 and type(defaults.reserve_items) == "table" then
+        for _, entry in ipairs(defaults.reserve_items) do
+          if type(entry) == "table" and not is_blutonium_entry(entry) then
+            cleaned[#cleaned + 1] = entry
+          end
+        end
+      end
+    end
+    config_values.reserve_items = cleaned
   end
   if config_values.minimum_reserve == nil and type(config_values.target) == "number" then
     config_values.minimum_reserve = config_values.target
@@ -59,59 +114,125 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.me_bridge) ~= "string" then
     lg.me_bridge = (defaults.logistics and defaults.logistics.me_bridge) or "me_bridge"
   end
+  if lg.export_chest ~= nil and not nonempty_string(lg.export_chest) then
+    lg.export_chest = nil
+    add_warning("logistics.export_chest invalid; ignoring")
+  end
 
   -- A configured reactor is an actuator route. Invalid demand identity or
   -- amounts must disable logistics as a whole instead of falling into the
   -- historical "always supply" path. Keep the original entries in memory so
   -- UI/config editors can still show and repair them; only runtime activation
   -- is fail-closed.
-  local unsafe_reactor_config = false
+  -- Zwei getrennte Begriffe, frueher einer:
+  --
+  --   global_block      -- eine Voraussetzung fuer JEDE Lieferung fehlt
+  --                        (der gemeinsame Uebergabepunkt). Dann ist
+  --                        wirklich nichts moeglich.
+  --   r.disabled_reason -- DIESER Eintrag taugt nicht. Er wird
+  --                        uebersprungen, die uebrigen laufen weiter.
+  --
+  -- Vorher war beides dasselbe Flag: ein einziger unbrauchbarer Eintrag --
+  -- etwa ein Reaktor, dessen Identitaet nie gelernt wurde und der deshalb
+  -- kein reactor_id hat -- legte die Belieferung ALLER Reaktoren still.
+  -- Auf einer Anlage mit vielen konfigurierten und wenigen laufenden
+  -- Reaktoren ist das der Normalfall, nicht der Ausnahmefall, und es war
+  -- an nichts abzulesen.
+  local global_block = false
+
+  -- export_chest ist der EINE geteilte Uebergabepunkt jeder Lieferung
+  -- (siehe logistics_router.lua) -- eine globale Voraussetzung, kein Feld
+  -- je Reaktor, deshalb hier einmal geprueft.
+  if #lg.reactors > 0 and not nonempty_string(lg.export_chest) then
+    add_warning("logistics.export_chest missing; unsafe/unconfigured export target, logistics will be disabled until set")
+    global_block = true
+  end
+
   for i, r in ipairs(lg.reactors) do
     if type(r) ~= "table" then
+      -- Kein Tabellen-Eintrag: hier laesst sich nicht einmal ein Grund
+      -- hinterlegen. logistics_router ueberspringt ihn ohnehin.
       add_warning(string.format("logistics.reactors[%d] invalid entry", i))
-      unsafe_reactor_config = true
     else
+      -- Ersten Grund behalten: der erste Fehler ist der aussagekraeftigste,
+      -- Folgefehler sind oft nur seine Auswirkung.
+      local function disable(reason)
+        add_warning(reason)
+        r.disabled_reason = r.disabled_reason or reason
+      end
+
       local reactor_id = r.reactor_id or r.reactor_port -- legacy alias
       if not nonempty_string(reactor_id) then
-        add_warning(string.format("logistics.reactors[%d] missing reactor_id; unsafe always-supply fallback is disabled", i))
-        unsafe_reactor_config = true
+        disable(string.format(
+          "logistics.reactors[%d] (%s) ohne reactor_id -- Eintrag stillgelegt,"
+            .. " die Identitaet lernt der Knoten aus der RT-Statusmeldung",
+          i, tostring(r.name or r.label or "?")))
       end
-      if not nonempty_string(r.inlet) then
-        add_warning(string.format("logistics.reactors[%d] missing inlet peripheral", i))
-        unsafe_reactor_config = true
-      end
-      if not nonempty_string(r.item) then
-        add_warning(string.format("logistics.reactors[%d] missing item name", i))
-        unsafe_reactor_config = true
+      if r.path ~= nil and type(r.path) ~= "table" then
+        disable(string.format(
+          "logistics.reactors[%d].path ungueltig; erwartet eine Liste von VALVE-Node-Ids -- Eintrag stillgelegt", i))
       end
       if r.request_below ~= nil then
         local threshold = tonumber(r.request_below)
         if threshold == nil or threshold < 0 or threshold > 1 then
-          add_warning(string.format(
-            "logistics.reactors[%d].request_below=%s invalid; expected ratio 0.0-1.0",
+          disable(string.format(
+            "logistics.reactors[%d].request_below=%s ungueltig; erwartet 0.0-1.0 -- Eintrag stillgelegt",
             i, tostring(r.request_below)))
-          unsafe_reactor_config = true
         end
       end
       if r.fill_amount ~= nil then
         local amount = tonumber(r.fill_amount)
         if amount == nil or amount <= 0 then
-          add_warning(string.format("logistics.reactors[%d].fill_amount=%s invalid; must be > 0", i, tostring(r.fill_amount)))
-          unsafe_reactor_config = true
+          disable(string.format(
+            "logistics.reactors[%d].fill_amount=%s ungueltig; muss > 0 sein -- Eintrag stillgelegt",
+            i, tostring(r.fill_amount)))
         end
       end
       if r.min_in_me ~= nil then
         local reserve = tonumber(r.min_in_me)
         if reserve == nil or reserve < 0 then
-          add_warning(string.format("logistics.reactors[%d].min_in_me=%s invalid; must be >= 0", i, tostring(r.min_in_me)))
-          unsafe_reactor_config = true
+          disable(string.format(
+            "logistics.reactors[%d].min_in_me=%s ungueltig; muss >= 0 sein -- Eintrag stillgelegt",
+            i, tostring(r.min_in_me)))
+        end
+      end
+      if r.resupply_cooldown_s ~= nil then
+        local cooldown = tonumber(r.resupply_cooldown_s)
+        if cooldown == nil or cooldown < 0 then
+          disable(string.format(
+            "logistics.reactors[%d].resupply_cooldown_s=%s ungueltig; muss >= 0 sein -- Eintrag stillgelegt",
+            i, tostring(r.resupply_cooldown_s)))
         end
       end
     end
   end
-  if unsafe_reactor_config and lg.enabled then
+
+  local disabled_entries = 0
+  for _, r in ipairs(lg.reactors) do
+    if type(r) == "table" and r.disabled_reason then disabled_entries = disabled_entries + 1 end
+  end
+  if disabled_entries > 0 then
+    add_warning(string.format(
+      "%d von %d Reaktor-Eintraegen stillgelegt -- die uebrigen werden weiter beliefert",
+      disabled_entries, #lg.reactors))
+  end
+
+  -- WARUM die Logistik aus ist, nicht nur DASS sie aus ist.
+  --
+  -- Das ist der Unterschied zwischen "der Betreiber hat abgeschaltet" und
+  -- "wir haben ihm abgeschaltet". Auf dem Schirm stand bisher in BEIDEN
+  -- Faellen "Logistik deaktiviert -- logistics.enabled = false". Wer den
+  -- Schalter dann einschaltet, bekommt ihn beim naechsten Boot wieder
+  -- ausgeschaltet (genau hier), und es sieht aus, als haelte der Schalter
+  -- nicht. Das ist eine der Lagen, in denen "FUEL laedt die eingestellten
+  -- Ruten nicht" gemeldet wurde: die Ruten WAREN geladen, sie waren nur
+  -- wirkungslos, und der Grund stand ausschliesslich im Log.
+  lg.disabled_reason = nil
+  if global_block and lg.enabled then
     lg.enabled = false
-    add_warning("logistics disabled: at least one reactor route is unsafe/invalid; fix config before fuel export can resume")
+    lg.disabled_reason = "EXPORT_CHEST_MISSING"
+    add_warning("logistics disabled: der gemeinsame Uebergabepunkt (logistics.export_chest)"
+      .. " fehlt -- ohne ihn ist ueberhaupt keine Lieferung moeglich")
   elseif lg.enabled == false and #lg.reactors > 0 then
     add_warning(string.format(
       "logistics.enabled=false despite %d configured reactors; no fuel will be exported",

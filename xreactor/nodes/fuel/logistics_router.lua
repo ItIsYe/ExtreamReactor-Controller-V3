@@ -17,13 +17,19 @@
 --      to directly overhearing RT's status broadcasts if Master hasn't
 --      relayed recently.
 --   3. If fuel_level / capacity < request_below → that reactor requests fuel.
---   4. ME Bridge exports exactly the calculated amount to that reactor's
---      dedicated inlet peripheral (transporter or chest).
+--   4. ME Bridge exports exactly the calculated amount into the ONE shared
+--      export chest (config.logistics.export_chest) -- there is no
+--      per-reactor delivery target. A Mekanism logistics network (sorters +
+--      VALVE-Nodes) carries everything downstream from that single chest;
+--      which physical reactor actually receives it is decided purely by
+--      which valves are open at export time (see redstone_router.lua's
+--      begin_transaction(), which blocks every other route before opening
+--      this reactor's path and only then runs the export).
 --   5. No other reactor is affected.
 --
 -- Hardware requirements:
---   - Wired Modem on the FUEL computer, connected to:
---       • Each reactor's dedicated inlet transporter/chest (for delivery)
+--   - Wired Modem on the FUEL computer, connected to the shared export
+--     chest/transporter (config.logistics.export_chest)
 --   - Wireless Modem on the FUEL computer  (for MASTER communication)
 --   - ME Bridge accessible (wired or by name)
 --
@@ -31,18 +37,24 @@
 --
 --   me_bridge = "me_bridge",
 --
+--   -- The ONE physical hand-off point for every reactor: FUEL always
+--   -- exports here, never to a per-reactor target. Which reactor the item
+--   -- actually reaches is entirely a function of the valve path opened for
+--   -- that delivery (see redstone_tree synthesis below).
+--   export_chest = "mekanism:ultimate_logistical_transporter_0",
+--
 --   reactors = {
---     { name              = "Reactor A",
---       -- FUEL has no wired access to the reactor itself (only the ME
+--     { -- FUEL has no wired access to the reactor itself (only the ME
 --       -- system) -- fuel level comes via network (master/fuel_relay.lua,
 --       -- with a fallback on overhearing RT's status broadcasts). reactor_id
---       -- must match the ID the owning RT node reports for this reactor.
---       reactor_id        = "node-52-reactor-0",
---       inlet             = "mekanism:ultimate_logistical_transporter_0",
---       item              = "bigreactors:yellorium_ingot",
+--       -- and label are learned from the owning RT node's own broadcasts
+--       -- (see router_ui.lua's reactor-teach flow), never typed by hand.
+--       reactor_id        = "node-52:REACTOR-1a2b3c4d",  -- global ID, see route_identity.lua
+--       label             = "Reactor A",
+--       path              = { "VALVE-1", "VALVE-3" },  -- see redstone_tree note below
 --       request_below     = 0.25,  -- request when fuel_level < 25% of capacity
---       fill_amount       = 64,    -- how many items to export per request
---       min_in_me         = 32,    -- don't export if ME has fewer than this
+--       fill_amount       = 64,    -- how many ingot-equivalent items to export per request
+--       min_in_me         = 32,    -- don't export if ME has fewer than this (ingot-equivalent)
 --     },
 --   },
 --
@@ -52,19 +64,24 @@
 --       outlet = "mekanism:ultimate_logistical_transporter_1",
 --     },
 --   },
+--
+-- No `item` field: which form (ingot vs block) to deliver is decided
+-- automatically, fresh on every delivery -- see pick_fuel_family()/
+-- pick_fuel_form() below. The fuel families come from config.reserve_items
+-- (shared with nodes/fuel/storage.lua's reserve tally), grouped by their
+-- `element` field. Since v825 that list holds Uranium only: a reactor
+-- keeps one fuel type at a time, so a second family (Blutonium) delivered
+-- while the first is still inside stays stuck in the access port and
+-- blocks it (see reserve_items in nodes/fuel/main.lua).
+--
+-- redstone_tree (the VALVE routing topology redstone_router.lua actually
+-- consumes) is never hand-maintained here: refresh_peripherals() builds it
+-- transparently from each reactor's own `path`, keyed by `reactor_id`, on
+-- every refresh. See build_redstone_tree_from_reactors() below.
 
 local M = {}
 local redstone_router_lib = require("nodes.fuel.redstone_router")
-
-local WASTE_PATTERNS = { "cyanite", "magentite", "rossinite", "waste" }
-
-local function is_waste(name)
-  local lower = tostring(name or ""):lower()
-  for _, p in ipairs(WASTE_PATTERNS) do
-    if lower:find(p, 1, true) then return true end
-  end
-  return false
-end
+local me_bridge_compat = require("core.me_bridge_compat")
 
 local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
@@ -90,6 +107,22 @@ end
 -- Reaktoren selbst, nur aufs ME-System.
 local MAX_FUEL_DATA_AGE_MS = 30000
 
+-- Wie alt ist die juengste Probe -- OHNE Frischepruefung. "Kein Fuellstand"
+-- hat zwei voellig verschiedene Ursachen, und nur das Alter trennt sie:
+-- nie gehoert (der Reaktor ist der Anlage unbekannt) gegen zu alt (er wurde
+-- gehoert, meldet aber nicht mehr). Erstes ist ein Einlern-Problem, zweites
+-- ein RT- oder Funkproblem.
+local function newest_sample_age_ms(fuel_status, reactor_id)
+  if not fuel_status or not reactor_id then return nil end
+  local now, newest = os.epoch("utc"), nil
+  for _, source in ipairs({ fuel_status.master_relay, fuel_status.direct_heard }) do
+    local entry = source and source[reactor_id]
+    if entry and entry.ts and (not newest or entry.ts > newest) then newest = entry.ts end
+  end
+  if not newest then return nil end
+  return math.max(0, now - newest)
+end
+
 local function read_reactor_fuel_from_network(fuel_status, reactor_id)
   if not fuel_status or not reactor_id then return nil, nil end
   local now = os.epoch("utc")
@@ -107,6 +140,104 @@ local function read_reactor_fuel_from_network(fuel_status, reactor_id)
   return best.fuel_amount, best.fuel_capacity
 end
 
+-- ---- automatic fuel family/form selection ----------------------------------
+
+-- Groups config.reserve_items (the same list nodes/fuel/storage.lua sums for
+-- the reserve display) by their `element` field into ingot/block pairs.
+-- Entries without a usable `element`/`item` are skipped -- they still count
+-- toward the plain reserve total in storage.lua, but can't participate in
+-- delivery family selection without an element to group by.
+local function build_fuel_families(reserve_items)
+  local by_element, order = {}, {}
+  for _, entry in ipairs(reserve_items or {}) do
+    if type(entry) == "table" and type(entry.element) == "string" and entry.element ~= ""
+        and type(entry.item) == "string" and entry.item ~= "" then
+      local family = by_element[entry.element]
+      if not family then
+        family = { element = entry.element, ingot = nil, block = nil, block_multiplier = 9 }
+        by_element[entry.element] = family
+        order[#order + 1] = family
+      end
+      local multiplier = tonumber(entry.unit_multiplier) or 1
+      if multiplier > 1 then
+        family.block = entry.item
+        family.block_multiplier = multiplier
+      else
+        family.ingot = entry.item
+      end
+    end
+  end
+  return order
+end
+
+-- Reads the live ME stock (in ingot-equivalent units) for every fuel family,
+-- then picks whichever family currently has the larger stock -- decided
+-- fresh on every delivery, never fixed per reactor. Returns nil if no
+-- family has any stock at all (nothing sensible to deliver).
+local function pick_fuel_family(bridge, families)
+  local best = nil
+  for _, family in ipairs(families) do
+    local ingot_amt = 0
+    if family.ingot then
+      local info = safe_call(bridge.wrapped, "getItem", { name = family.ingot })
+      ingot_amt = me_bridge_compat.item_amount(info)
+    end
+    local block_amt = 0
+    if family.block then
+      local info = safe_call(bridge.wrapped, "getItem", { name = family.block })
+      block_amt = me_bridge_compat.item_amount(info)
+    end
+    local total = ingot_amt + block_amt * family.block_multiplier
+    if total > 0 and (not best or total > best.total) then
+      best = {
+        element = family.element,
+        ingot = family.ingot, ingot_amt = ingot_amt,
+        block = family.block, block_amt = block_amt,
+        block_multiplier = family.block_multiplier,
+        total = total,
+      }
+    end
+  end
+  return best
+end
+
+-- Chooses ingot vs block form for a single delivery of `push` ingot-
+-- equivalent units of the already-picked family: whole blocks first (fewer
+-- item transfers for bulk amounts), otherwise ingots for small/remaining
+-- amounts. Never splits one delivery across both forms -- redstone-routed
+-- deliveries move exactly one item stack through one valve-open window.
+-- ---- redstone_tree synthesis ------------------------------------------------
+
+-- redstone_router.lua (shared with nodes/reprocessor/feed_router.lua) is the
+-- one piece of shared valve-routing machinery and is left untouched -- it
+-- still consumes a flat { {reactor=, label=, path=}, ... } tree. FUEL no
+-- longer hand-maintains that tree as a second config object: it is rebuilt
+-- here, every refresh, directly from each reactor's own `path`. A reactor
+-- without a reactor_id or a non-empty path contributes no route (nothing to
+-- route to yet -- e.g. freshly learned but not wired up).
+local function build_redstone_tree_from_reactors(reactor_entries)
+  local tree = {}
+  for _, r in ipairs(reactor_entries) do
+    if r.reactor_id and type(r.path) == "table" and #r.path > 0 then
+      tree[#tree + 1] = { reactor = r.reactor_id, label = r.label, path = r.path }
+    end
+  end
+  return tree
+end
+
+local function pick_fuel_form(family, push)
+  local whole_blocks = family.block and math.floor(push / family.block_multiplier) or 0
+  if whole_blocks >= 1 and family.block_amt >= 1 then
+    local count = math.min(whole_blocks, family.block_amt)
+    return family.block, count, count * family.block_multiplier
+  end
+  if family.ingot and family.ingot_amt >= 1 then
+    local count = math.min(push, family.ingot_amt)
+    return family.ingot, count, count
+  end
+  return nil, 0, 0
+end
+
 -- ---- constructor -----------------------------------------------------------
 
 function M.new(opts)
@@ -118,9 +249,14 @@ function M.new(opts)
     external_rs_router = opts.rs_router or nil,  -- shared rs_router injected from main.lua
     -- Netzwerkbasierter Fuellstand-Cache (siehe read_reactor_fuel_from_network()).
     fuel_status = opts.fuel_status or { master_relay = {}, direct_heard = {} },
+    -- Optional: nodes/fuel/hop_timing.lua-Instanz, siehe finish_delivery()
+    -- und _run_supply() unten. nil-fähig -- ohne hop_timing bleibt
+    -- valve_open_ms wie zuvor ein fester, globaler Wert.
+    hop_timing = opts.hop_timing or nil,
     _state = {
       bridge        = nil,
-      reactors      = {},   -- { name, label, reactor, inlet, item, cfg }
+      reactors      = {},   -- { label, reactor_id, path, cfg }
+      export_chest  = nil,  -- { name, wrapped, is_transporter } -- shared by all reactors
       waste_outlets = {},   -- { name, label, outlet }
       rs_router     = nil,  -- redstone_router instance (if configured)
       total_exported= 0,
@@ -135,6 +271,10 @@ function M.new(opts)
       current_request = nil,  -- { transaction_id, reactor_id, label, state, phase }
       last_delivery = nil,
       delivery_seq = 0,
+      -- Ueberlebt refresh_peripherals() (das self._state.reactors komplett
+      -- neu aufbaut) -- Grundlage fuer die Abklingzeit unten: wann eine
+      -- Lieferung an diesen Reaktor zuletzt tatsaechlich exportiert wurde.
+      last_export_ts = {},  -- [reactor_id] = os.epoch("utc")
     },
   }
   return setmetatable(self, { __index = M })
@@ -152,18 +292,41 @@ local function finish_delivery(self, request, phase, terminal_state, err)
   request.terminal_state = terminal_state
   request.error = err or request.error
   request.finished_ts = os.epoch and os.epoch("utc") or 0
+  -- Jeder Ausgang (Erfolg wie Fehlschlag) liefert reale Transitdaten fuer
+  -- die bereits erreichten Hops -- hop_timing lernt daraus unabhaengig vom
+  -- Ergebnis dieser Lieferung.
+  if self.hop_timing then self.hop_timing:finish_delivery(request.reactor_id) end
   self._state.last_delivery = {
     transaction_id = request.transaction_id,
     reactor_id = request.reactor_id,
     label = request.label,
     phase = request.phase,
     terminal_state = request.terminal_state,
+    item = request.item,
+    element = request.element,
     moved = request.moved or 0,
     error = request.error,
     started_ts = request.started_ts,
     finished_ts = request.finished_ts,
   }
-  if self._state.current_request == request then self._state.current_request = nil end
+  if self._state.current_request == request then
+    self._state.current_request = nil
+    -- Nach einer erfolgreich abgeschlossenen Lieferung nicht noch das
+    -- ganze logistics.interval abwarten: der Router ist frei, und der
+    -- naechste hungrige Reaktor waere sonst fruehestens interval Sekunden
+    -- spaeter dran -- bei mehreren leeren Reaktoren summiert sich das zu
+    -- Minuten, in denen nichts passiert, obwohl nichts blockiert.
+    -- Denselben Reaktor schuetzt weiterhin seine Abklingzeit
+    -- (resupply_cooldown_s, Vorgabe 30 s, siehe refresh_peripherals()),
+    -- der Fuellstand aus dem Netz ist ja noch der alte.
+    --
+    -- Nur bei Erfolg. Nach einem Fehlschlag bleibt das Intervall die
+    -- Bremse -- sonst liefe ein dauerhaft scheiterndes Ziel in einen
+    -- Dauerversuch im Fast-Loop-Takt, samt Ventilschalterei.
+    if terminal_state == "COMPLETE_SAFE" then
+      self._state.last_run_ts = 0
+    end
+  end
 end
 
 local function account_async_error(self, request)
@@ -173,6 +336,20 @@ local function account_async_error(self, request)
   if request.cycle_result then
     request.cycle_result.errors = (request.cycle_result.errors or 0) + 1
   end
+end
+
+-- Merkt sich, WANN zuletzt tatsaechlich etwas an diesen Reaktor exportiert
+-- wurde -- Grundlage fuer resupply_cooldown_s in _run_supply()'s Phase 1
+-- (siehe dortiger Kommentar): FUEL hat kein Wired-Modem-Sichtfeld auf die
+-- letzte Kiste vor dem Reaktor, kann also physisch nicht pruefen, ob eine
+-- vorige Lieferung schon angekommen/verbraucht wurde. Der vom Reaktor
+-- gemeldete Fuellstand (fuel_pct) aktualisiert sich erst NACH Verbrauch --
+-- ohne diese Abklingzeit wuerde FUEL bei jedem ~5s-Zyklus erneut nachlegen,
+-- solange fuel_pct unter der Schwelle bleibt, und Fuel staut sich in der
+-- Kiste vor dem Reaktor an (Feldbericht 2026-09-06).
+local function record_export(self, reactor_id, moved)
+  if not reactor_id or (tonumber(moved) or 0) <= 0 then return end
+  self._state.last_export_ts[reactor_id] = os.epoch and os.epoch("utc") or 0
 end
 
 local function account_async_export(self, request, moved, move_line)
@@ -186,22 +363,67 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
--- Sucht per Methodensignatur (getItem + exportItemToPeripheral +
--- importItemFromPeripheral), sobald der konfigurierte/Default-Name nicht
--- direkt gefunden wird -- Advanced Peripherals vergibt generierte Namen
--- wie "meBridge_0", nicht den Konventions-Default "me_bridge".
+-- Sucht per Methodensignatur (core/me_bridge_compat.lua, deckt beide
+-- Advanced-Peripherals-API-Generationen ab), sobald der konfigurierte/
+-- Default-Name nicht direkt gefunden wird -- Advanced Peripherals vergibt
+-- generierte Namen wie "meBridge_0"/"me_bridge_3", nicht den Konventions-
+-- Default "me_bridge".
 local function find_me_bridge_by_methods()
   for _, name in ipairs(peripheral.getNames() or {}) do
     local ok, methods = pcall(peripheral.getMethods, name)
     if ok and type(methods) == "table" then
       local set = {}
       for _, m in ipairs(methods) do set[m] = true end
-      if set.getItem and set.exportItemToPeripheral and set.importItemFromPeripheral then
+      if me_bridge_compat.is_bridge(set) then
         return name
       end
     end
   end
   return nil
+end
+
+-- Reine Config -> Zustand-Abbildung der Reaktor-Eintraege: keine
+-- Peripherie, kein Redstone, keine Lieferung. Ausgelagert, damit auch ein
+-- Knoten mit abgeschalteter Logistik seine eigene Konfiguration kennt --
+-- get_summary() (und darueber die Oberflaeche) las sonst ein leeres
+-- _state.reactors und meldete "Keine Reaktoren konfiguriert", obwohl
+-- /xreactor_config/fuel_routes.lua vollstaendig geladen war.
+local function build_reactor_entries(cfg)
+  local reactors = {}
+  for i, entry in ipairs((cfg and cfg.reactors) or {}) do
+    -- reactor_id/label are learned from the owning RT node's broadcasts
+    -- (router_ui.lua's teach flow) and never typed by hand; reactor_port is
+    -- accepted as a legacy alias for reactor_id only.
+    local reactor_id = entry.reactor_id or entry.reactor_port
+    local label = entry.label or reactor_id or ("Reactor " .. i)
+
+    local path = {}
+    if type(entry.path) == "table" then
+      for _, step in ipairs(entry.path) do
+        if type(step) == "string" and step ~= "" then path[#path + 1] = step end
+      end
+    end
+
+    reactors[#reactors + 1] = {
+      label        = label,
+      reactor_id   = reactor_id,
+      path         = path,
+      request_below = tonumber(entry.request_below) or 0.25,
+      fill_amount  = tonumber(entry.fill_amount)   or 64,
+      min_in_me    = tonumber(entry.min_in_me)     or 32,
+      -- Mindestwartezeit nach einer Lieferung an diesen Reaktor, bevor
+      -- erneut nachgelegt wird -- siehe record_export()-Kommentar oben.
+      -- Je nach physischer Entfernung des Reaktors vom Transportnetz
+      -- unterschiedlich lang, daher pro Reaktor einstellbar (Router-UI).
+      resupply_cooldown_s = math.max(0, tonumber(entry.resupply_cooldown_s) or 30),
+      -- Vom config_normalizer stillgelegt: dieser Eintrag wird nie
+      -- beliefert, die uebrigen laufen weiter. Muss hier mitgefuehrt
+      -- werden, sonst waere die Stilllegung ab _state.reactors vergessen.
+      disabled_reason = entry.disabled_reason,
+      cfg          = entry,
+    }
+  end
+  return reactors
 end
 
 function M:refresh_peripherals()
@@ -234,46 +456,35 @@ function M:refresh_peripherals()
     self.warn_once("bridge_absent", "Logistics: ME Bridge absent: " .. bridge_name)
   end
 
-  -- Per-reactor entries
-  local reactors = {}
-  for i, entry in ipairs(cfg.reactors or {}) do
-    local label = entry.name or ("Reactor " .. i)
-
-    -- Kein Wired-Zugriff auf den Reaktor selbst -- nur die ID merken, unter
-    -- der der zustaendige RT-Node ihn im Netzwerk meldet. entry.reactor_port
-    -- (alt) wird als Fallback-Alias akzeptiert, aber kein Peripheral gewrapped.
-    local reactor_id = entry.reactor_id or entry.reactor_port
-
-    -- Inlet: dedicated transporter or chest for THIS reactor
-    local inlet = nil
-    if entry.inlet and peripheral.isPresent(entry.inlet) then
-      local ok, w = pcall(peripheral.wrap, entry.inlet)
-      if ok and w then
-        inlet = { name = entry.inlet, wrapped = w,
-                  is_transporter = is_transporter_name(entry.inlet)
-                                or (entry.transporter == true) }
-      else
-        self.warn_once("inlet_wrap_" .. i,
-          "Logistics: inlet wrap failed: " .. entry.inlet)
-      end
-    elseif entry.inlet then
-      self.warn_once("inlet_absent_" .. i,
-        "Logistics: inlet absent: " .. entry.inlet
-        .. " (needs Wired Modem connection)")
+  -- Shared export chest: the ONE physical hand-off point every delivery
+  -- exports into, regardless of which reactor it's destined for. Which
+  -- reactor actually receives it is decided by the valve path opened for
+  -- that delivery (see redstone_router.lua's begin_transaction()), not by
+  -- picking a different peripheral here.
+  self._state.export_chest = nil
+  if cfg.export_chest and peripheral.isPresent(cfg.export_chest) then
+    local ok, w = pcall(peripheral.wrap, cfg.export_chest)
+    if ok and w then
+      self._state.export_chest = { name = cfg.export_chest, wrapped = w,
+        is_transporter = is_transporter_name(cfg.export_chest) }
+    else
+      self.warn_once("export_chest_wrap", "Logistics: export_chest wrap failed: " .. cfg.export_chest)
     end
-
-    reactors[#reactors + 1] = {
-      label        = label,
-      reactor_id   = reactor_id,
-      inlet        = inlet,
-      item         = entry.item or "",
-      request_below = tonumber(entry.request_below) or 0.25,
-      fill_amount  = tonumber(entry.fill_amount)   or 64,
-      min_in_me    = tonumber(entry.min_in_me)     or 32,
-      cfg          = entry,
-    }
+  elseif cfg.export_chest then
+    self.warn_once("export_chest_absent", "Logistics: export_chest absent: " .. cfg.export_chest
+      .. " (needs Wired Modem connection)")
   end
+
+  -- Per-reactor entries
+  local reactors = build_reactor_entries(cfg)
   self._state.reactors = reactors
+  -- Stillgelegte Eintraege gehoeren auch nicht in den Ventilbaum -- ein
+  -- Weg, der nie benutzt wird, waere dort nur ein Stolperstein.
+  local routable = {}
+  for _, r in ipairs(reactors) do
+    if not r.disabled_reason then routable[#routable + 1] = r end
+  end
+  cfg.redstone_tree = build_redstone_tree_from_reactors(routable)
 
   -- Waste outlets
   local waste_outlets = {}
@@ -327,52 +538,284 @@ end
 
 -- ---- supply cycle (demand-driven, per reactor) -----------------------------
 
+-- Warum in diesem Zyklus nichts geliefert wurde.
+--
+-- _run_supply() hatte fuenf Ausstiege, von denen zwei voellig still waren
+-- ("keine ME-Bridge", "Lieferung laeuft noch") und der Rest nur ueber
+-- warn_once()/DEBUG in den Log-Collector ging -- also nie auf den Schirm
+-- des Rechners. Im Betrieb sah das so aus: Logistik an, Brennstoff im ME,
+-- und trotzdem passiert nichts, ohne jeden Hinweis worauf es wartet.
+--
+-- Der Grund wird deshalb strukturiert festgehalten, in get_summary()
+-- mitgegeben und bei JEDER AENDERUNG gemeldet -- auch direkt am Rechner,
+-- weil utils.log() zum Log-Collector routet, nicht auf den Bildschirm.
+-- Aufschluesselung, warum kein Eintrag anfordert. Jede Teilmenge hat eine
+-- eigene Massnahme: ohne Fuellstand-Daten fehlt die RT-Meldung (RT-Knoten aus,
+-- Reaktor nicht eingelernt, Master-Relay stumm), ueber der Schwelle heisst der
+-- Reaktor ist schlicht satt, Abklingzeit heisst die letzte Lieferung zaehlt noch.
+local function describe_idle(reactors, t)
+  local parts = {}
+  if t.no_data > 0 then
+    local names = ""
+    if t.no_data_notes and #t.no_data_notes > 0 then
+      names = ": " .. table.concat(t.no_data_notes, ", ")
+        .. (t.no_data > #t.no_data_notes and ", ..." or "")
+    end
+    parts[#parts + 1] = t.no_data .. " ohne Fuellstand-Daten" .. names
+  end
+  if t.above > 0 then
+    local detail = ""
+    if t.lowest_pct then
+      detail = string.format(" (niedrigster: %s %.0f%%, Schwelle %.0f%%)",
+        tostring(t.lowest_label), t.lowest_pct * 100, (t.lowest_threshold or 0) * 100)
+    end
+    parts[#parts + 1] = t.above .. " ueber der Schwelle" .. detail
+  end
+  if t.cooldown > 0 then
+    parts[#parts + 1] = t.cooldown .. " in Abklingzeit"
+  end
+  if t.disabled > 0 then
+    parts[#parts + 1] = t.disabled .. " stillgelegt"
+  end
+  if #parts == 0 then parts[1] = "kein Eintrag konfiguriert" end
+  return string.format("%d Eintrag/Eintraege geprueft: %s",
+    #reactors, table.concat(parts, ", "))
+end
+
+-- Eine laufende Lieferung ist so lange kein Missstand, bis sie haengt --
+-- danach ist sie der wichtigste Hinweis ueberhaupt, weil sie jede weitere
+-- Lieferung sperrt (der Router faehrt immer nur EINE).
+local STUCK_DELIVERY_MS = 30000
+
+-- Ab hier gilt eine Lieferung ohne laufende Router-Transaktion als
+-- verwaist. Deutlich groesser als die Phasen-Deadline des Ventil-Routers
+-- (15s) plus dessen Abschlussphasen, damit eine echte, langsam
+-- voranschreitende Transaktion nie faelschlich freigegeben wird.
+local ORPHAN_DELIVERY_MS = 45000
+
+-- opts.key   -- stabiler Schluessel fuer die Entprellung, wenn der Text selbst
+--               sich staendig aendert (Sekundenzaehler, Phasenwechsel). Ohne
+--               ihn galt jede neue Sekunde als neuer Grund und floss Zeile fuer
+--               Zeile auf den Bildschirm.
+-- opts.quiet -- Zustand nur fuer die UI festhalten, nicht melden.
+-- opts.stuck -- eine laufende Lieferung haengt (STUCK_DELIVERY_MS); die UI
+--               zeigt sie dann als Missstand statt als "Lieferung aktiv".
+local function note_block(self, code, detail, opts)
+  opts = opts or {}
+  local s = self._state
+  local key = opts.key or (tostring(code) .. "|" .. tostring(detail or ""))
+  s.supply_block = code and { code = code, detail = detail, ts = os.epoch("utc"),
+    stuck = opts.stuck == true or nil } or nil
+  if key == s.supply_block_key then return end
+  s.supply_block_key = key
+  if opts.quiet then return end
+  if code then
+    local msg = "Logistik liefert nicht: " .. tostring(code)
+      .. (detail and (" -- " .. tostring(detail)) or "")
+    self.log("WARN", msg)
+    pcall(print, "[FUEL] " .. msg)
+  else
+    self.log("INFO", "Logistik liefert wieder")
+    pcall(print, "[FUEL] Logistik liefert wieder")
+  end
+end
+
+-- Der stillste aller Ausfaelle: exportItemToPeripheral() meldet Erfolg und
+-- bewegt NULL Stueck. Die Transaktion lief dann sauber durch (OPENING →
+-- EXPORTING → FINAL_BLOCK), alle Ventile wurden gestellt, das Protokoll
+-- zeigte eine Lieferung -- und am Reaktor kam nie etwas an, ohne ein
+-- einziges Wort. Genau diesen Fall meldet das hier.
+--
+-- Auch ein Rueckgabewert, der KEINE Zahl ist, landet hier: dann hat die
+-- Bridge zwar etwas geantwortet, aber nicht das erwartete Stueckzahl-Ergebnis
+-- -- bisher wurde daraus wortlos "0 bewegt".
+-- Ein harter Fehler der ME Bridge: der Ziel-Name ist ihr unbekannt, der
+-- Gegenstand existiert nicht, die Methode fehlt. Das ist der direkteste
+-- Grund dafuer, dass nichts aus dem ME herauskommt -- und er lief bisher
+-- ausschliesslich ueber warn_once() in den Log-Collector.
+-- Welche Aufrufkonvention die Bridge angenommen hat, einmal ansagen. Bei
+-- einem kuenftigen Fehlerbild ist das die erste Frage -- und die Antwort
+-- ist dann schon protokolliert, statt erneut erarbeitet werden zu muessen.
+local function announce_convention(self, convention)
+  if not convention or self._state.export_convention_said == convention then return end
+  self._state.export_convention_said = convention
+  local msg = "ME-Bridge-Aufrufkonvention ermittelt: " .. tostring(convention)
+  self.log("INFO", "Logistik: " .. msg)
+  pcall(print, "[FUEL] " .. msg)
+end
+
+local function note_export_failed(self, bridge, label, item, chest_name, err)
+  -- Bei einem Signatur-Streit ist die Methodenliste der Peripherie die
+  -- einzige belastbare Auskunft darueber, welche Mod-Fassung wirklich
+  -- installiert ist. Sie gehoert deshalb in die Meldung, nicht in eine
+  -- Vermutung.
+  local methods = me_bridge_compat.transfer_methods(bridge)
+  local method_hint = #methods > 0
+    and (" -- die Bridge bietet an: " .. table.concat(methods, ", "))
+    or ""
+  note_block(self, "EXPORT_FEHLER", string.format(
+    "%s: die ME Bridge lehnte den Export ab (%s → %s): %s%s",
+    tostring(label), tostring(item), tostring(chest_name), tostring(err), method_hint),
+    { key = "EXPORT_FEHLER|" .. tostring(chest_name) .. "|" .. tostring(err) })
+end
+
+local function note_export_nothing(self, label, item, wanted, chest_name, raw)
+  local shape = type(raw) == "number" and "0"
+    or ("kein Zahlwert, sondern " .. type(raw))
+  note_block(self, "EXPORT_BEWEGTE_NICHTS", string.format(
+    "%s: ME meldete Erfolg, bewegte aber nichts (%s, %d angefordert, Ziel %s, Rueckgabe %s)"
+      .. " -- Uebergabekiste voll, Ziel-Name unbekannt, oder der Bestand ist reserviert",
+    tostring(label), tostring(item), tonumber(wanted) or 0, tostring(chest_name), shape),
+    { key = "EXPORT_BEWEGTE_NICHTS|" .. tostring(label) .. "|" .. tostring(item) })
+end
+
 function M:_run_supply(cycle_log)
   local bridge = self._state.bridge
-  if not bridge then return 0, 0 end
+  if not bridge then
+    note_block(self, "KEINE_ME_BRIDGE",
+      "keine ME Bridge gefunden -- ohne sie kann nichts aus dem ME geholt werden")
+    return 0, 0
+  end
   -- Never overwrite the operator-visible lifecycle of an in-flight routed
   -- delivery. The router serializes transactions; supply is retried after its
   -- final BLOCKED confirmation, while waste collection may continue.
-  if self._state.current_request then return 0, 0 end
+  if self._state.current_request then
+    local req = self._state.current_request
+    local elapsed_ms = os.epoch("utc") - (req.started_ts or 0)
+
+    -- Den Ventil-Router SELBST fragen, statt die zuletzt gemerkte Phase zu
+    -- zeigen. req.phase wird nur in get_summary() nachgezogen und war beim
+    -- Start auf "BLOCKING" vorbelegt -- eine laengst beendete oder eine
+    -- voranschreitende Transaktion sah dadurch gleich aus. Genau diese
+    -- Anzeige hat die Fehlersuche im Betrieb in die Irre gefuehrt.
+    local rs = self._state.rs_router
+    local live_tx = rs and type(rs.get_active_transaction) == "function"
+      and rs:get_active_transaction() or nil
+    if live_tx and live_tx.phase then req.phase = live_tx.phase end
+
+    -- Eine Lieferung ohne laufende Transaktion ist verwaist: der Router ist
+    -- fertig (oder hat nie begonnen), nur der Abschluss-Rueckruf kam nie an.
+    -- Ohne diese Freigabe bliebe der Knoten dauerhaft haengen -- jeder
+    -- weitere Zyklus stiege oben aus, und es wuerde nie wieder geliefert.
+    if not live_tx and elapsed_ms >= ORPHAN_DELIVERY_MS then
+      local orphan = req
+      self._state.current_request = nil
+      note_block(self, "LIEFERUNG_VERWAIST", string.format(
+        "%s haengt seit %.0fs, der Ventil-Router fuehrt aber keine Transaktion mehr"
+          .. " -- die Lieferung wird freigegeben und im naechsten Zyklus neu versucht",
+        tostring(orphan.label), elapsed_ms / 1000))
+      return 0, 0
+    end
+
+    local stuck = elapsed_ms >= STUCK_DELIVERY_MS
+    -- Der Text nennt Sekunden und Phase und aendert sich daher in JEDEM
+    -- Zyklus. Als Entprellungs-Schluessel taugt er nicht: er machte aus der
+    -- normalen Lieferung einen Dauerregen gleichlautender Warnungen. Der
+    -- Schluessel haengt deshalb an der Lieferung selbst, nicht an ihrem Text.
+    local key = "LIEFERUNG_LAEUFT|" .. tostring(req.started_ts) .. (stuck and "|haengt" or "")
+    local valve_note = ""
+    if rs then
+      local valves = type(rs.valve_count) == "function" and rs:valve_count() or nil
+      local routing = type(rs.get_routing_state) == "function" and rs:get_routing_state() or nil
+      valve_note = string.format(" [Ventile bekannt: %s, Routing: %s]",
+        valves ~= nil and tostring(valves) or "?", tostring(routing or "?"))
+    end
+    note_block(self, "LIEFERUNG_LAEUFT", string.format(
+      "%s seit %.0fs in Phase %s%s -- der Router faehrt immer nur EINE Lieferung",
+      tostring(req.label), elapsed_ms / 1000, tostring(req.phase), valve_note),
+      { key = key, quiet = not stuck, stuck = stuck })
+    return 0, 0
+  end
   local exported, errors = 0, 0
+
+  -- The shared export chest is a global precondition, not a per-reactor one
+  -- -- without it, nothing can be delivered to ANY reactor regardless of
+  -- routing/ME stock, so this is checked once up front.
+  local export_chest = self._state.export_chest
+  if not export_chest then
+    note_block(self, "KEIN_UEBERGABEPUNKT",
+      "logistics.export_chest fehlt oder ist nicht gefunden -- es gibt nichts, wohin exportiert werden koennte")
+    return 0, 0
+  end
 
   -- Phase 1: ermitteln, WELCHE Reaktoren gerade Fuel anfordern, ohne sie
   -- schon zu beliefern. Alle anfordernden Reaktoren sammeln, dann nach
   -- Prioritaet sortieren (niedrigster Fuellstand zuerst). Reaktoren ohne
   -- reactor_id (Always-Supply-Fallback) werden nach allen bekannten
   -- Fuellstaenden eingeplant, da ihre Dringlichkeit nicht vergleichbar ist.
+  local now_ts = os.epoch and os.epoch("utc") or 0
   local candidates = {}
+  -- Warum ein Eintrag NICHT anfordert, mitzaehlen. "Keiner fordert an" hat
+  -- drei voellig verschiedene Ursachen (kein Fuellstand bekannt / ueber der
+  -- Schwelle / Abklingzeit) mit drei verschiedenen Massnahmen -- die pauschale
+  -- Meldung zwang den Betreiber bisher zum Raten.
+  local tally = { disabled = 0, no_data = 0, above = 0, cooldown = 0,
+                  lowest_pct = nil, lowest_label = nil, lowest_threshold = nil,
+                  no_data_notes = {} }
   for _, r in ipairs(self._state.reactors) do
-    if not r.inlet then
-      self.warn_once("no_inlet:" .. r.label,
-        "Logistics: no inlet configured for " .. r.label)
-    elseif is_waste(r.item) then
-      self.warn_once("waste_fuel:" .. r.item,
-        "SAFETY BLOCK: item '" .. r.item .. "' is waste — cannot use as fuel supply")
-    else
-      local requesting, fuel_pct = false, nil
-      if r.reactor_id then
-        local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
-        if fuel_amt and capacity and capacity > 0 then
-          fuel_pct = fuel_amt / capacity
-          requesting = fuel_pct < r.request_below
-          self.log("DEBUG", string.format(
-            "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
-            r.label, fuel_pct * 100, fuel_amt, capacity,
-            requesting and "YES" or "no"))
-        else
-          self.warn_once("fuel_read_fail:" .. r.label,
-            "Logistics: no fresh network fuel data for " .. r.label
-            .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
+    local requesting, fuel_pct = false, nil
+    -- Vom Normalizer stillgelegt (ungueltiger Eintrag). Ueberspringen --
+    -- aber nur DIESEN, nicht die ganze Anlage: frueher schaltete ein
+    -- einziger unbrauchbarer Eintrag die Logistik komplett ab.
+    if r.disabled_reason then
+      tally.disabled = tally.disabled + 1
+      self.warn_once("entry_disabled:" .. tostring(r.label),
+        "Logistik: Eintrag " .. tostring(r.label) .. " stillgelegt -- " .. tostring(r.disabled_reason))
+    elseif r.reactor_id then
+      local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
+      if fuel_amt and capacity and capacity > 0 then
+        fuel_pct = fuel_amt / capacity
+        requesting = fuel_pct < r.request_below
+        if not requesting then
+          tally.above = tally.above + 1
+          if tally.lowest_pct == nil or fuel_pct < tally.lowest_pct then
+            tally.lowest_pct, tally.lowest_label = fuel_pct, r.label
+            tally.lowest_threshold = r.request_below
+          end
         end
+        self.log("DEBUG", string.format(
+          "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
+          r.label, fuel_pct * 100, fuel_amt, capacity,
+          requesting and "YES" or "no"))
       else
-        requesting = true
-        self.log("DEBUG", "Logistics: " .. r.label
-          .. " has no reactor_id — using always-supply mode")
+        tally.no_data = tally.no_data + 1
+        -- Den Eintrag beim Namen nennen, samt Alter der juengsten Probe:
+        -- eine blosse Anzahl liess offen, WELCHER Reaktor fehlt, und die
+        -- Oberflaeche zeigte fuer denselben Reaktor gleichzeitig einen
+        -- frischen Fuellstand. Genau dieser Widerspruch war nicht aufloesbar.
+        if #tally.no_data_notes < 4 then
+          local age_ms = newest_sample_age_ms(self.fuel_status, r.reactor_id)
+          tally.no_data_notes[#tally.no_data_notes + 1] = tostring(r.label)
+            .. (age_ms and string.format(" (%.0fs alt)", age_ms / 1000) or " (nie gehoert)")
+        end
+        self.warn_once("fuel_read_fail:" .. r.label,
+          "Logistics: no fresh network fuel data for " .. r.label
+          .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
       end
-      if requesting then
-        candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
+    else
+      requesting = true
+      self.log("DEBUG", "Logistics: " .. r.label
+        .. " has no reactor_id — using always-supply mode")
+    end
+    -- Abklingzeit seit der letzten tatsaechlichen Lieferung: fuel_pct
+    -- aktualisiert sich erst, NACHDEM der Reaktor eine vorige Lieferung
+    -- verbraucht hat -- ohne diese Sperre wuerde hier jeden Zyklus erneut
+    -- nachgelegt, solange fuel_pct noch unter der Schwelle liegt, obwohl
+    -- die letzte Ladung physisch noch unterwegs/nicht verbraucht ist (siehe
+    -- record_export()-Kommentar oben).
+    if requesting and r.reactor_id then
+      local last_ts = self._state.last_export_ts[r.reactor_id]
+      local cooldown_ms = (r.resupply_cooldown_s or 0) * 1000
+      if last_ts and (now_ts - last_ts) < cooldown_ms then
+        requesting = false
+        tally.cooldown = tally.cooldown + 1
+        self.log("DEBUG", string.format(
+          "Logistics: %s: resupply_cooldown aktiv (%.0fs verbleibend) — kein Nachlegen diesen Zyklus",
+          r.label, (cooldown_ms - (now_ts - last_ts)) / 1000))
       end
+    end
+    if requesting then
+      candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
     end
   end
 
@@ -404,11 +847,55 @@ function M:_run_supply(cycle_log)
   -- komplett (kein Routing-Versuch, aber auch kein Direkt-Export-Fallback).
   local routing_state = rs and rs:get_routing_state() or "ROUTING_NOT_CONFIGURED"
   if routing_state == "ROUTING_INVALID" or routing_state == "ROUTING_REQUIRED_BUT_EMPTY" then
-    self.warn_once("routing_blocked:" .. routing_state,
-      "Logistics: Routing " .. routing_state .. " -- Belieferung diesen Zyklus komplett blockiert, kein ungeschuetzter Direktexport")
+    note_block(self, "ROUTING_" .. tostring(routing_state),
+      "die Ventilwege sind unbrauchbar -- es wird weder geroutet noch ungeschuetzt direkt exportiert")
     return exported, errors
   end
   local routed = routing_state == "ROUTING_VALID"
+
+  -- "Ich weiss nicht, ob die Ventile gestellt werden" -- das konnte der
+  -- Knoten bisher nirgends beantworten. Ohne eingerichtetes Routing wird
+  -- NIE ein Ventil gestellt: dann geht alles direkt in die Uebergabekiste,
+  -- und wo es von dort landet, entscheidet allein die Verrohrung. Das ist
+  -- ein voellig anderer Betrieb als der geroutete -- er gehoert angesagt.
+  if self._state.routing_mode_said ~= routing_state then
+    self._state.routing_mode_said = routing_state
+    local msg = routed
+      and "Ventilsteuerung eingerichtet -- vor jeder Lieferung wird der Weg gestellt"
+      or ("Ventilsteuerung NICHT eingerichtet (" .. tostring(routing_state)
+        .. ") -- es wird ohne Ventile direkt in die Uebergabekiste exportiert")
+    self.log("INFO", "Logistik: " .. msg)
+    pcall(print, "[FUEL] " .. msg)
+  end
+
+  -- Which fuel family to deliver is decided once per cycle (freshest ME
+  -- read available), not per reactor -- see pick_fuel_family() above. At
+  -- most one delivery happens per cycle anyway (see comment above), so a
+  -- per-reactor re-read would only waste getItem() calls.
+  local families = build_fuel_families(self.config.reserve_items)
+  local family = #candidates > 0 and pick_fuel_family(bridge, families) or nil
+  if #candidates > 0 and not family then
+    note_block(self, "KEIN_BRENNSTOFF_IM_ME",
+      "kein Uran im ME gefunden, obwohl " .. #candidates .. " Reaktor(en) anfordern")
+    return exported, errors
+  end
+  if #candidates == 0 then
+    note_block(self, "NIEMAND_FORDERT_AN", describe_idle(self._state.reactors, tally))
+  end
+
+  -- Jeder Ausstieg aus dieser Schleife war bisher entweder voellig still
+  -- oder nur DEBUG -- also im Log-Collector, nie auf dem Schirm. Wurden
+  -- alle Kandidaten so uebersprungen, endete _run_supply() ohne ein
+  -- einziges Wort, und die Oberflaeche zeigte weiter den Grund des
+  -- vorigen Zyklus. Genau so verschwand "es passiert nichts" spurlos.
+  local skips = {}
+  local function skip(label, reason)
+    if #skips < 4 then skips[#skips + 1] = tostring(label) .. ": " .. reason end
+  end
+  -- Sobald ein Export ueberhaupt VERSUCHT wurde, hat dieser Zyklus seinen
+  -- eigenen, spezifischen Grund (Erfolg, EXPORT_FEHLER, EXPORT_BEWEGTE_
+  -- NICHTS). Der Sammelgrund unten darf ihn dann nicht ueberschreiben.
+  local delivery_attempted = false
 
   for _, cand in ipairs(candidates) do
     local r, fuel_pct = cand.r, cand.fuel_pct
@@ -422,35 +909,70 @@ function M:_run_supply(cycle_log)
       cycle_log = cycle_log,
     }
 
-    -- Check ME availability
-    local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = r.item })
-    local in_me = type(me_info) == "table" and (me_info.amount or 0) or 0
-    if in_me < r.min_in_me then
+    if not family then goto continue end
+
+    -- ME availability, in ingot-equivalent units of the chosen family.
+    if family.total < r.min_in_me then
+      skip(r.label, string.format(
+        "nur %d %s im ME, die Mindestreserve min_in_me=%d haelt alles zurueck",
+        family.total, family.element, r.min_in_me))
       self.log("DEBUG", string.format(
-        "Logistics: %s: ME has %d %s (need >%d) — skip",
-        r.label, in_me, r.item, r.min_in_me))
+        "Logistics: %s: ME has %d %s-equivalent (need >%d) — skip",
+        r.label, family.total, family.element, r.min_in_me))
       goto continue
     end
 
-    local push = math.min(r.fill_amount, in_me - r.min_in_me)
-    if push <= 0 then goto continue end
+    local push = math.min(r.fill_amount, family.total - r.min_in_me)
+    if push <= 0 then
+      skip(r.label, string.format(
+        "ueber der Mindestreserve min_in_me=%d bleibt nichts uebrig (%d %s im ME)",
+        r.min_in_me, family.total, family.element))
+      goto continue
+    end
+
+    local deliver_item, deliver_count = pick_fuel_form(family, push)
+    if not deliver_item or deliver_count <= 0 then
+      skip(r.label, string.format(
+        "keine lieferbare Form von %s im ME (weder Barren noch Block)", family.element))
+      goto continue
+    end
 
     do
-      local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+      local default_valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+      -- Distanzabhaengiger Timeout statt eines festen Werts fuer alle
+      -- Reaktoren -- siehe hop_timing.lua. compute_timeout_ms() liefert
+      -- exakt default_valve_ms zurueck, solange kein Pfad-Hop kalibriert
+      -- ist (unabhaengig von dessen Laenge); erst gelernte Kanten
+      -- verschieben das Ergebnis nach oben/unten davon weg.
+      local valve_ms = (routed and self.hop_timing)
+        and self.hop_timing:compute_timeout_ms(r.path, default_valve_ms)
+        or default_valve_ms
       local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
       local request = self._state.current_request
       request.transaction_id = request.transaction_id or next_delivery_id(self, r.label)
+      request.item = deliver_item
+      request.element = family.element
 
       if routed then
+        if self.hop_timing then
+          self.hop_timing:begin_delivery(r.reactor_id, r.path, deliver_item, request.started_ts)
+        end
         local function do_export()
+          delivery_attempted = true
           request.phase = "EXPORTING"
           request.state = "delivering"
-          local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-            { name = r.item, count = push }, r.inlet.name)
+          local ok, result, convention = me_bridge_compat.export_to(bridge.wrapped,
+            { name = deliver_item, count = deliver_count }, export_chest.name)
+          announce_convention(self, convention)
           if not ok then
             local err = tostring(result)
-            self.warn_once("exp_err:" .. r.inlet.name,
-              "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
+            -- warn_once() schreibt in den Log-Collector, nicht auf den
+            -- Schirm, und ausserdem nur ein einziges Mal. Ein dauerhaft
+            -- scheiternder Export war damit unsichtbar -- obwohl er genau
+            -- der Grund ist, dass nichts aus dem ME kommt.
+            note_export_failed(self, bridge.wrapped, r.label, deliver_item, export_chest.name, err)
+            self.warn_once("exp_err:" .. export_chest.name,
+              "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
             account_async_error(self, request)
             request.error = err
             return false, err
@@ -458,12 +980,22 @@ function M:_run_supply(cycle_log)
           local moved = type(result) == "number" and result or 0
           request.moved = moved
           request.exported_at = os.epoch and os.epoch("utc") or 0
+          if moved <= 0 then
+            note_export_nothing(self, r.label, deliver_item, deliver_count,
+              export_chest.name, result)
+          end
           if moved > 0 then
+            -- Eine geroutete Lieferung kehrt sofort zurueck (sie laeuft
+            -- asynchron weiter), also erreicht sie das exported > 0 am Ende
+            -- von _run_supply() nie -- der letzte Grund blieb dadurch fuer
+            -- immer in der Oberflaeche stehen, auch waehrend alles lief.
+            note_block(self, nil)
+            record_export(self, request.reactor_id, moved)
             local move_line = string.format(
-              "ME→[%s]%s %s x%d via %s", r.label, pct_str, r.item, moved, r.inlet.name)
+              "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
             account_async_export(self, request, moved, move_line)
             self.log("INFO", string.format("ME→[%s]%s %s x%d via %s [tx=%s]",
-              r.label, pct_str, r.item, moved, r.inlet.name, tostring(request.transaction_id)))
+              r.label, pct_str, deliver_item, moved, export_chest.name, tostring(request.transaction_id)))
           end
           return true, moved
         end
@@ -486,24 +1018,38 @@ function M:_run_supply(cycle_log)
           end
         end
 
-        local started, reason, router_tx_id = rs:begin_transaction(r.label, do_export, valve_ms, {
+        local started, reason, router_tx_id = rs:begin_transaction(r.reactor_id, do_export, valve_ms, {
           on_error = on_transaction_error,
           on_complete = on_transaction_complete,
           transaction_id = request.transaction_id,
         })
         if not started then
+          -- begin_delivery() above already primed hop_timing's baseline for
+          -- this reactor; the transaction never opened a path, so there is
+          -- nothing to learn from -- clear it the same way a terminal
+          -- outcome would (finish_delivery() is a no-op learning-wise when
+          -- no hop ever recorded an arrival).
+          if self.hop_timing then self.hop_timing:finish_delivery(r.reactor_id) end
           self._state.current_request = nil
           if reason == "busy" then
+            note_block(self, "ROUTER_BESCHAEFTIGT",
+              "eine andere Transaktion laeuft noch -- der Router faehrt immer nur EINE")
             self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
             return exported, errors
           end
           if reason == "safety_latched" or reason == "quiescing" then
+            note_block(self, "ROUTER_GESPERRT", "Sicherheitssperre aktiv (" .. tostring(reason)
+              .. ") -- es wird kein Ventil gestellt und nichts exportiert")
             self.log("WARN", "Logistics: Router sicherheitsgesperrt (" .. tostring(reason) .. ") — keine weitere Lieferung")
             return exported, errors
           end
+          -- Der haeufigste Fall hinter "die Ventile werden nicht gestellt":
+          -- der Router findet den Weg zu diesem Reaktor nicht.
+          skip(r.label, "Ventilweg nicht stellbar (" .. tostring(reason) .. ")")
           self.log("DEBUG", "Logistics: " .. r.label .. ": Routing nicht moeglich (" .. tostring(reason) .. ") — naechster Kandidat")
           goto continue
         end
+        delivery_attempted = true
         request.transaction_id = router_tx_id or request.transaction_id
         request.state = "delivering"
         local active = type(rs.get_active_transaction) == "function" and rs:get_active_transaction() or nil
@@ -515,28 +1061,45 @@ function M:_run_supply(cycle_log)
       -- stable transaction identity/terminal semantics.
       request.state = "delivering"
       request.phase = "EXPORTING"
-      local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-        { name = r.item, count = push }, r.inlet.name)
+      delivery_attempted = true
+      local ok, result, convention = me_bridge_compat.export_to(bridge.wrapped,
+        { name = deliver_item, count = deliver_count }, export_chest.name)
+      announce_convention(self, convention)
       if not ok then
         local err = tostring(result)
-        self.warn_once("exp_err:" .. r.inlet.name,
-          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
+        note_export_failed(self, bridge.wrapped, r.label, deliver_item, export_chest.name, err)
+        self.warn_once("exp_err:" .. export_chest.name,
+          "exportItemToPeripheral → " .. export_chest.name .. ": " .. err)
         errors = errors + 1
         request.error_counted = true
         finish_delivery(self, request, "ERROR", "EXPORT_FAILED", err)
       else
         local moved = type(result) == "number" and result or 0
         request.moved = moved
+        if moved <= 0 then
+          note_export_nothing(self, r.label, deliver_item, deliver_count,
+            export_chest.name, result)
+        end
         if moved > 0 then
+          record_export(self, request.reactor_id, moved)
           exported = exported + moved
           cycle_log[#cycle_log + 1] = string.format(
-            "ME→[%s]%s %s x%d via %s", r.label, pct_str, r.item, moved, r.inlet.name)
+            "ME→[%s]%s %s x%d via %s", r.label, pct_str, deliver_item, moved, export_chest.name)
         end
         finish_delivery(self, request, "COMPLETE", "COMPLETE_SAFE", nil)
       end
     end
 
     ::continue::
+  end
+  if exported > 0 then note_block(self, nil) end
+  -- Alle Kandidaten uebersprungen, kein Export auch nur versucht: bisher
+  -- endete der Zyklus hier wortlos.
+  if #candidates > 0 and not delivery_attempted and exported == 0 then
+    note_block(self, "KEIN_KANDIDAT_BEDIENBAR", string.format(
+      "%d Reaktor(en) fordern an, keiner konnte bedient werden -- %s",
+      #candidates,
+      #skips > 0 and table.concat(skips, "; ") or "ohne erkennbaren Grund"))
   end
   self._state.current_request = nil
   return exported, errors
@@ -550,15 +1113,14 @@ function M:_run_collect(cycle_log)
   local imported, errors = 0, 0
 
   for _, outlet in ipairs(self._state.waste_outlets) do
-    local ok, result = pcall(bridge.wrapped.importItemFromPeripheral,
-      {}, outlet.name)
+    local ok, result = me_bridge_compat.import_from(bridge.wrapped, {}, outlet.name)
     if not ok then
       -- Fallback: import item by item
       local items, _ = safe_call(outlet.wrapped, "list")
       if items then
         for _, stack in pairs(items) do
           if type(stack) == "table" and stack.name then
-            local ok2, res2 = pcall(bridge.wrapped.importItemFromPeripheral,
+            local ok2, res2 = me_bridge_compat.import_from(bridge.wrapped,
               { name = stack.name, count = stack.count or 64 }, outlet.name)
             if ok2 then
               local n = type(res2) == "number" and res2 or 0
@@ -626,7 +1188,18 @@ end
 
 function M:tick()
   local cfg = self.config.logistics or self.config or {}
-  if cfg.enabled ~= true then return end
+  if cfg.enabled ~= true then
+    -- Abgeschaltete Logistik heisst "liefert nichts", nicht "kennt seine
+    -- Konfiguration nicht". _state.reactors wurde frueher ausschliesslich
+    -- von refresh_peripherals() gefuellt, und das ist nur hinter diesem
+    -- Schalter erreichbar -- die Oberflaeche meldete deshalb dauerhaft
+    -- "Keine Reaktoren konfiguriert" (ui_completion.lua's CONFIG_REQUIRED
+    -- prueft #payload.logistics.reactors), obwohl fuel_routes.lua geladen
+    -- war. Nur die reine Abbildung nachziehen: keine Peripherie, kein
+    -- rs_router:refresh() (das block_all() ausloest), kein Lieferzyklus.
+    self._state.reactors = build_reactor_entries(cfg)
+    return
+  end
 
   local now = os.epoch("utc")
   local refresh_ms = (tonumber(cfg.discovery_interval) or 60) * 1000
@@ -643,6 +1216,32 @@ end
 
 -- ---- status ----------------------------------------------------------------
 
+-- Laeuft gerade eine Lieferung (angefordert oder Ventile in Bewegung)?
+-- Waehrend einer Lieferung haengen Abklingzeit und Ventil-Transaktion an der
+-- Reaktor-Kennung der Route -- sie darf sich dann nicht aendern
+-- (route_identity.lua wartet).
+function M:is_delivering()
+  local s = self._state
+  if s.current_request ~= nil then return true end
+  local rs = s.rs_router or self.external_rs_router
+  if rs and type(rs.get_active_transaction) == "function" then
+    local ok, tx = pcall(rs.get_active_transaction, rs)
+    if ok and tx ~= nil then return true end
+  end
+  return false
+end
+
+-- Eine Route bekommt eine neue Reaktor-Kennung (route_identity.lua: kurze
+-- -> globale). Die Abklingzeit seit der letzten Lieferung haengt an der
+-- Kennung und zieht mit um -- sonst gaelte der Reaktor sofort wieder als
+-- "lange nicht beliefert".
+function M:rekey_reactor(from, to)
+  if from == nil or to == nil or from == to then return end
+  local ts = self._state.last_export_ts
+  if ts[from] ~= nil and ts[to] == nil then ts[to] = ts[from] end
+  ts[from] = nil
+end
+
 function M:get_summary()
   local s = self._state
   local cfg = self.config.logistics or self.config or {}
@@ -653,18 +1252,30 @@ function M:get_summary()
       local amt, cap = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
       if amt and cap and cap > 0 then fuel_pct = math.floor(amt / cap * 100) end
     end
+    -- identity_known heisst: der Knoten kennt die Kennung dieses Reaktors
+    -- (aus der RT-Statusmeldung). Es heisst NICHT, dass Brennstoff
+    -- ankommt.
+    --
+    -- Genau das war im Betrieb irrefuehrend: das Feld hiess "connected",
+    -- die Oberflaeche machte daraus "verbunden/wird beliefert", und ein
+    -- Reaktor galt als versorgt, obwohl nie etwas losgeschickt wurde.
+    -- Wer beliefert wird, steht jetzt daneben -- aus dem, was
+    -- tatsaechlich geflossen ist.
+    local last_ts = r.reactor_id and self._state.last_export_ts[r.reactor_id] or nil
     reactor_status[#reactor_status + 1] = {
-      label         = r.label,
-      fuel_pct      = fuel_pct,
-      inlet         = r.inlet and r.inlet.name or nil,
-      reactor_id    = r.reactor_id,
-      connected     = r.reactor_id ~= nil and r.inlet ~= nil,
+      label           = r.label,
+      fuel_pct        = fuel_pct,
+      reactor_id      = r.reactor_id,
+      path            = r.path,
+      identity_known  = r.reactor_id ~= nil,
+      disabled_reason = r.disabled_reason,
+      last_export_ts  = last_ts,
+      supplied        = last_ts ~= nil,
+      -- Alter Name, bewusst beibehalten: operational_summary.lua liest ihn.
+      -- Bedeutung unveraendert (Kennung bekannt), nur nicht mehr die
+      -- einzige Auskunft.
+      connected       = r.reactor_id ~= nil,
     }
-  end
-  local total_routes, active_routes = 0, 0
-  for _, r in ipairs(reactor_status) do
-    total_routes = total_routes + 1
-    if r.connected then active_routes = active_routes + 1 end
   end
   local active_tx = s.rs_router and type(s.rs_router.get_active_transaction) == "function"
     and s.rs_router:get_active_transaction() or nil
@@ -675,6 +1286,30 @@ function M:get_summary()
   end
   local safety_latch = s.rs_router and type(s.rs_router.get_safety_latch) == "function"
     and s.rs_router:get_safety_latch() or nil
+
+  -- Live ME-Bestand je Fuel-Familie fuer die Diagnose-Seite (ui_pages.lua)
+  -- -- unabhaengig davon, ob gerade ein Reaktor anfordert, damit der
+  -- Bestand jederzeit einsehbar ist, nicht nur waehrend einer Lieferung.
+  local fuel_families = nil
+  if s.bridge then
+    fuel_families = {}
+    for _, fam in ipairs(build_fuel_families(self.config.reserve_items)) do
+      local ingot_amt = 0
+      if fam.ingot then
+        ingot_amt = me_bridge_compat.item_amount(safe_call(s.bridge.wrapped, "getItem", { name = fam.ingot }))
+      end
+      local block_amt = 0
+      if fam.block then
+        block_amt = me_bridge_compat.item_amount(safe_call(s.bridge.wrapped, "getItem", { name = fam.block }))
+      end
+      fuel_families[#fuel_families + 1] = {
+        element = fam.element, ingot_amt = ingot_amt, block_amt = block_amt,
+        total = ingot_amt + block_amt * fam.block_multiplier,
+      }
+    end
+    table.sort(fuel_families, function(a, b) return a.total > b.total end)
+  end
+
   local current_request = nil
   if s.current_request then
     current_request = {
@@ -690,12 +1325,24 @@ function M:get_summary()
   end
   return {
     enabled        = cfg.enabled == true,
+    -- Warum die Logistik aus ist, falls NICHT der Betreiber sie
+    -- abgeschaltet hat (config_normalizer setzt es). Ohne dieses Feld
+    -- meldete der Schirm "logistics.enabled = false" auch dann, wenn der
+    -- fehlende Uebergabepunkt sie zwangsweise abgeschaltet hat -- und der
+    -- Betreiber suchte den Fehler beim Schalter.
+    disabled_reason = cfg.disabled_reason,
+    -- Was KONFIGURIERT ist, unabhaengig davon, ob die Logistik laeuft.
+    -- reactors unten ist der BETRIEBSzustand und bleibt leer, solange
+    -- nichts laeuft -- daraus wurde auf dem Schirm "Keine Reaktoren
+    -- konfiguriert", obwohl welche konfiguriert waren.
+    configured_reactor_count = #(cfg.reactors or {}),
+    -- Warum in diesem Zyklus nichts geliefert wurde (nil = es lief).
+    supply_block   = s.supply_block,
     bridge         = s.bridge and s.bridge.name or nil,
+    export_chest   = s.export_chest and s.export_chest.name or nil,
     reactors       = reactor_status,
+    fuel_families  = fuel_families,
     waste_outlets  = #s.waste_outlets,
-    -- ui_pages.lua's "ROUTEN"-Anzeige braucht beide Felder.
-    total_routes   = total_routes,
-    active_routes  = active_routes,
     -- Deckt den ganzen Entscheidungs-/Lieferzyklus ab (das kurze Ventil-
     -- Fenster bleibt separat ueber rs_router:get_active_route() verfuegbar).
     current_request = current_request,

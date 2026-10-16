@@ -1,16 +1,13 @@
 local utils = require("core.utils")
+local once_log = require("core.once_log")
 local energy_storage = require("adapters.energy_storage")
 
 local matrix = {}
-local warned = {}
+-- getMethods-Fehlschlag einmal je Stoerung statt einmal je Laufzeit
+-- (core/once_log.lua): klappt das Erkennen wieder, wird die naechste
+-- Stoerung erneut gemeldet.
+local methods_once = once_log.new()
 
-local function log_once(prefix, key, message)
-  if warned[key] then
-    return
-  end
-  warned[key] = true
-  utils.log(prefix or "MATRIX", message, "WARN")
-end
 
 local function to_set(list)
   local out = {}
@@ -334,16 +331,31 @@ function matrix.detect(name, log_prefix, opts)
   end
   if not ok or type(methods) ~= "table" then
     if not ok then
-      log_once(log_prefix, "methods:" .. tostring(name), "Matrix methods failed for " .. tostring(name) .. ": " .. tostring(methods))
+      if methods_once.report(name, "methods") then
+        utils.log(log_prefix or "MATRIX", "Matrix methods failed for " .. tostring(name) .. ": " .. tostring(methods), "WARN")
+      end
     end
     return nil
   end
+  methods_once.recover(name, "methods")
   local method_set = to_set(methods)
-  if not is_matrix_method_set(method_set) then
+  local type_name = peripheral.getType(name) or "induction_matrix"
+  -- Mekanism's Induction Matrix PORT block (the one actually wired to the
+  -- network -- see wiki.aidancbrady.com/wiki/Induction_Port) only exposes
+  -- getMode/setMode plus the generic energy getters (getEnergy/getMaxEnergy)
+  -- itself; the cell/provider/port-count methods checked by
+  -- is_matrix_method_set() live on the multiblock structure and are only
+  -- present once/if the port's multiblock is fully formed. A port on a
+  -- not-fully-formed (or older-Mekanism) matrix therefore never matches the
+  -- method-set check and silently falls through to plain energy_storage
+  -- detection -- reported as "matrix missing" even though a real matrix is
+  -- attached. peripheral.getType() is a reliable second signal here: only
+  -- Mekanism's induction matrix blocks report a type containing "induction".
+  local type_is_induction = type(type_name) == "string" and type_name:lower():find("induction", 1, true) ~= nil
+  if not is_matrix_method_set(method_set) and not type_is_induction then
     return nil
   end
   local storage_adapter = energy_storage.detect(name, log_prefix)
-  local type_name = peripheral.getType(name) or "induction_matrix"
   local get_cells = resolve_component_method(method_set, {
     "getInstalledCells",
     "getCells",
@@ -427,9 +439,15 @@ function matrix.detect(name, log_prefix, opts)
     return nil, "unsupported_value:" .. table.concat(type_summary, ",") .. ":" .. describe_value(first_payload)
   end
 
+  -- stored/capacity mirror the underlying storage_adapter's own features
+  -- (not just "does a storage_adapter exist") -- energy_storage.lua's ER2
+  -- passive-reactor-port profile has no capacity method at all
+  -- (profile.capacity == nil, features.capacity == false there), which
+  -- storage_adapter ~= nil alone can't tell apart from a fully-featured
+  -- matrix. Same pattern already used for input/output below.
   local features = {
-    stored = storage_adapter ~= nil,
-    capacity = storage_adapter ~= nil,
+    stored = storage_adapter and storage_adapter.features and storage_adapter.features.stored or false,
+    capacity = storage_adapter and storage_adapter.features and storage_adapter.features.capacity or false,
     input = storage_adapter and storage_adapter.features and storage_adapter.features.input or false,
     output = storage_adapter and storage_adapter.features and storage_adapter.features.output or false,
     cells = get_cells ~= nil,

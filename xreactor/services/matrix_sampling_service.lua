@@ -34,4 +34,16 @@ function sampler:tick()
   end
 end
 
+-- Vom service_manager gerufen, wenn tick() wiederholt scheitert (siehe
+-- services/service_manager.lua's maybe_discard_derived_state()): die Caches
+-- der Runtime verwerfen -- dieselbe invalidate(), die die ENERGY-Discovery
+-- bei einer geaenderten Matrix-Topologie ruft. Der naechste Takt liest
+-- alles frisch; bis dahin gilt der Schnappschuss als veraltet, und MASTER
+-- nimmt veraltete ENERGY-Daten nicht in den Lastabwurf.
+function sampler:discard_derived_state()
+  if self.runtime and type(self.runtime.invalidate) == "function" then
+    self.runtime:invalidate()
+  end
+end
+
 return sampler

@@ -5,27 +5,54 @@ local M = {}
 
 local LOG_ROLES = { LOG = true, LOG_COLLECTOR = true }
 
+-- Dateien, die es im Repository gibt, die aber NICHT auf einen Knoten
+-- gehoeren. Sie stehen weiter im Manifest (und werden damit versioniert
+-- und gehasht) -- sie werden nur nicht installiert.
+--
+-- Die frueheren Eintraege hier (nodes/rt/commands.lua, controllers.lua,
+-- discovery.lua, ramp.lua, safety.lua, state.lua, telemetry.lua,
+-- nodes/energy/adapter_probe.lua) sind entfallen: diese Dateien gibt es
+-- laengst nicht mehr, die Liste war wirkungslos geworden.
+--
+-- Was jetzt drinsteht, sind die Installermodule selbst. Ein Knoten liest
+-- KEINES davon jemals von der Platte:
+--
+--   * Der Bootstrap /installer laedt installer/init.lua und die uebrigen
+--     Module bei JEDEM Lauf frisch von GitHub und fuehrt sie per load()
+--     aus dem Speicher aus (siehe dessen Kopfkommentar).
+--   * auto_update.lua's run_update() laedt denselben Bootstrap herunter,
+--     statt etwas Lokales aufzurufen.
+--   * start.lua's Recovery-Resume ebenso.
+--   * start.lua selbst liest aus /xreactor/installer/ ausschliesslich
+--     auto_update.lua -- das bleibt deshalb installiert.
+--
+-- manifest.lua aus demselben Grund: zur Laufzeit wird die Buildkennung aus
+-- release.lua gelesen (shared/build_info.lua), nie aus dem Manifest, und
+-- der Installer holt sich das Manifest ohnehin frisch von GitHub.
+--
+-- Das spart rund 95 kB auf JEDEM Knoten -- bei der Rolle RT (rund 775 kB)
+-- etwa 12 %. Anlass war eine Installation, die genau an manifest.lua aus
+-- Platzmangel abgebrochen ist.
 local SKIP = {
-  ["nodes/energy/adapter_probe.lua"] = true,
-  ["nodes/rt/commands.lua"]          = true,
-  ["nodes/rt/controllers.lua"]       = true,
-  ["nodes/rt/discovery.lua"]         = true,
-  ["nodes/rt/ramp.lua"]              = true,
-  ["nodes/rt/safety.lua"]            = true,
-  ["nodes/rt/state.lua"]             = true,
-  ["nodes/rt/telemetry.lua"]         = true,
+  ["installer/http.lua"]           = true,
+  ["installer/init.lua"]           = true,
+  ["installer/journal.lua"]        = true,
+  ["installer/manifest.lua"]       = true,
+  ["installer/plan_validator.lua"] = true,
+  ["installer/reactor_naming.lua"] = true,
+  ["installer/stage.lua"]          = true,
+  ["installer/ui.lua"]             = true,
+  ["manifest.lua"]                 = true,
 }
 
 local ROLE_EXTRAS = {
   RT = {
     "adapters/reactor.lua", "adapters/turbine.lua",
-    "core/control_rails.lua", "core/fluid.lua", "core/turbine_regulator.lua",
-    "nodes/rt/command_handler.lua", "nodes/rt/config_normalizer.lua",
+    "core/fluid.lua",
+    "nodes/rt/config_normalizer.lua",
     "nodes/rt/discovery_log.lua", "nodes/rt/discovery_runtime.lua",
-    "nodes/rt/flow_apply_helpers.lua", "nodes/rt/health_payload.lua",
-    "nodes/rt/module_lifecycle.lua", "nodes/rt/monitor_ui.lua",
-    "nodes/rt/reactor_steam_guard.lua", "nodes/rt/startup_diagnostics.lua",
-    "nodes/rt/state_handlers.lua", "nodes/rt/status_snapshot.lua",
+    "nodes/rt/health_payload.lua", "nodes/rt/monitor_ui.lua",
+    "nodes/rt/status_snapshot.lua",
   }
 }
 
@@ -85,6 +112,45 @@ local function crc32(content)
 end
 M.crc32 = crc32
 
+-- Die Pruefsummenliste fuer den Knoten: je installierter Datei Groesse und
+-- CRC32 aus dem Manifest, dazu Fassung und Inhalts-Pruefsumme
+-- (payload_digest). installer/init.lua schreibt sie nach
+-- /xreactor/install_hashes.lua; core/install_integrity.lua prueft die
+-- installierten Dateien spaeter dagegen. Das Manifest selbst bleibt aus
+-- Platzgruenden nicht auf dem Knoten (siehe SKIP oben) -- diese Liste ist
+-- der kleine Teil davon, den der Knoten fuer die Pruefung braucht.
+-- Ein Eintrag ohne Groesse/Hash (siehe MANIFEST_METADATA_OPTIONAL_PATHS in
+-- den Tests) bekommt dort nur das, was das Manifest hergibt.
+function M.render_install_hashes(manifest, expected, role_label)
+  local paths = {}
+  for rel in pairs(expected or {}) do paths[#paths + 1] = rel end
+  table.sort(paths)
+  local out = {
+    "return {\n",
+    string.format("  manifest_id = %q,\n", tostring(manifest.manifest_id or "")),
+    string.format("  manifest_version = %d,\n", tonumber(manifest.manifest_version) or 0),
+    string.format("  payload_digest = %q,\n", tostring(manifest.payload_digest or "")),
+    string.format("  role = %q,\n", tostring(role_label or "")),
+    "  files = {\n",
+  }
+  for _, rel in ipairs(paths) do
+    local entry = expected[rel] or {}
+    local fields = {}
+    if tonumber(entry.size_bytes) then fields[#fields + 1] = "size = " .. tostring(math.floor(tonumber(entry.size_bytes))) end
+    if type(entry.hash) == "string" and entry.hash ~= "" then
+      fields[#fields + 1] = string.format("hash = %q", entry.hash:lower())
+    end
+    out[#out + 1] = string.format("    [%q] = { %s },\n", rel, table.concat(fields, ", "))
+  end
+  out[#out + 1] = "  },\n}\n"
+  return table.concat(out)
+end
+
+-- Dritter Rueckgabewert: die Groesse des Manifests in Bytes. Es traegt
+-- sich selbst nicht in seiner Dateiliste ein (sein eigener Hash waere
+-- selbstbezueglich), wird aber mitinstalliert -- ohne diese Zahl fehlten
+-- bei der Platzberechnung in installer/init.lua ausgerechnet die
+-- zwanzigtausend Bytes, an denen die Installation im Feld gescheitert ist.
 function M.load_remote(url, http_mod)
   local body, err = http_mod.download(url)
   if not body then return nil, err end
@@ -95,7 +161,7 @@ function M.load_remote(url, http_mod)
   if not ok or type(result) ~= "table" then
     return nil, "invalid manifest: " .. tostring(result)
   end
-  return result
+  return result, nil, #body
 end
 
 -- Muss optional=true-Eintraege gegen selected_features filtern, sonst hat
@@ -147,13 +213,18 @@ function M.files_for_role(manifest, role_label, selected_features)
     end
   end
 
+  -- Nur noch, was ein laufender Knoten tatsaechlich von der Platte liest:
+  -- start.lua (Einstieg), release.lua (Buildkennung) und auto_update.lua
+  -- (von start.lua geladen). Alles andere aus installer/ steht in SKIP --
+  -- siehe dort, warum.
   local installer_files = {
-    "installer/http.lua", "installer/manifest.lua", "installer/stage.lua",
-    "installer/ui.lua", "installer/auto_update.lua", "installer/init.lua",
-    "manifest.lua", "release.lua", "start.lua",
+    "installer/auto_update.lua", "release.lua", "start.lua",
   }
   for _, p in ipairs(installer_files) do
-    if not expected[p] then expected[p] = { path = p, always = true } end
+    -- SKIP auch hier beachten: diese Schleife schrieb frueher direkt in
+    -- expected und umging add() -- ein Pfad in SKIP waere trotzdem
+    -- installiert worden.
+    if not SKIP[p] and not expected[p] then expected[p] = { path = p, always = true } end
   end
 
   local extras = ROLE_EXTRAS[role_label:upper()] or {}

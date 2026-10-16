@@ -57,11 +57,27 @@ local function resolve_monitor(monitor_adapter, preferred_name, monitor_scale)
   return nil, preferred_name and ("monitor unavailable: " .. tostring(preferred_name)) or "no monitor found"
 end
 
+local rt_status_base
+
+-- Meldet die Node selbst ein Problem (rt2_problems.lua), ist die Ampel
+-- mindestens orange -- sonst zeigte sie gruen, waehrend MASTER "RT meldet
+-- ein Problem" anzeigt.
 local function rt_status(model)
-  if not model.capacity_ready then return "LIMITED" end
+  local status = rt_status_base(model)
+  local problems = type(model.problems) == "table" and model.problems or {}
+  if #problems > 0 and status ~= "EMERGENCY" then return "WARNING" end
+  return status
+end
+
+function rt_status_base(model)
+  -- Reihenfolge wie in mockup_pages.lua's rt_status(): assignment_state (vom
+  -- Master zugewiesen) zuerst pruefen, sonst faerbt die Ampel einen bewusst
+  -- geparkten/abgeschalteten Knoten faelschlich als "LIMITED" (Kapazitaet
+  -- wird gelernt) statt "muted" (heruntergefahren/wartet auf Zuweisung).
   local assignment = tostring(model.assignment_state or "")
   if assignment == "shutdown" or assignment == "shed" or assignment == "standby" then return "muted" end
   if assignment == "startup" then return "LIMITED" end
+  if not model.capacity_ready then return "LIMITED" end
   local snapshot = model.snapshot and model.snapshot.snapshot or {}
   local target = num(model.target_power, num(snapshot.target_power, 0))
   local actual = num(snapshot.actual_output, 0)
@@ -72,77 +88,24 @@ local function rt_status(model)
   return "WARNING"
 end
 
-function M.collect_reactor_temp_stats(devices, reactor_adapter, log_prefix)
+-- Single inspect() pass per reactor, producing both the per-device detail
+-- record AND the min/max/avg temperature stats -- previously two separate
+-- functions each called reactor_adapter.inspect() independently for the
+-- same reactors, doubling the (expensive, real-peripheral-call) inspect
+-- sweep on every monitor update for no reason.
+function M.build_reactor_status(devices, reactor_adapter, log_prefix)
+  local list = {}
   local min_temp, max_temp, sum_temp, count = nil, nil, 0, 0
   for _, entry in ipairs(devices.reactors or {}) do
     local info = reactor_adapter and type(reactor_adapter.inspect) == "function" and entry and entry.name and reactor_adapter.inspect(entry.name, log_prefix) or nil
-    local temp = type(info) == "table" and info.temperature or nil
+    if type(info) ~= "table" then info = {} end
+    local temp = info.temperature
     if type(temp) == "number" then
       count = count + 1
       sum_temp = sum_temp + temp
       if not min_temp or temp < min_temp then min_temp = temp end
       if not max_temp or temp > max_temp then max_temp = temp end
     end
-  end
-  return min_temp, max_temp, count > 0 and (sum_temp / count) or nil
-end
-
-function M.collect_turbine_rpm_stats(devices, turbine_adapter, read_turbine_rpm, get_device_caps, log_prefix)
-  local min_rpm, max_rpm, sum_rpm, count = nil, nil, 0, 0
-  for _, entry in ipairs(devices.turbines or {}) do
-    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
-      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
-    local rpm = type(info) == "table" and info.rpm or nil
-    if type(rpm) ~= "number" and entry and entry.name
-        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
-      local turbine = peripheral.wrap(entry.name)
-      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
-      rpm = read_turbine_rpm and read_turbine_rpm(turbine, caps) or nil
-    end
-    if type(rpm) == "number" then
-      count = count + 1
-      sum_rpm = sum_rpm + rpm
-      if not min_rpm or rpm < min_rpm then min_rpm = rpm end
-      if not max_rpm or rpm > max_rpm then max_rpm = rpm end
-    end
-  end
-  return min_rpm, max_rpm, count > 0 and (sum_rpm / count) or nil
-end
-
-function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
-  local list, total_output = {}, 0
-  for _, entry in ipairs(devices.turbines or {}) do
-    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
-      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
-    if type(info) ~= "table" then info = {} end
-    local rpm, flow = info.rpm, info.flow
-    if (type(rpm) ~= "number" or type(flow) ~= "number") and entry and entry.name
-        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
-      local turbine = peripheral.wrap(entry.name)
-      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
-      if type(rpm) ~= "number" and read_turbine_rpm then rpm = read_turbine_rpm(turbine, caps) end
-      if type(flow) ~= "number" and read_turbine_flow then flow = read_turbine_flow(turbine, caps) end
-    end
-    local energy = num(info.energy, nil)
-    if energy then total_output = total_output + energy end
-    list[#list + 1] = {
-      id = entry.id,
-      bound = entry.bound ~= false,
-      rpm = rpm,
-      flow = flow,
-      energy = energy,
-      active = info.active,
-      inductor = info.coil_engaged,
-    }
-  end
-  return list, total_output
-end
-
-function M.build_reactor_status_details(devices, reactor_adapter, log_prefix)
-  local list = {}
-  for _, entry in ipairs(devices.reactors or {}) do
-    local info = reactor_adapter and type(reactor_adapter.inspect) == "function" and entry and entry.name and reactor_adapter.inspect(entry.name, log_prefix) or nil
-    if type(info) ~= "table" then info = {} end
     local rods = info.control_rod_level
     if rods == nil and reactor_adapter and type(reactor_adapter.read_control_rods) == "function" and entry and entry.name then
       rods = reactor_adapter.read_control_rods(entry.name, log_prefix)
@@ -164,16 +127,76 @@ function M.build_reactor_status_details(devices, reactor_adapter, log_prefix)
       coolant_filled_percentage = info.coolant_filled_percentage,
     }
   end
-  return list
+  return list, min_temp, max_temp, count > 0 and (sum_temp / count) or nil
+end
+
+-- Same consolidation as M.build_reactor_status() above, for turbines.
+--
+-- flow_reasons (optional, nach Peripheriename): was der Regler je Turbine
+-- zuletzt entschieden hat. Der Grund kommt vom Aufrufer, wie
+-- capacity_override auch -- die Oberflaeche entscheidet nichts selbst.
+--
+-- EIN Leseweg: adapters/turbine.lua's inspect(), derselbe, den der Regler
+-- liest (rt2_adapter.lua). Bis v814 gab es hier einen zweiten: lieferte
+-- inspect() keine Drehzahl oder keinen Durchfluss, las diese Funktion per
+-- peripheral.wrap() und dem Faehigkeiten-Cache ctx.capability_cache noch
+-- einmal nach. Das war in beide Richtungen falsch:
+--
+--   * Der Cache wird von der Discovery einmal je Name geschrieben und nie
+--     erneuert. Kam eine Turbine nach dem Chunk-Laden zuerst mit
+--     verkuerzter Methodenliste zurueck, blieb der Rueckfall fuer immer
+--     stumm -- obwohl der Adapter laengst wieder las.
+--   * Ging er doch, zeigte der Schirm einen Wert, den der Regler NICHT
+--     hatte (beim Durchfluss sogar eine andere Groesse: getFluidFlowRate
+--     ist der Verbrauch, nicht der Sollwert). So sah die Oberflaeche beim
+--     Livetest auf node-101 normal aus, waehrend der Regler blind war
+--     (tests/rt2_unreadable_turbine_write_test.lua).
+--
+-- Jetzt zeigt der Schirm, was der Regler sieht: "nicht lesbar" bleibt
+-- unbekannt (nil -> "-"), nie der String "n/a" (der wuerde das
+-- Zahlenformat der Turbinenseite sprengen).
+function M.build_turbine_status(devices, turbine_adapter, log_prefix, flow_reasons)
+  local list, total_output = {}, 0
+  local min_rpm, max_rpm, sum_rpm, rpm_count = nil, nil, 0, 0
+  local can_inspect = turbine_adapter and type(turbine_adapter.inspect) == "function"
+  for _, entry in ipairs(devices.turbines or {}) do
+    local info = can_inspect and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
+    if type(info) ~= "table" then info = {} end
+    local rpm, flow = num(info.rpm, nil), num(info.flow, nil)
+    if rpm then
+      rpm_count = rpm_count + 1
+      sum_rpm = sum_rpm + rpm
+      if not min_rpm or rpm < min_rpm then min_rpm = rpm end
+      if not max_rpm or rpm > max_rpm then max_rpm = rpm end
+    end
+    local energy = num(info.energy, nil)
+    if energy then total_output = total_output + energy end
+    list[#list + 1] = {
+      id = entry.id,
+      bound = entry.bound ~= false,
+      rpm = rpm,
+      flow = flow,
+      energy = energy,
+      active = info.active,
+      inductor = info.coil_engaged,
+      flow_reason = flow_reasons and entry.name and flow_reasons[entry.name] or nil,
+    }
+  end
+  return list, total_output, min_rpm, max_rpm, rpm_count > 0 and (sum_rpm / rpm_count) or nil
 end
 
 function M.update_status_snapshot(ctx)
   local summary = ctx.devices.registry_summary or ctx.registry:get_summary() or {}
-  local min_temp, max_temp, avg_temp = M.collect_reactor_temp_stats(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
-  local min_rpm, max_rpm, avg_rpm = M.collect_turbine_rpm_stats(
-    ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.get_device_caps, ctx.log_prefix)
-  local turbines, actual_output = M.build_turbine_status_details(ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
-  local capacity = ctx.capacity_learning or {}
+  local reactors, min_temp, max_temp, avg_temp = M.build_reactor_status(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
+  local turbines, actual_output, min_rpm, max_rpm, avg_rpm = M.build_turbine_status(
+    ctx.devices, ctx.turbine_adapter, ctx.log_prefix, ctx.turbine_flow_reasons)
+  -- ctx.capacity_override: der Lernzustand des Reglers, vom Aufrufer
+  -- gegeben. Als es hier noch einen zweiten Lernzustand gab, stand auf dem
+  -- RT-Schirm "KAPAZITAET WIRD GELERNT / CAPACITY 0.0", waehrend im
+  -- Terminal daneben "Einlernen FERTIG: ... RF/t" lief -- zwei Anzeigen
+  -- derselben Node aus zwei Quellen. Die Oberflaeche entscheidet nichts
+  -- selbst: sie nimmt, was der Aufrufer ihr gibt.
+  local capacity = ctx.capacity_override or {}
   ctx.last_status_snapshot = {
     ts = os.epoch("utc"),
     node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id,
@@ -193,10 +216,11 @@ function M.update_status_snapshot(ctx)
     capacity_max = capacity.max_output or (ctx.targets and ctx.targets.capacity_max) or 0,
     capacity_ready = capacity.ready == true,
     capacity_source = capacity.reason or (ctx.targets and ctx.targets.capacity_source) or "unknown",
-    capacity_stable_samples = capacity.ready and 1 or 0,
     capacity_stable_turbines = capacity.at_target or 0,
     capacity_total_turbines = capacity.total_turbines or 0,
-    reactors = M.build_reactor_status_details(ctx.devices, ctx.reactor_adapter, ctx.log_prefix),
+    -- Wieviele Turbinen fuer den Messpunkt noetig sind (80 % der Flotte).
+    capacity_required_turbines = capacity.required_turbines or 0,
+    reactors = reactors,
     turbines = turbines,
   }
   return ctx.last_status_snapshot
@@ -225,7 +249,17 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 function M.update(monitor, ctx)
   if not monitor then return ctx.last_status_snapshot end
   local now = os.epoch("utc")
-  if now - M.last_monitor_update < (ctx.config.monitor_interval * 1000) then return ctx.last_status_snapshot end
+  -- Der Vergleich gilt nur VORWAERTS. Springt os.epoch("utc") zurueck (Welt
+  -- neu geladen), liegt M.last_monitor_update in der Zukunft, die Differenz
+  -- ist negativ und damit immer kleiner als das Intervall -- der Schirm
+  -- waere bis zum Aufholen der Uhr eingefroren, und zwar auf einem alten
+  -- Bild, das gesund aussieht. Dieselbe Regel wie im Regler (siehe
+  -- rt2_master_link.lua's is_connected und rt2_unit.lua's Stellintervall):
+  -- ein Zeitstempel aus der Zukunft wird verworfen, nicht ausgesessen.
+  local since = now - M.last_monitor_update
+  if since >= 0 and since < (ctx.config.monitor_interval * 1000) then
+    return ctx.last_status_snapshot
+  end
   M.last_monitor_update = now
 
   local snapshot = M.update_status_snapshot(ctx)
@@ -261,7 +295,10 @@ function M.update(monitor, ctx)
     local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = node_id,
     current_state = ctx.current_state,
-    node_state = ctx.node_state_machine and ctx.node_state_machine:state() or ctx.current_state,
+    -- ctx.node_state: der projizierte Knotenzustand des Reglers (siehe
+    -- rt2_projection.lua). Die frueher hier stehende Zustandsmaschine ist
+    -- mit v1 entfallen.
+    node_state = ctx.node_state or ctx.current_state,
     configured_reactors = ctx.configured_reactors,
     configured_turbines = ctx.configured_turbines,
     target_power = targets.power,
@@ -272,14 +309,18 @@ function M.update(monitor, ctx)
     capacity_max = snapshot and snapshot.capacity_max or 0,
     capacity_ready = snapshot and snapshot.capacity_ready or false,
     capacity_source = snapshot and snapshot.capacity_source or "unknown",
-    capacity_stable_samples = snapshot and snapshot.capacity_stable_samples or 0,
     capacity_stable_turbines = snapshot and snapshot.capacity_stable_turbines or 0,
     capacity_total_turbines = snapshot and snapshot.capacity_total_turbines or 0,
+    capacity_required_turbines = snapshot and snapshot.capacity_required_turbines or 0,
     binding = ctx.binding,
     build_label = ctx.build_label or ctx.manifest_id or ctx.release_id,
     -- ctx.monitor_scale wird von main.lua gesetzt (der aktuell wirksame,
     -- ggf. per Touch geaenderte Wert).
     monitor_scale = ctx.monitor_scale,
+    -- Verlorene/verspaetete Timer der Lauf-Schleifen, von main.lua gesetzt.
+    loop_stats = ctx.loop_stats,
+    -- Was MASTER als "RT meldet ein Problem" zeigt (rt2_problems.lua).
+    problems = ctx.rt_problems or {},
   }
 
   if not M.monitor_router then

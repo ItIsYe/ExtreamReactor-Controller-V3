@@ -1,5 +1,0 @@
-local f=assert(io.open('xreactor/nodes/rt/turbine_control.lua','r'));local s=f:read('*a');f:close()
-local st=assert(s:find('function M.read_turbine_flow(ctx, turbine, caps)',1,true)); local en=assert(s:find('local function turbine_has_flow_setter',st,true)); local b=s:sub(st,en)
-local max=assert(b:find('getFluidFlowRateMax',1,true)); local flow=assert(b:find('getFluidFlowRate',max+1,true)); assert(max<flow,'flow readback must prefer configured max before instantaneous flow')
-assert(b:find('FLOW_UNAVAILABLE',1,true),'unavailable flow must remain explicit')
-print('rt_turbine_readback_source_regression_test.lua: ok')

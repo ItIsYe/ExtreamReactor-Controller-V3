@@ -21,27 +21,54 @@ if not ok_utils or type(utils) ~= "table" then utils = nil end
 
 local ok_const, constants = pcall(require, "shared.constants")
 if not ok_const or type(constants) ~= "table" then
-  -- Muss zu shared.constants.channels.LOG (6503) passen.
-  constants = { channels = { LOG = 6503 } }
+  -- Muss zu shared.constants.channels.LOG (6503) / LOG_REPLY (6505) passen.
+  constants = { channels = { LOG = 6503, LOG_REPLY = 6505 } }
 end
 
 -- ── Configuration ───────────────────────────────────────────────────────────
 local CHANNEL          = constants.channels and constants.channels.LOG or 6503
+-- Funk-Hygiene v822: Antworten (LOG_ACK, LOG_PING) gehen auf einen eigenen
+-- Kanal. Eine Node ab v822 schreibt ihn als reply_channel in jede Log-Zeile
+-- und schliesst 6503, sobald sie den Collector dort hoert -- dann hoert sie
+-- die Log-Zeilen der anderen Nodes nicht mehr mit. Nodes bis v821 bekommen
+-- ihre Quittung weiter auf 6503.
+local REPLY_CHANNEL    = constants.channels and constants.channels.LOG_REPLY or 6505
 local MAX_LOG_BYTES    = 524288   -- 512 KB per active log file; leaves headroom on 1 MB CC disk
 local MIN_FREE_BYTES   = 8192    -- 8 KB; triggers wipe before disk fills completely
 local DEDUPE_LIMIT     = 512
 local MODEM_REFRESH_S  = 10
 local DISK_REFRESH_S   = 30
+-- Lightweight, unaddressed presence beacon (see core/utils.lua's
+-- logger_reachable()) so every node can passively confirm the collector is
+-- online without first having to send a real log line -- core/utils.lua
+-- treats it as provably offline after ~2x this interval with neither a
+-- ping nor an ACK heard.
+local LOG_PING_INTERVAL_S = 20
 local DRAW_INTERVAL_S  = 5
 local ACTIVE_DRAW_MIN_INTERVAL_S = 1
+-- Takt der Hauptschleife (Ping, Flush, Schirm, Quiesce-Pruefung) und wie
+-- lange darueber hinaus auf seinen Timer gewartet wird. CC:Tweaked verwirft
+-- Ereignisse, sobald 256 in der Warteschlange stehen -- Timer
+-- eingeschlossen. Bis v813 wartete die Schleife auf genau diesen einen
+-- Timer: ging er verloren, standen Ping und Flush bis zum Neustart (die
+-- Knoten hielten den Collector dann fuer offline). Dieselbe Mechanik wie
+-- nodes/support/runtime.lua's make_timer_guard, hier nachgebaut, weil
+-- dieses Modul eigenstaendig bleibt.
+local LOOP_TICK_S = 1
+local LOST_TIMER_GRACE_S = 1.0
 local SELF_ROLE        = "LOG_COLLECTOR"
-local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
+local MONITOR_CFG_FILE = "/xreactor_config/log_monitor.txt"
 -- DISKS_PER_ROLE gruppiert die sortierten Mounts in Bloecken zu je 4 (statt
 -- 1:1 pro Rolle). Feste physische Steckreihenfolge: die ersten 4 Disks = RT,
 -- die naechsten 4 = MASTER usw. (siehe disk_for_role() fuer die Rotation
 -- innerhalb einer Rollen-Gruppe).
 local DISKS_PER_ROLE   = 4
-local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
+-- WATER ist seit v830 raus. Die Zuordnung Disk -> Rolle laeuft ueber das
+-- Disk-Label (parse_label: "XR-<ROLLE>-<slot>"), nicht ueber die Position in
+-- dieser Liste -- FUEL/REPROCESSING/LOG-Disks behalten ihr Label. Eine noch
+-- als WATER beschriftete Disk gilt jetzt als fremd beschriftet und wird wie
+-- eine leere der naechsten Rolle mit freiem Platz zugeteilt.
+local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "FUEL", "REPROCESSING", "LOG" }
 
 -- ── Runtime state ───────────────────────────────────────────────────────────
 local stats = {
@@ -68,6 +95,8 @@ local stats = {
   disk_refreshes = 0,
   next_modem_refresh = 0,
   next_disk_refresh = 0,
+  next_ping = 0,
+  ping_sent = 0,
   display = nil,
   display_name = "term",
   paused = false,
@@ -143,6 +172,16 @@ local function now_s()
     if ok and type(value) == "number" then return math.floor(value) end
   end
   return 0
+end
+
+-- Servertakte in Sekunden (os.clock): dieselbe Zeitbasis wie
+-- os.startTimer(), monoton -- fuer das Erkennen eines ausgebliebenen Timers.
+local function clock_s()
+  if os and type(os.clock) == "function" then
+    local ok, value = pcall(os.clock)
+    if ok and type(value) == "number" then return value end
+  end
+  return nil
 end
 
 local function now_ms()
@@ -499,9 +538,16 @@ local function disk_for_role(role)
   if #stats.disks == 0 then return nil end
   local idx = role_index(role)
   if not idx then
-    -- Unbekannte Rolle: wie zuvor Fallback auf irgendeine Disk, damit
-    -- nichts komplett verloren geht.
-    return stats.disks[stats.disk_index] or stats.disks[1]
+    -- Unbekannte Rolle: Fallback auf irgendeine Disk, damit nichts komplett
+    -- verloren geht. stats.disk_index rotiert nach jeder Zuweisung ueber
+    -- alle Disks (statt wie zuvor dauerhaft auf 1 stehenzubleiben) -- sonst
+    -- landen alle Logs unbekannter Rollen dauerhaft auf derselben Disk,
+    -- waehrend die anderen leer bleiben.
+    stats.disk_index = stats.disk_index or 1
+    if stats.disk_index > #stats.disks then stats.disk_index = 1 end
+    local disk = stats.disks[stats.disk_index] or stats.disks[1]
+    stats.disk_index = (stats.disk_index % #stats.disks) + 1
+    return disk
   end
 
   -- Round-Robin ueber alle Disks der Rolle (persistenter Cursor pro Rolle,
@@ -573,6 +619,7 @@ end
 local flush_bucket
 local flush_due
 local send_ack
+local send_acks
 local FLUSH_LINES = 8
 local FLUSH_INTERVAL_MS = 200
 local MAX_PENDING_LINES_PER_PATH = 128
@@ -694,10 +741,10 @@ flush_bucket = function(path)
 
   for _, payload in ipairs(bucket.payloads) do
     stats.written = stats.written + 1
-    send_ack(payload, "written")
     stats.node_last_written = stats.node_last_written or {}
     stats.node_last_written[tostring(payload.node_id or "?")] = { ts = now_s(), role = tostring(payload.role or "?") }
   end
+  send_acks(bucket.payloads, "written")
   if bucket.disk then
     stats.last_write_index = bucket.disk.id
     stats.last_write_mount = bucket.disk.mount
@@ -819,20 +866,10 @@ local function refresh_modems(force)
   stats.modem_refreshes = stats.modem_refreshes + 1
 end
 
-send_ack = function(payload, status)
-  if not payload.ack or not payload.event_id then return end
-  local ack = {
-    type = "LOG_ACK",
-    proto = "xreactor-log-v2",
-    event_id = payload.event_id,
-    to_node = payload.node_id,
-    collector_node = computer_node_id(),
-    status = status or "written",
-    ts = now_ms(),
-  }
-  -- Bevorzugtes Wireless-Modem wird einmal versucht, weitere Modems
-  -- (Fallback) nur bei tatsaechlichem Sendefehler -- sonst kommen bei
-  -- Wireless+Wired mehrere identische ACKs beim Sender an.
+-- Ein LOG_ACK ueber das bevorzugte Wireless-Modem senden; weitere Modems
+-- (Fallback) nur bei tatsaechlichem Sendefehler -- sonst kommen bei
+-- Wireless+Wired mehrere identische ACKs beim Sender an.
+local function transmit_ack(ack, channel)
   local entries = stats.modems or {}
   local ordered = {}
   for _, entry in ipairs(entries) do
@@ -841,9 +878,100 @@ send_ack = function(payload, status)
   for _, entry in ipairs(ordered) do
     local modem = entry.modem
     if modem and type(modem.transmit) == "function" then
-      local ok = pcall(modem.transmit, CHANNEL, CHANNEL, ack)
+      local ok = pcall(modem.transmit, channel, channel, ack)
       if ok then
         stats.ack_sent = stats.ack_sent + 1
+        return true
+      end
+    end
+  end
+  return false
+end
+
+send_ack = function(payload, status)
+  if not payload.ack or not payload.event_id then return end
+  -- Nur der bekannte Antwortkanal: ein beliebiger Kanal aus einer
+  -- Funkmeldung wird nie uebernommen.
+  local reply = (REPLY_CHANNEL ~= nil and payload.reply_channel == REPLY_CHANNEL) and REPLY_CHANNEL or CHANNEL
+  transmit_ack({
+    type = "LOG_ACK",
+    proto = "xreactor-log-v2",
+    event_id = payload.event_id,
+    to_node = payload.node_id,
+    collector_node = computer_node_id(),
+    status = status or "written",
+    ts = now_ms(),
+  }, reply)
+end
+
+-- Quittungen fuer mehrere geschriebene Zeilen (flush_bucket). Funk-Hygiene
+-- v822: bis v821 ging je Log-ZEILE ein LOG_ACK raus, an jeden Rechner der
+-- Anlage -- ein Vielfaches der Log-Sendungen selbst, denn eine Node buendelt
+-- bis zu 8 Zeilen in eine Sendung. Nodes ab v822 (erkennbar an
+-- reply_channel) bekommen EIN LOG_ACK mit allen event_ids auf dem
+-- Antwortkanal; aeltere wie bisher eines je Zeile auf 6503.
+local ACK_IDS_MAX = 32
+send_acks = function(payloads, status)
+  local groups, order = {}, {}
+  for _, payload in ipairs(payloads or {}) do
+    if payload.ack and payload.event_id and REPLY_CHANNEL ~= nil
+        and payload.reply_channel == REPLY_CHANNEL then
+      local key = tostring(payload.node_id)
+      local group = groups[key]
+      if not group then
+        group = { node_id = payload.node_id, ids = {} }
+        groups[key] = group
+        order[#order + 1] = key
+      end
+      group.ids[#group.ids + 1] = payload.event_id
+    else
+      send_ack(payload, status)
+    end
+  end
+  for _, key in ipairs(order) do
+    local group = groups[key]
+    for first = 1, #group.ids, ACK_IDS_MAX do
+      local chunk = {}
+      for index = first, math.min(first + ACK_IDS_MAX - 1, #group.ids) do
+        chunk[#chunk + 1] = group.ids[index]
+      end
+      transmit_ack({
+        type = "LOG_ACK",
+        proto = "xreactor-log-v2",
+        event_ids = chunk,
+        to_node = group.node_id,
+        collector_node = computer_node_id(),
+        status = status or "written",
+        ts = now_ms(),
+      }, REPLY_CHANNEL)
+    end
+  end
+end
+
+-- Unaddressed presence beacon -- see core/utils.lua's logger_reachable().
+-- Deliberately NOT a LOG_ACK (those are per-event and directed at
+-- payload.node_id): this has no recipient and no event_id, so it can't be
+-- mistaken for one and never touches the dedupe/pending machinery.
+local function broadcast_ping()
+  local ping = {
+    type = "LOG_PING",
+    proto = "xreactor-log-v2",
+    collector_node = computer_node_id(),
+    ts = now_ms(),
+  }
+  local entries = stats.modems or {}
+  local ordered = {}
+  for _, entry in ipairs(entries) do
+    if entry.wireless then table.insert(ordered, 1, entry) else table.insert(ordered, entry) end
+  end
+  -- Auf beiden Kanaelen: Nodes ab v822 hoeren 6505, aeltere 6503.
+  for _, entry in ipairs(ordered) do
+    local modem = entry.modem
+    if modem and type(modem.transmit) == "function" then
+      local ok = pcall(modem.transmit, CHANNEL, CHANNEL, ping)
+      if ok then
+        pcall(modem.transmit, REPLY_CHANNEL, REPLY_CHANNEL, ping)
+        stats.ping_sent = stats.ping_sent + 1
         return
       end
     end
@@ -1078,6 +1206,17 @@ local function draw()
 end
 
 -- ── Display selection ───────────────────────────────────────────────────────
+-- Ampel-Form bei Skala 1 (1x1 = 7x5, 1x3 = 7x17-21) -- dieselbe Regel wie
+-- adapters/monitor.lua, das auf dem LOG-Collector nicht installiert ist.
+-- Eine Ampel (optional/ampel.lua) darf nie zur Log-Anzeige werden.
+local function is_ampel_monitor(monitor)
+  local ok_orig, orig = pcall(monitor.getTextScale)
+  local ok_scale = pcall(monitor.setTextScale, 1)
+  local ok_size, w, h = pcall(monitor.getSize)
+  if ok_scale and ok_orig and type(orig) == "number" then pcall(monitor.setTextScale, orig) end
+  return ok_size and w == 7 and (h == 5 or (type(h) == "number" and h >= 17 and h <= 21))
+end
+
 local function find_display()
   local configured = trim(safe_read(MONITOR_CFG_FILE) or "")
   if configured ~= "" and peripheral and peripheral.wrap then
@@ -1093,7 +1232,7 @@ local function find_display()
         local ok_type, ptype = pcall(peripheral.getType, name)
         if ok_type and tostring(ptype or ""):lower():find("monitor", 1, true) then
           local ok_wrap, monitor = pcall(peripheral.wrap, name)
-          if ok_wrap and monitor then return name, monitor end
+          if ok_wrap and monitor and not is_ampel_monitor(monitor) then return name, monitor end
         end
       end
     end
@@ -1102,9 +1241,29 @@ local function find_display()
   return "term", term
 end
 
+-- ── Optionale Ampel ─────────────────────────────────────────────────────────
+-- optional/ampel.lua ist ein Zusatzmodul: ist es nicht installiert, passiert
+-- hier nichts. Farbe nach nodes/log_collector/ampel_status.lua.
+local ampel_instance = nil
+do
+  local ok_mod, ampel_mod = pcall(require, "optional.ampel")
+  if ok_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" then
+    local ok_new, instance = pcall(ampel_mod.new)
+    if ok_new then ampel_instance = instance end
+  end
+end
+local ok_ampel_status, ampel_status = pcall(require, "nodes.log_collector.ampel_status")
+
+local function render_ampel()
+  if not ampel_instance or not ok_ampel_status then return end
+  pcall(function()
+    ampel_instance.render(stats.display_name, ampel_status.status(stats))
+  end)
+end
+
 -- ── Packet handling ─────────────────────────────────────────────────────────
 local function valid_log_event(message)
-  return type(message) == "table" and message.type == "LOG_EVENT"
+  return type(message) == "table" and (message.type == "LOG_EVENT" or message.type == "LOG_EVENT_BATCH")
 end
 
 local function handle_log_event(message)
@@ -1132,6 +1291,27 @@ local function handle_log_event(message)
     flush_due()
   else
     if err ~= "paused" then stats.last_error = err end
+  end
+end
+
+-- Senders (core/utils.lua) coalesce several log lines emitted in quick
+-- succession into ONE modem.transmit() as { type="LOG_EVENT_BATCH",
+-- entries={payload1, payload2, ...} } instead of one transmission per
+-- line -- each entry is a self-contained payload with its own event_id, so
+-- it's processed exactly like a standalone LOG_EVENT (dedupe/ack/write all
+-- unchanged), just pcall-isolated per entry so one malformed entry can't
+-- drop the rest of the batch.
+local function handle_log_event_batch(message)
+  local entries = message.entries
+  if type(entries) ~= "table" then return end
+  for _, entry in ipairs(entries) do
+    if type(entry) == "table" then
+      local ok, err = pcall(handle_log_event, entry)
+      if not ok then
+        stats.dropped = stats.dropped + 1
+        stats.last_error = "batch entry crashed: " .. tostring(err):sub(1, 70)
+      end
+    end
   end
 end
 
@@ -1217,21 +1397,70 @@ local function run()
 
   draw()
 
-  local timer = os.startTimer and os.startTimer(1)
+  local timer = os.startTimer and os.startTimer(LOOP_TICK_S)
+  local timer_started = clock_s()
   local quiesced = false
+  local tick_ran = false
+  local function rearm()
+    timer = os.startTimer and os.startTimer(LOOP_TICK_S)
+    timer_started = clock_s()
+  end
   while true do
     local event = { os.pullEvent() }
     local name = event[1]
+    tick_ran = false
 
     -- Jeder Event-Zweig einzeln pcall-isoliert: ein Fehler wird geloggt, der
     -- Loop laeuft beim naechsten Event weiter statt den ganzen Node zum
     -- Crash-Screen zu fuehren.
     local branch_ok, branch_err = pcall(function()
+      local own_timer = name == "timer" and event[2] == timer
+      local now_clock = (timer ~= nil and not own_timer) and clock_s() or nil
+      local overdue = timer_started ~= nil and now_clock ~= nil
+        and now_clock - timer_started >= LOOP_TICK_S + LOST_TIMER_GRACE_S
+      if overdue then
+        stats.timer_compensated = (stats.timer_compensated or 0) + 1
+        diag(string.format("Takt-Timer ausgeblieben -- weitergemacht (%d)", stats.timer_compensated))
+      end
+      if own_timer or overdue then
+        tick_ran = true
+        refresh_disks(false)
+        refresh_modems(false)
+        if now_s() >= stats.next_ping then
+          stats.next_ping = now_s() + LOG_PING_INTERVAL_S
+          broadcast_ping()
+        end
+        check_log_freshness()
+        flush_due()
+        if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
+        render_ampel()
+        -- LOG_COLLECTOR hat keine physischen Aktoren zu quiescen -- der
+        -- Handler bestaetigt sofort einen sicheren Zustand und verlaesst
+        -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
+        -- unbegrenzt weiterzulaufen.
+        local quiesce_handshake = _G.__xreactor_update_handshake
+        if quiesce_handshake then
+          local ok_uh, update_handshake = pcall(dofile, "/xreactor/core/update_handshake.lua")
+          if ok_uh and update_handshake.is_quiesce_requested(quiesce_handshake) then
+            update_handshake.mark_safe_outputs_applied(quiesce_handshake)
+            update_handshake.mark_runtime_stopped(quiesce_handshake)
+            self_log("Quiesce angefordert -- Event-Loop wird kontrolliert beendet", "WARN")
+            quiesced = true
+          end
+        end
+        if not quiesced then rearm() end
+        if own_timer then return end
+      end
       if name == "modem_message" then
         local channel = event[3]
         local message = event[5]
         if channel == CHANNEL and valid_log_event(message) then
-          local ok, err = pcall(handle_log_event, message)
+          local ok, err
+          if message.type == "LOG_EVENT_BATCH" then
+            ok, err = pcall(handle_log_event_batch, message)
+          else
+            ok, err = pcall(handle_log_event, message)
+          end
           if not ok then
             stats.dropped = stats.dropped + 1
             stats.last_error = "handle crashed: " .. tostring(err):sub(1, 70)
@@ -1257,29 +1486,6 @@ local function run()
         refresh_disks(true)
         refresh_modems(true)
         draw()
-      elseif name == "timer" and event[2] == timer then
-        refresh_disks(false)
-        refresh_modems(false)
-        check_log_freshness()
-        flush_due()
-        if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
-        -- LOG_COLLECTOR hat keine physischen Aktoren zu quiescen -- der
-        -- Handler bestaetigt sofort einen sicheren Zustand und verlaesst
-        -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
-        -- unbegrenzt weiterzulaufen.
-        local quiesce_handshake = _G.__xreactor_update_handshake
-        if quiesce_handshake then
-          local ok_uh, update_handshake = pcall(dofile, "/xreactor/core/update_handshake.lua")
-          if ok_uh and update_handshake.is_quiesce_requested(quiesce_handshake) then
-            update_handshake.mark_safe_outputs_applied(quiesce_handshake)
-            update_handshake.mark_runtime_stopped(quiesce_handshake)
-            self_log("Quiesce angefordert -- Event-Loop wird kontrolliert beendet", "WARN")
-            quiesced = true
-          end
-        end
-        if not quiesced then
-          timer = os.startTimer and os.startTimer(1)
-        end
       end
     end)
     if quiesced then return end
@@ -1288,10 +1494,8 @@ local function run()
       diag(stats.last_error)
       pcall(self_log, stats.last_error, "ERROR")
       -- Timer evtl. durch den Fehler nicht neu gestartet — sicherstellen,
-      -- dass der naechste "timer"-Zweig weiterhin ausgeloest wird.
-      if name == "timer" and event[2] == timer and os.startTimer then
-        timer = os.startTimer(1)
-      end
+      -- dass der naechste Takt weiterhin ausgeloest wird.
+      if tick_ran and os.startTimer then rearm() end
     end
   end
 end
@@ -1331,11 +1535,16 @@ end
 -- (5 Minuten) verlaengert.
 local wait_s = is_loop and CRASH_LOOP_WAIT_S or 30
 local ok_wait = pcall(function()
+  local started = clock_s()
   local timer_id = os.startTimer(wait_s)
   while true do
     local ev = { os.pullEvent() }
     if ev[1] == "key" then return end
     if ev[1] == "timer" and ev[2] == timer_id then return end
+    -- Kam der Timer nicht (verworfenes Ereignis, siehe LOST_TIMER_GRACE_S),
+    -- beendet die Uhr das Warten -- sonst stuende der Crash-Schirm ewig.
+    local now = clock_s()
+    if started and now and now - started >= wait_s + LOST_TIMER_GRACE_S then return end
   end
 end)
 if os and os.reboot then os.reboot() end

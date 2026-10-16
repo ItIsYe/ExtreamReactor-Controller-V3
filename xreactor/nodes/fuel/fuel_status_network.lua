@@ -130,6 +130,37 @@ local function remove_direct(cache, global_id)
   end
 end
 
+-- Wie viele Reaktoren das NETZ ueberhaupt kennt -- unabhaengig davon, welche
+-- in fuel_routes.lua stehen.
+--
+-- Das ist der Unterschied zwischen zwei Lagen, die auf dem Schirm bisher
+-- gleich aussahen und VERSCHIEDENE Handlungen brauchen:
+--
+--   Netz kennt Reaktoren, aber nicht den konfigurierten -> die reactor_id in
+--     der Route passt nicht (von Hand getippt, oder gelernt bevor das
+--     Multiblock neu gebaut wurde). Abhilfe: Route neu einlernen.
+--   Netz kennt gar keine -> es kommen keine Daten an. Abhilfe: RT/MASTER
+--     und Funk pruefen.
+--
+-- Gezaehlt werden GLOBALE Kennungen, damit ein Reaktor, der unter seiner
+-- kurzen Kennung zusaetzlich als Alias liegt, nicht doppelt zaehlt.
+function M.known_reactor_count(cache)
+  if type(cache) ~= "table" then return 0 end
+  local seen = {}
+  for _, bucket_name in ipairs({ "master_relay", "direct_heard" }) do
+    local bucket = cache[bucket_name]
+    if type(bucket) == "table" then
+      for key, entry in pairs(bucket) do
+        local id = (type(entry) == "table" and entry.global_reactor_id) or key
+        if id ~= nil then seen[tostring(id)] = true end
+      end
+    end
+  end
+  local count = 0
+  for _ in pairs(seen) do count = count + 1 end
+  return count
+end
+
 function M.prune(cache, now)
   now = tonumber(now) or os.epoch("utc")
   for id, entry in pairs(cache.master_relay or {}) do
@@ -178,7 +209,24 @@ local function store_direct(cache, message, reactor, now)
   return true
 end
 
-function M.make_overhear_service(cache, constants)
+-- status_channel: der TATSAECHLICH konfigurierte Status-Kanal dieser Node
+-- (services/comms_service.lua's sanitize_channels setzt ihn aus
+-- config.channels.status, Default constants.channels.STATUS). Vorher stand
+-- hier fest constants.channels.STATUS -- eine Anlage mit abweichend
+-- konfigurierten Kanaelen haette die RT-Broadcasts stillschweigend nie
+-- mitgehoert und ausschliesslich am (langsameren) Master-Relais gehangen.
+-- Welche Funkmeldungen FUEL INHALTLICH braucht (core/comms.lua,
+-- payload_filter): derselbe Filter wie fuer jede Rolle ausser MASTER
+-- (services/comms_service.lua, follower_payload_filter -- dort die
+-- Begruendung). Eingefuehrt in v820 fuer FUEL, seit v821 fuer alle Rollen
+-- ausser MASTER. Die RT-Fuellstaende liest der Mithoerer unten direkt vom
+-- Kanal, nicht ueber comms.
+function M.make_payload_filter(_constants)
+  return require("services.comms_service").follower_payload_filter()
+end
+
+function M.make_overhear_service(cache, constants, status_channel)
+  local channel = tonumber(status_channel) or constants.channels.STATUS
   return {
     name = "fuel_status_overhear",
     wants_events = true,
@@ -186,9 +234,15 @@ function M.make_overhear_service(cache, constants)
       local now = os.epoch("utc")
       M.prune(cache, now)
       if not (event and event[1] == "modem_message") then return end
-      if event[3] ~= constants.channels.STATUS then return end
+      if event[3] ~= channel then return end
       local raw = event[5]
       if type(raw) ~= "table" then return end
+      -- Nur RT-Statusmeldungen interessieren -- das VOR dem Pruefen und
+      -- Kopieren entscheiden. Bis v819 wurde jede Statusmeldung jeder Node
+      -- (29 Ventile, ENERGY, MASTER, ...) erst komplett kopiert und dann
+      -- verworfen. sanitize_message() reicht type und role unveraendert
+      -- durch; die Pruefung unten bleibt fuer die RT-Meldungen bestehen.
+      if raw.type ~= constants.message_types.STATUS or raw.role ~= constants.roles.RT_NODE then return end
 
       -- This listener runs outside comms_service. Validate the original
       -- envelope before sanitizing it: sanitize_message supplies defaults and
@@ -215,7 +269,5 @@ function M.make_overhear_service(cache, constants)
     end,
   }
 end
-
-M._store_direct = store_direct
 
 return M

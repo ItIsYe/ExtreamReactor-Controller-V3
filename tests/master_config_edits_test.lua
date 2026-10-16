@@ -8,7 +8,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 local config_edits = require('master.config_edits')
 
 local constants = {
-  roles = { FUEL_NODE = 'FUEL-NODE', WATER_NODE = 'WATER-NODE', RT_NODE = 'RT-NODE' },
+  roles = { FUEL_NODE = 'FUEL-NODE', RT_NODE = 'RT-NODE' },
 }
 
 local function assert_eq(actual, expected, message)
@@ -41,7 +41,7 @@ do
   local nodes = {
     ['FUEL-1'] = { role = constants.roles.FUEL_NODE },
     ['FUEL-2'] = { role = constants.roles.FUEL_NODE },
-    ['WATER-1'] = { role = constants.roles.WATER_NODE },
+    ['RT-1'] = { role = constants.roles.RT_NODE },
   }
   local edits_state = {}
   local t1 = config_edits.cycle_target(edits_state, 'fuel_reserve', nodes, constants)
@@ -59,7 +59,7 @@ do
   local nodes = {
     ['FUEL-1'] = { role = constants.roles.FUEL_NODE },
     ['FUEL-2'] = { role = constants.roles.FUEL_NODE },
-    ['WATER-1'] = { role = constants.roles.WATER_NODE },
+    ['RT-1'] = { role = constants.roles.RT_NODE },
   }
   local comms = make_comms()
   local edits_state = {}
@@ -78,12 +78,12 @@ do
   assert_eq(st.pending.value, 4200, 'pending value must match')
   assert_eq(st.pending.targets['FUEL-1'].status, 'QUEUED', 'each target starts as QUEUED')
   assert_eq(st.pending.targets['FUEL-2'].status, 'QUEUED', 'each target starts as QUEUED')
-  assert_true(st.pending.targets['WATER-1'] == nil, 'a WATER node must not receive the FUEL command')
+  assert_true(st.pending.targets['RT-1'] == nil, 'an RT node must not receive the FUEL command')
 end
 
 -- 3. send_edit: no matching node -> failure, nothing sent.
 do
-  local nodes = { ['WATER-1'] = { role = constants.roles.WATER_NODE } }
+  local nodes = { ['RT-1'] = { role = constants.roles.RT_NODE } }
   local comms = make_comms()
   local edits_state = {}
   local ok, err = config_edits.send_edit(edits_state, 'fuel_reserve', 1000, { nodes = nodes, comms = comms, constants = constants })
@@ -108,20 +108,94 @@ do
   assert_eq(comms.sent[1].id, 'FUEL-2', 'the selected node, not FUEL-1, must receive the command')
 end
 
--- 5. send_edit: a stale selected target (no longer present / role
---    changed) falls back to ALL rather than silently doing nothing.
+-- 5. send_edit: ein nicht mehr vorhandenes Einzelziel (verschwunden,
+--    umbenannt, Rolle gewechselt) darf den Zielbereich NICHT erweitern.
+--
+--    Frueher fiel der Versand hier auf ALLE Nodes der Rolle zurueck. Die
+--    Begruendung damals war, dass ein verschwundener Node keinen "toten"
+--    Editor hinterlassen soll -- aber der Preis war, dass eine fuer genau
+--    einen Node gedachte Konfigurationsaenderung jeden Node derselben
+--    Rolle erreichte. Gegenprobe gegen den alten Stand: Ziel "FUEL-gone"
+--    bei vorhandenen FUEL-a/b/c -> alle drei bekamen den Reservebefehl.
+--
+--    Der Editor bleibt trotzdem bedienbar: der Versand scheitert NICHT
+--    still, sondern mit einer Begruendung, und cycle_target() waehlt
+--    weiter.
 do
-  local nodes = { ['FUEL-1'] = { role = constants.roles.FUEL_NODE } }
+  local nodes = {
+    ['FUEL-1'] = { role = constants.roles.FUEL_NODE },
+    ['FUEL-2'] = { role = constants.roles.FUEL_NODE },
+  }
   local comms = make_comms()
   local warn_logs = {}
   local edits_state = { fuel_reserve = { target = 'FUEL-GONE' } }
-  local ok, count = config_edits.send_edit(edits_state, 'fuel_reserve', 500, {
+  local ok, err = config_edits.send_edit(edits_state, 'fuel_reserve', 500, {
     nodes = nodes, comms = comms, constants = constants,
     log = function(msg, level) if level == 'WARN' then warn_logs[#warn_logs + 1] = msg end end,
   })
-  assert_true(ok, 'send_edit must fall back to ALL when the selected target vanished')
-  assert_eq(count, 1, 'the fallback must still reach the remaining matching node')
-  assert_true(#warn_logs >= 1, 'a stale target selection must be logged as WARN')
+  assert_true(not ok, 'ein verschwundenes Einzelziel darf nicht auf ALLE erweitert werden')
+  assert_eq(#comms.sent, 0, 'und es darf gar nichts gesendet werden')
+  assert_true(type(err) == 'string' and err:find('FUEL-GONE', 1, true) ~= nil,
+    'der Fehlertext muss das nicht verfuegbare Ziel benennen, damit der Editor nicht stumm bleibt')
+  assert_true(#warn_logs >= 1, 'und es muss als WARN protokolliert sein')
+
+  -- Derselbe Fall mit gewechselter Rolle.
+  local nodes2 = {
+    ['FUEL-1'] = { role = constants.roles.RT_NODE },
+    ['FUEL-2'] = { role = constants.roles.FUEL_NODE },
+  }
+  local comms2 = make_comms()
+  local ok2 = config_edits.send_edit({ fuel_reserve = { target = 'FUEL-1' } },
+    'fuel_reserve', 500,
+    { nodes = nodes2, comms = comms2, constants = constants, log = function() end })
+  assert_true(not ok2, 'ein Ziel mit gewechselter Rolle darf ebenfalls nicht erweitern')
+  assert_eq(#comms2.sent, 0)
+
+  -- ALLE bleibt moeglich -- aber nur, wenn es ausdruecklich ausgewaehlt ist.
+  local comms3 = make_comms()
+  local ok3, count3 = config_edits.send_edit({ fuel_reserve = { target = 'ALL' } },
+    'fuel_reserve', 500,
+    { nodes = nodes, comms = comms3, constants = constants, log = function() end })
+  assert_true(ok3, 'eine ausdrueckliche ALLE-Auswahl sendet weiterhin an alle')
+  assert_eq(count3, 2)
+end
+
+-- 5b. Ein ACK einer FREMDEN Quelle darf einen Edit nicht bestaetigen.
+--
+--     core/comms.lua prueft die Quelle fuer seinen Inflight-Eintrag und
+--     verwirft das ACK dort korrekt -- rief danach aber unbedingt
+--     dispatch_handlers(). Dieser Handler korrelierte ausschliesslich
+--     ueber die Nachrichten-ID, also bestaetigte ein ACK eines anderen
+--     Nodes mit derselben ID den Edit des eigentlichen Ziels.
+do
+  local comms = make_comms()
+  local edits_state = { fuel_reserve = { target = 'FUEL-1' } }
+  config_edits.send_edit(edits_state, 'fuel_reserve', 500, {
+    nodes = { ['FUEL-1'] = { role = constants.roles.FUEL_NODE } },
+    comms = comms, constants = constants, log = function() end,
+  })
+  local mid = comms.sent[1].message_id
+
+  local accepted = config_edits.handle_ack_applied(edits_state, {
+    ack_for = mid, src = 'FUEL-OTHER',
+    payload = { result = { ok = true, persisted = true } },
+  })
+  assert_true(not accepted, 'ein ACK einer fremden Quelle darf nicht angenommen werden')
+  assert_true(edits_state.fuel_reserve.confirmed_value ~= 500,
+    'und darf den bestaetigten Wert nicht setzen')
+
+  local delivered = config_edits.handle_ack_delivered(edits_state, {
+    ack_for = mid, src = 'FUEL-OTHER',
+  })
+  assert_true(not delivered, 'dasselbe gilt fuer die Zustellquittung')
+
+  -- Das ECHTE Ziel wird weiterhin angenommen.
+  local ok_real = config_edits.handle_ack_applied(edits_state, {
+    ack_for = mid, src = 'FUEL-1',
+    payload = { result = { ok = true, persisted = true } },
+  })
+  assert_true(ok_real, 'das ACK des eigentlichen Ziels muss weiterhin greifen')
+  assert_eq(edits_state.fuel_reserve.confirmed_value, 500)
 end
 
 -- 6. ACK_DELIVERED then ACK_APPLIED for ALL targets: confirmed_value only

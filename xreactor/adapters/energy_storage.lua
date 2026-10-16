@@ -1,15 +1,12 @@
 local utils = require("core.utils")
+local once_log = require("core.once_log")
 
 local energy_storage = {}
-local warned = {}
+-- getMethods-Fehlschlag einmal je Stoerung statt einmal je Laufzeit
+-- (core/once_log.lua): klappt das Erkennen wieder, wird die naechste
+-- Stoerung erneut gemeldet.
+local methods_once = once_log.new()
 
-local function log_once(prefix, key, message)
-  if warned[key] then
-    return
-  end
-  warned[key] = true
-  utils.log(prefix or "STORAGE", message, "WARN")
-end
 
 local function to_set(list)
   local out = {}
@@ -55,19 +52,27 @@ function energy_storage.detect(name, log_prefix)
   local ok, methods = pcall(peripheral.getMethods, name)
   if not ok or type(methods) ~= "table" then
     if not ok then
-      log_once(log_prefix, "methods:" .. tostring(name), "Energy storage methods failed for " .. tostring(name) .. ": " .. tostring(methods))
+      if methods_once.report(name, "methods") then
+        utils.log(log_prefix or "STORAGE", "Energy storage methods failed for " .. tostring(name) .. ": " .. tostring(methods), "WARN")
+      end
     end
     return nil
   end
+  methods_once.recover(name, "methods")
   local method_set = to_set(methods)
   local profile = resolve_profile(method_set)
   if not profile then
     return nil
   end
   local type_name = peripheral.getType(name) or "unknown"
+  -- capacity war bisher hart auf true gesetzt, obwohl das ER2-Passive-
+  -- Reaktorport-Profil (getEnergyStored + getEnergyProducedLastTick) keine
+  -- Kapazitaets-Methode hat (profile.capacity == nil, siehe resolve_profile
+  -- oben) -- getCapacity() liefert dort immer nil, aber features.capacity
+  -- behauptete faelschlich, das Feature sei vorhanden.
   local features = {
     stored = true,
-    capacity = true,
+    capacity = profile.capacity ~= nil,
     input = profile.input ~= nil,
     output = profile.output ~= nil
   }

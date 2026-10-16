@@ -89,13 +89,13 @@ do
   local fake_comms_for_edit = {
     send_command = function() return { message = { message_id = 'MSG-TIMEOUT-1' } } end,
   }
-  config_edits.send_edit(edits_state, 'water_target', 500, { nodes = { ['WATER-1'] = { role = constants.roles.WATER_NODE } }, comms = fake_comms_for_edit, constants = constants })
+  config_edits.send_edit(edits_state, 'fuel_reserve', 500, { nodes = { ['FUEL-1'] = { role = constants.roles.FUEL_NODE } }, comms = fake_comms_for_edit, constants = constants })
 
   local timed_out_message = {
     type = constants.message_types.COMMAND,
     message_id = 'MSG-TIMEOUT-1',
-    dst = 'WATER-1',
-    payload = { command = { target = 'SET_TARGET', value = 500 } },
+    dst = 'FUEL-1',
+    payload = { command = { target = 'SET_RESERVE', value = 500 } },
   }
   local housekeeping_comms = {
     consume_timeouts = function() return { { message = timed_out_message } } end,
@@ -108,16 +108,16 @@ do
     on_config_edit_change = function() end,
   })
 
-  assert_eq(edits_state.water_target.pending.targets['WATER-1'].status, 'TIMEOUT',
+  assert_eq(edits_state.fuel_reserve.pending.targets['FUEL-1'].status, 'TIMEOUT',
     'an exhausted-retry command timeout must be fed into config_edits.handle_timeout via the outgoing message_id')
-  local model = config_edits.model_for(edits_state, 'water_target', 0)
+  local model = config_edits.model_for(edits_state, 'fuel_reserve', 0)
   assert_eq(model.confirmed_value, 0, 'a timed-out edit must not promote the confirmed value')
   assert_true(model.pending.resolved == true, 'a timed-out single-target edit must resolve (not hang forever as pending)')
   -- Pre-existing behavior (unrelated to this fix) must still work: the
   -- generic per-node last_command_result is still recorded for the
   -- overview/diagnostics pages.
-  assert_true(nodes['WATER-1'] ~= nil, 'housekeeping must still register the node for the generic timeout bookkeeping')
-  assert_eq(nodes['WATER-1'].last_command_result.reason_code, 'ACK_TIMEOUT', 'generic last_command_result timeout bookkeeping must be unchanged')
+  assert_true(nodes['FUEL-1'] ~= nil, 'housekeeping must still register the node for the generic timeout bookkeeping')
+  assert_eq(nodes['FUEL-1'].last_command_result.reason_code, 'ACK_TIMEOUT', 'generic last_command_result timeout bookkeeping must be unchanged')
 end
 
 print('master_config_edit_ack_wiring_test.lua: ok')

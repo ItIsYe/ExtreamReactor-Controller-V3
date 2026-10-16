@@ -4,7 +4,7 @@ local CONFIG = {
   DEBUG_LOG_ENABLED = nil,
   BOOTSTRAP_LOG_ENABLED = false,
   BOOTSTRAP_LOG_PATH = nil,
-  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  NODE_ID_PATH = "/xreactor_config/node_id.txt",
   CONFIG_PATH = nil,
   RECEIVE_TIMEOUT = 0.5
 }
@@ -25,6 +25,7 @@ local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
+local discovery_stability = require("core.discovery_stability")
 local ui_service = require("services.ui_service")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
@@ -34,9 +35,8 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.reprocessor.role_descriptor")
 local config_normalizer = require("nodes.reprocessor.config_normalizer")
-local redstone_router_lib = require("nodes.fuel.redstone_router")
-local router_ui_lib = require("nodes.fuel.router_ui")
 local feed_router_lib = require("nodes.reprocessor.feed_router")
+local color_router_ui_lib = require("nodes.reprocessor.color_router_ui")
 local reproc_ui_pages = require("nodes.reprocessor.ui_pages")
 
 local DEFAULT_CONFIG = {
@@ -46,7 +46,6 @@ local DEFAULT_CONFIG = {
   reset_log_on_start = true,
   wireless_modem = nil,
   wired_modem = nil,
-  buffers = { "chemical_tank_0" },
   heartbeat_interval = 2,
   discovery_interval = 15,
   status_interval = 5,
@@ -60,7 +59,7 @@ local DEFAULT_CONFIG = {
 -- Die Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
 -- ueberschrieben -- Config muss in eine geschuetzte Nutzerdatei migriert
 -- werden, sonst geht jede manuelle Bearbeitung beim naechsten Update verloren.
-local REPROC_USER_CONFIG_PATH = "/xreactor/config/reprocessor.lua"
+local REPROC_USER_CONFIG_PATH = "/xreactor_config/reprocessor.lua"
 if not fs.exists(REPROC_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
   if ok_read and handle then
@@ -80,33 +79,41 @@ CONFIG.CONFIG_PATH = REPROC_USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- /xreactor/config/reproc_routes.lua (die vom Router-Editor geschriebene
--- kanonische Routenquelle) muss beim Start geladen werden, sonst gehen
--- gespeicherte Routen bei jedem Neustart verloren.
-local routing_load_status = { ok = true, source = "config" }
+-- /xreactor_config/reproc_targets.lua (die vom Farb-Router-Editor
+-- geschriebene kanonische { sorter=, sorter_chest=, enabled=, targets= }-
+-- Tabelle, siehe color_router_ui.lua:_save()) muss VOR config_normalizer.
+-- normalize() geladen werden, damit dessen Validierung auch auf frisch
+-- geladene Werte greift, statt nur auf das, was schon in reprocessor.lua
+-- stand. Alles hier kommt ausschliesslich vom Router-UI -- keine Config-
+-- Datei-Bearbeitung von Hand noetig.
 do
-  local routes_path = "/xreactor/config/reproc_routes.lua"
-  if fs.exists(routes_path) then
-    local ok_load, content = pcall(dofile, routes_path)
-    if not ok_load or type(content) ~= "table" then
-      routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
-      add_config_warning("reproc_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+  local targets_path = "/xreactor_config/reproc_targets.lua"
+  if fs.exists(targets_path) then
+    -- Must use utils.load_config(), NOT a raw dofile(): color_router_ui.
+    -- lua's _save() persists via utils.write_config(), which serializes
+    -- with textutils.serialize() -- a bare "{ ... }" table literal, with
+    -- NO "return" statement in front. That is not a valid standalone Lua
+    -- chunk ("unexpected symbol near '{'"), so dofile() on it always
+    -- failed to parse, unconditionally. utils.load_config() already has
+    -- the correct dual-format handling every other persisted config file
+    -- in this codebase relies on (tries load() as Lua first, falls back
+    -- to textutils.unserialize() for exactly this bare-serialized shape).
+    local content, load_meta = utils.load_config(targets_path, {})
+    if type(content) ~= "table" or load_meta.source == "defaults" then
+      add_config_warning("reproc_targets.lua konnte nicht geladen werden, Ziele bleiben leer: "
+        .. tostring(load_meta and load_meta.reason))
     else
-      local validation = redstone_router_lib.validate_tree(content)
-      if not validation.ok then
-        local fe = validation.errors[1]
-        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
-        add_config_warning("reproc_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
-      else
-        config.feed = config.feed or {}
-        config.feed.redstone_tree = content
-        routing_load_status = { ok = true, source = routes_path }
-      end
+      config.feed = config.feed or {}
+      config.feed.targets = content.targets or {}
+      config.feed.sorter = content.sorter
+      config.feed.sorter_chest = content.sorter_chest
+      if content.enabled ~= nil then config.feed.enabled = content.enabled end
+      if content.active_colors ~= nil then config.feed.active_colors = content.active_colors end
     end
   end
 end
+config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
@@ -115,12 +122,22 @@ local node_id = support_runtime.init_logging({
 
 local comms
 local services
+local slow_services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local reproc_health = health.new({})
-local buffers = {}
 local router
-local rs_router
-local router_ui_instance
+local color_router_instance
+-- Forward-declared: render_monitor() (defined further up) captures
+-- get_color_router() inside a page-render closure. Declaring
+-- get_color_router as its own fresh local further down would create a
+-- BRAND NEW local that render_monitor()'s already-compiled closure can
+-- never see as an upvalue -- the reference inside that closure would
+-- resolve to a global instead, which is nil. Production symptom: "attempt
+-- to call global 'get_color_router' (a nil value)" every time the
+-- REPROCESSOR UI rendered the Router page. Forward-declaring the local
+-- here and assigning to it later (no fresh local at the assignment site)
+-- fixes the capture.
+local get_color_router
 local devices = {
   monitor = nil, monitor_name = nil, discovery_failed = false, registry_summary = nil,
   registry_load_error = nil, proto_mismatch = false, last_scan_ts = nil,
@@ -128,10 +145,22 @@ local devices = {
 }
 local master_alerts = {}
 local master_seen = os.epoch("utc")
-local standby = false
+-- remote_paused: NUR ueber ein explizites MASTER-Kommando (MODE OFF/
+-- RUNNING) gesetzt -- NIE automatisch ueber Verbindungs-Heuristiken. Eine
+-- fruehere Version pausierte das Feeding auch automatisch, wenn MASTER
+-- laenger nicht gesehen wurde ("MASTER_STALE"), und hob das NUR wieder
+-- auf, wenn explizit ein HELLO von MASTER eintraf -- eine Richtung, die
+-- MASTER in der Praxis nie sendet. Ein einziger kurzer Comms-Hänger reichte
+-- damit aus, um das Feeding UNWIDERRUFLICH und ohne jede Fehlermeldung zu
+-- blockieren (bestaetigt 2026-09-17: FEEDING stand auf AN, alle
+-- Peripherals OK, trotzdem wurde nie etwas bewegt). FUEL/WATER haben genau
+-- deshalb gar keinen solchen Mechanismus: ihre Lieferlogik laeuft
+-- unabhaengig von der MASTER-Verbindung, die nur den Health-Status
+-- (COMMS_DOWN) beeinflusst, niemals ob geliefert wird. REPROCESSOR macht
+-- es jetzt genauso.
+local remote_paused = false
 local monitor_router = nil
 local current_mon = nil
-local process_state = {}
 local get_feed_router
 local reproc_ui = reproc_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
 
@@ -144,14 +173,12 @@ local function is_master_connected()
   return role_logic.is_master_connected({ comms = comms, master_role = constants.roles.MASTER, last_seen_ts = master_seen, heartbeat_interval = config.heartbeat_interval })
 end
 
-local function cache(bound_names) buffers = utils.cache_peripherals(bound_names or {}) end
-
+-- Nur noch Monitor-Discovery -- REPROCESSOR hat keine eigenen
+-- registrierungspflichtigen Peripherals mehr (kein Ventil-Baum, keine
+-- Puffer-/Maschinen-Liste). ME-Bridge/Sorter/Sorter-Kiste werden direkt
+-- von feed_router.lua per Methodensignatur erkannt (siehe dort).
 local function discover()
-  local names
-  local registry_devices
-  local allow_set = {}
-  for _, name in ipairs(config.buffers or {}) do allow_set[name] = true end
-  local allow_all = #config.buffers == 0
+  local registry_devices, names
   local monitor_entry = monitor_adapter.find(nil, "largest", 0.5, CONFIG.LOG_PREFIX)
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
@@ -160,63 +187,43 @@ local function discover()
     devices.monitor = term.current(); devices.monitor_name = devices.monitor_name or "term"; devices.monitor_is_term = true
   end
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
-  local buffer_devices = support_discovery.collect_devices_by_methods(names, {
-    kind = "buffer",
-    allow_name = function(name) return allow_all or allow_set[name] end,
-    match = function(method_set) return (method_set.list and method_set.size) or method_set.getWaste or method_set.getItemCount end
-  })
-  for _, entry in ipairs(buffer_devices) do table.insert(registry_devices, entry) end
   registry:sync(registry_devices)
   devices.registry_summary = registry:get_summary()
   devices.registry_load_error = registry.state.load_error
   devices.last_scan_ts = os.epoch("utc")
-  local bound = registry:get_bound_devices("buffer")
-  local bound_names = {}
-  for _, entry in ipairs(bound) do table.insert(bound_names, entry.name) end
-  cache(bound_names)
 end
 
 local function hello()
-  local summary = registry:get_summary()
-  comms:send_hello({ buffers = summary.kinds.buffer and summary.kinds.buffer.bound or 0 })
+  comms:send_hello({})
 end
 
-local function read_buffer_capacity(buf)
-  if buf.size then local ok, value = support_runtime.safe_wrapped_call(buf, "size"); if ok and type(value) == "number" then return value end end
-  if buf.getSize then local ok, value = support_runtime.safe_wrapped_call(buf, "getSize"); if ok and type(value) == "number" then return value end end
-  if buf.getCapacity then local ok, value = support_runtime.safe_wrapped_call(buf, "getCapacity"); if ok and type(value) == "number" then return value end end
-  if buf.getMaxWaste then local ok, value = support_runtime.safe_wrapped_call(buf, "getMaxWaste"); if ok and type(value) == "number" then return value end end
-  return nil
-end
-
-local function read_buffers()
-  local info = {}
-  for name, buf in pairs(buffers) do
-    local stored = 0
-    if buf.list and buf.size then
-      local ok, items = support_runtime.safe_wrapped_call(buf, "list")
-      if ok and type(items) == "table" then
-        for _, stack in pairs(items) do if type(stack) == "table" and type(stack.count) == "number" then stored = stored + stack.count end end
-      elseif not ok then warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(items)) end
-    elseif buf.getWaste then
-      local ok, value = support_runtime.safe_wrapped_call(buf, "getWaste")
-      if ok and type(value) == "number" then stored = value
-      elseif not ok then warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value)) end
-    elseif buf.getItemCount then
-      local ok, value = support_runtime.safe_wrapped_call(buf, "getItemCount")
-      if ok and type(value) == "number" then stored = value
-      elseif not ok then warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value)) end
-    end
-    local capacity = read_buffer_capacity(buf)
-    local percent = (capacity and capacity > 0) and math.floor(stored / capacity * 1000 + 0.5) / 10 or nil
-    table.insert(info, { id = name, stored = stored, capacity = capacity, percent = percent })
-  end
-  return info
+-- Zusammenfassung aller fuer die Reprocessor-Rotation benoetigten
+-- Peripherals/Verbindungen, fuer die Diagnose-Seite (ui_pages.lua) --
+-- damit auf einen Blick sichtbar ist, was ueberhaupt gebraucht wird und
+-- was davon tatsaechlich gerade verbunden ist.
+local function build_requirements(feed_summary)
+  local fd = config.feed or {}
+  local sorter_chest_name = fd.sorter_chest
+  local sorter_chest_present = type(sorter_chest_name) == "string" and sorter_chest_name ~= ""
+    and peripheral.isPresent(sorter_chest_name) == true
+  return {
+    wireless_modem = comms and comms.network and comms.network.modem ~= nil or false,
+    wired_modem    = comms and comms.network and comms.network.wired ~= nil or false,
+    monitor        = devices.monitor ~= nil,
+    monitor_is_term = devices.monitor_is_term == true,
+    me_bridge      = feed_summary.bridge_bound == true,
+    me_bridge_name = feed_summary.bridge_name,
+    sorter         = feed_summary.sorter_bound == true,
+    sorter_name    = feed_summary.sorter_name,
+    sorter_setup_ok    = feed_summary.sorter_setup_ok,
+    sorter_setup_error = feed_summary.sorter_setup_error,
+    sorter_chest_name    = sorter_chest_name,
+    sorter_chest_present = sorter_chest_present,
+  }
 end
 
 local function build_status_payload_uncached()
   local reasons = {}
-  if not next(buffers) then reasons[health.reasons.NO_STORAGE] = true end
   if devices.discovery_failed or devices.registry_load_error then reasons[health.reasons.DISCOVERY_FAILED] = true end
   if devices.proto_mismatch then reasons[health.reasons.PROTO_MISMATCH] = true end
   local master_ok = is_master_connected()
@@ -224,43 +231,42 @@ local function build_status_payload_uncached()
   reproc_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
   reproc_health.reasons = reasons
   reproc_health.last_seen_ts = os.epoch("utc")
-  -- Einmal gelesen, Ergebnis fuer Anzahl UND Inhalt wiederverwendet.
-  local buffers_snapshot = read_buffers()
-  reproc_health.bindings = { buffers = #buffers_snapshot }
-  reproc_health.capabilities = { buffers = #config.buffers }
   local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"), role = config.role, node_id = config.node_id,
-    health = { status = reproc_health.status, reasons = health.reasons_list(reproc_health), last_seen_ts = reproc_health.last_seen_ts, bindings = reproc_health.bindings, capabilities = reproc_health.capabilities },
-    discovery_failed = devices.discovery_failed, master_connected = master_ok,
-    master_seen_s = master_seen and math.max(0, math.floor((os.epoch("utc") - master_seen) / 1000)) or nil,
+    role = config.role, node_id = config.node_id,
+    health = { status = reproc_health.status, reasons = health.reasons_list(reproc_health), last_seen_ts = reproc_health.last_seen_ts },
+    master_connected = master_ok,
     queue = comms and comms:get_diagnostics().queue_depth or 0,
-    peers = comms and comms.peer_state and comms.peer_state.peers or nil,
-    alerts = master_alerts, protocol_mismatch = devices.proto_mismatch,
+    protocol_mismatch = devices.proto_mismatch,
     last_command = devices.last_command, last_command_ts = devices.last_command_ts,
-    registry = { summary = devices.registry_summary or registry:get_summary(), devices = registry:get_devices_by_kind(), diagnostics = registry:get_diagnostics() }
+    -- Nur die SUMME: devices/diagnostics waren die komplette
+    -- Geraeteliste und wurden nirgends gelesen (siehe RT-
+    -- status_snapshot.lua).
+    registry = { summary = devices.registry_summary or registry:get_summary() }
   })
-  payload.buffers = buffers_snapshot
-  for _, entry in ipairs(payload.buffers) do entry.process_state = process_state[entry.id] end
-  payload.standby = standby
-  payload.feed = get_feed_router():get_summary()
-  payload.bindings = reproc_health.bindings
-  payload.bindings_summary = health.summarize_bindings(reproc_health.bindings)
+  payload.paused = remote_paused
+  local feed_summary = get_feed_router():get_summary()
+  payload.feed = feed_summary
+  payload.requirements = build_requirements(feed_summary)
   return payload
 end
 
--- Kurzes TTL-Caching (wie bei FUEL): innerhalb von 300ms wird derselbe
--- bereits gebaute Payload fuer render_monitor()/ui_service-Snapshot/
--- Telemetrie wiederverwendet, statt ihn pro Konsument neu aufzubauen.
-local payload_cache, payload_cache_ts = nil, 0
-local PAYLOAD_CACHE_TTL_MS = 300
-local function build_status_payload()
-  local now = os.epoch("utc")
-  if payload_cache and (now - payload_cache_ts) < PAYLOAD_CACHE_TTL_MS then
-    return payload_cache
-  end
+-- build_status_payload_uncached() liest den Feed-Status und baut das
+-- Requirements-Panel -- vermeidet blockierende Peripherie-Calls aus der
+-- "fast"-Coroutine (ui_service, siehe run_fast_loop weiter unten), sonst
+-- blockiert es Touch-Eingabe fuer seine eigene Laufzeit -- dasselbe
+-- Problem wie FUELs ME-Bridge-Read in build_status_payload() (siehe
+-- dortiger Fix, 2026-09-06). refresh_status_payload() macht die
+-- eigentliche Arbeit und wird nur aus der "slow"-Coroutine aufgerufen;
+-- build_status_payload() (ui_service/Telemetrie) liest nur noch den
+-- zuletzt berechneten Cache.
+local payload_cache = nil
+local function refresh_status_payload()
   payload_cache = build_status_payload_uncached()
-  payload_cache_ts = now
   return payload_cache
+end
+local function build_status_payload()
+  if payload_cache then return payload_cache end
+  return refresh_status_payload()
 end
 
 local function render_monitor()
@@ -292,10 +298,10 @@ local function render_monitor()
           handle_touch = function(x, y) return reproc_ui.handle_diagnostics_touch(current_mon, x, y) end },
         -- Muss den Rueckgabewert von render() durchreichen (identisch zu
         -- nodes/fuel/monitor_ui.lua) -- sonst zeichnet ui_router.lua seinen
-        -- eigenen generischen Page-Indikator ueber router_ui.lua's echten
-        -- ZURUECK/WEITER-Buttons, deren Tap dann ins Leere liefe.
-        { name = "Router", render = function(target, m, should_clear) return get_router_ui():render(target, ui, colors, should_clear) end,
-          handle_touch = function(x, y) return get_router_ui():handle_touch(x, y) end }
+        -- eigenen generischen Page-Indikator ueber color_router_ui.lua's
+        -- echten ZURUECK/WEITER-Buttons, deren Tap dann ins Leere liefe.
+        { name = "Router", render = function(target, m, should_clear) return get_color_router():render(target, ui, colors, should_clear) end,
+          handle_touch = function(x, y) return get_color_router():handle_touch(x, y) end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
       key_next = { [keys.right] = true, [keys.pageDown] = true }
@@ -317,188 +323,113 @@ local function handle_monitor_touch(event)
   return false
 end
 
--- Round-Robin-Cursor ueber eine deterministisch sortierte Namensliste:
--- hoechstens PROCESS_BUDGET_PER_CYCLE Buffer werden pro Aufruf verarbeitet
--- (der Rest kommt naechsten Zyklus dran), statt unbudgetiert alle Buffer
--- pro Zyklus zu durchlaufen. Backoff fuer durchgehend fehlschlagende Ports:
--- nach mehreren Fehlschlaegen werden mehrere Zyklen uebersprungen, statt
--- einen bekannt defekten Port jeden Zyklus erneut anzusprechen.
-local PROCESS_BUDGET_PER_CYCLE = 4
-local PROCESS_BACKOFF_THRESHOLD = 4
-local PROCESS_BACKOFF_SKIP_CYCLES = 8
-local process_cursor = 1
-local process_fail_count = {}
-local process_skip_remaining = {}
-
-local function process_buffers()
-  if standby then return end
-  local names = {}
-  for name in pairs(buffers) do names[#names + 1] = name end
-  table.sort(names)
-  if #names == 0 then return end
-
-  local processed_this_cycle = 0
-  local attempts = 0
-  while processed_this_cycle < PROCESS_BUDGET_PER_CYCLE and attempts < #names do
-    attempts = attempts + 1
-    if process_cursor > #names then process_cursor = 1 end
-    local name = names[process_cursor]
-    process_cursor = process_cursor + 1
-    local buf = buffers[name]
-    if not buf.process then
-      if process_state[name] ~= "unsupported" then warn_once("no_process:" .. tostring(name), "Buffer " .. tostring(name) .. " has no process() method — not a reprocessor port") end
-      process_state[name] = "unsupported"
-    elseif (process_skip_remaining[name] or 0) > 0 then
-      process_skip_remaining[name] = process_skip_remaining[name] - 1
-    else
-      processed_this_cycle = processed_this_cycle + 1
-      local ok, err = pcall(buf.process)
-      local prev = process_state[name]
-      if ok then
-        if prev ~= "ok" then utils.log("REPROC", "process() OK for " .. tostring(name)) end
-        process_state[name] = "ok"
-        process_fail_count[name] = 0
-      else
-        if prev ~= "error" then utils.log("REPROC", "process() failed for " .. tostring(name) .. ": " .. tostring(err), "WARN") end
-        process_state[name] = "error"
-        process_fail_count[name] = (process_fail_count[name] or 0) + 1
-        if process_fail_count[name] >= PROCESS_BACKOFF_THRESHOLD then
-          process_skip_remaining[name] = PROCESS_BACKOFF_SKIP_CYCLES
-        end
-      end
-    end
-  end
-end
-
-local function get_rs_router()
-  if not rs_router then
-    -- config.feed (nicht die Root-Config) uebergeben, da REPROCESSOR seine
-    -- Route unter config.feed.redstone_tree definiert, nicht unter
-    -- config.logistics.redstone_tree/config.redstone_tree wie FUEL.
-    -- comms=comms ist noetig, damit refresh()'s self.comms:get_peers()
-    -- einen konfigurierten Integrator als erreichbaren Wireless-VALVE-Node
-    -- erkennen kann. get_rs_router() ist ein Lazy-Singleton -- "comms" ist
-    -- zur Laufzeit als Upvalue bereits gesetzt.
-    rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
-  end
-  return rs_router
-end
-
 get_feed_router = function()
   if not router then
-    router = feed_router_lib.new({ config = config, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, rs_router = get_rs_router() })
+    router = feed_router_lib.new({ config = config, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end })
   end
   return router
 end
 
--- Bricht eine laufende Transaktion beim UEBERGANG in den Standby sofort ab
--- (feed_router:cancel() -> redstone_router:shutdown_now(), blockiert alle
--- Ventile) statt sie durchlaufen zu lassen -- sonst koennte eine Transaktion
--- in WAIT_SETTLE/HOLD_OPEN trotz frisch eingetretenem Standby noch den
--- Exportcallback ausfuehren. Nur beim tatsaechlichen Uebergang false->true
--- aktiv (kein wiederholter shutdown_now() jeden Tick im Standby).
-local function enter_standby(reason)
-  if standby then return end
-  standby = true
-  get_feed_router():cancel(reason)
-  utils.log("REPROC", "Standby aktiviert (" .. tostring(reason) .. ") -- laufende Ventil-Transaktion abgebrochen, alle Ventile blockiert", "WARN")
-end
-
-local function get_router_ui()
-  if not router_ui_instance then
-    router_ui_instance = router_ui_lib.new({
-      redstone_router = get_rs_router(), config_path = "/xreactor/config/reproc_routes.lua",
-      routing_load_status = routing_load_status,
+get_color_router = function()
+  if not color_router_instance then
+    color_router_instance = color_router_ui_lib.new({
+      config = config, config_path = "/xreactor_config/reproc_targets.lua",
+      write_config = utils.write_config,
       log = function(level, msg) utils.log("REPROC", msg, level) end,
-      get_reactors = function()
-        local list, seen = {}, {}
-        local fd = config.feed or {}
-        for _, entry in ipairs(fd.targets or {}) do
-          local label = entry.label or entry.inlet or "?"
-          local id = entry.label or label
-          if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
-        end
-        if #list == 0 then
-          for _, name in ipairs(peripheral.getNames() or {}) do
-            local ptype = tostring(peripheral.getType(name) or ""):lower()
-            if ptype:find("reprocessor") or name:lower():find("reprocessor") then
-              if not seen[name] then seen[name] = true; list[#list + 1] = { id = name, label = name } end
-            end
-          end
-        end
-        return list
-      end,
     })
   end
-  return router_ui_instance
+  return color_router_instance
+end
+
+-- NUR noch fuer den Update-Quiesce-Handshake (installer/auto_update.lua
+-- bricht die Installation ab, wenn eine Rolle nie RUNTIME_STOPPED
+-- bestaetigt -- dieser Aufruf ist Pflicht, siehe tests/install_p0_2_
+-- quiesce_wiring_test.lua). feed_router.lua's tick() ist ein einzelner
+-- synchroner Schritt (Farbe setzen, exportieren) -- es gibt keine
+-- laufende asynchrone Transaktion, die erst "sicher" gemacht werden
+-- muesste, also wird sofort bestaetigt. WICHTIG: dieser Aufruf setzt
+-- absichtlich NICHT mehr remote_paused und beeinflusst tick() in keiner
+-- Weise -- das war der Bug (siehe remote_paused's Kommentar oben): sobald
+-- diese Funktion true zurueckgibt, beendet sich die fast-Coroutine sofort
+-- (siehe nodes/support/runtime.lua), der Reboot fuer die Installation
+-- folgt unmittelbar -- ein paar Sekunden ohne weitere Ticks sind
+-- irrelevant und muessen nicht extra blockiert werden.
+local function enter_standby(reason)
+  utils.log("REPROC", "Quiesce bestaetigt (" .. tostring(reason) .. ")", "INFO")
+  return true
 end
 
 local function handle_command(message)
   local cmd, parse_error = support_command_handler.parse_node_command(message, { protocol = protocol, comms = comms })
   if parse_error then return support_command_handler.finish_with_result(devices, parse_error) end
   if not cmd then return end
-  if cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.OFF then enter_standby("MODE_OFF")
-  elseif cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.RUNNING then standby = false
+  if cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.OFF then
+    remote_paused = true
+    utils.log("REPROC", "Feeding pausiert (MASTER-Kommando MODE_OFF)", "WARN")
+  elseif cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.RUNNING then
+    remote_paused = false
+    utils.log("REPROC", "Feeding fortgesetzt (MASTER-Kommando MODE_RUNNING)", "INFO")
   else return support_command_handler.reject_unsupported(devices) end
   return support_command_handler.finish(devices, true)
 end
 
 local function init()
   services = service_manager.new({ log_prefix = "REPROC" })
+  slow_services = service_manager.new({ log_prefix = "REPROC-BG" })
   comms = comms_service.new({
     config = config, log_prefix = "REPROC", on_command = handle_command,
+    -- Von Heartbeat/Status der uebrigen Nodes nur den Absender (v821).
+    payload_filter = comms_service.follower_payload_filter(),
+    -- Funk-Hygiene v822: Meldungen anderer Nodes braucht diese Rolle nicht.
+    listen_uplink = false,
     on_message = function(message)
       if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then devices.proto_mismatch = true; return end
       if message.role == constants.roles.MASTER then
         master_seen = os.epoch("utc")
         if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then master_alerts = message.payload.alerts end
-        -- Nur innerhalb der message.role==MASTER-Pruefung -- ein HELLO von
-        -- irgendeiner anderen Node darf den Standby nicht aufheben.
-        if message.type == constants.message_types.HELLO then standby = false end
       end
     end
   })
   services:add(comms)
-  -- Gleiche Verdrahtung wie bei FUEL: der dedizierte Ventilkanal (6504)
-  -- laeuft ausserhalb von comms_service.
-  services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
-    if not event or event[1] ~= "modem_message" then return end
-    local channel, message = event[3], event[5]
-    if channel ~= constants.channels.VALVE then return end
-    if type(message) == "table" and message.type == "VALVE_ACK" then
-      get_rs_router():handle_valve_ack(message)
-    end
-  end })
-  local last_valve_retry_check_ms = 0
-  services:add({ name = "valve_ack_retry", tick = function()
-    local now = os.epoch and os.epoch("utc") or 0
-    if now - last_valve_retry_check_ms < 1000 then return end
-    last_valve_retry_check_ms = now
-    get_rs_router():check_pending_acks()
-  end })
-  -- "Weg 3"-Route-Teach-in -- identisch zu nodes/fuel/main.lua's
-  -- Verdrahtung, da router_ui.lua/redstone_router.lua geteilt werden.
-  services:add({ name = "valve_teach_listener", wants_events = true, tick = function(_self, dt, event)
-    if not event or event[1] ~= "modem_message" then return end
-    local channel, message = event[3], event[5]
-    if channel ~= constants.channels.VALVE then return end
-    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
-      router_ui_instance:handle_teach_pulse(message.src)
-    end
-  end })
-  services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
-  services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { standby = standby } end }))
+  local discovery_stability_cache = discovery_stability.new({})
+  slow_services:add(discovery_service.new({
+    registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval,
+    should_discover = function(service, ts, event, due)
+      return discovery_stability_cache:should_discover(ts, event, due, service and service.interval)
+    end,
+    managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end
+  }))
+  slow_services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { paused = remote_paused } end }))
   services:add(ui_service.new({
     interval = 1,
     snapshot = function()
       local payload = build_status_payload(); local peer = master_peer_state(); local nid = comms and comms.network and comms.network.id or config.node_id
       local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[nid] or nil
-      return { page = monitor_router and monitor_router.index or 1, payload = payload, master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN", standby = standby, alerts = alert_payload and alert_payload.critical or 0, last_command = devices.last_command, last_command_ts = devices.last_command_ts }
+      return { page = monitor_router and monitor_router.index or 1, payload = payload, master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN", paused = remote_paused, alerts = alert_payload and alert_payload.critical or 0, last_command = devices.last_command, last_command_ts = devices.last_command_ts }
     end,
     render = render_monitor,
     handle_input = function(event) handle_monitor_touch(event) end
   }))
+  -- Optionale Ampel (optional/ampel.lua, Zusatzmodul -- nicht installiert:
+  -- nichts zu tun). Eigener Takt wie bei FUEL, laeuft auch ohne
+  -- Hauptmonitor; Farbe nach feed_router.ampel_status().
+  local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
+  local ampel = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function"
+    and ampel_mod.new() or nil
+  if ampel then
+    local ampel_tick_acc = 0
+    services:add({ name = "ampel_render", tick = function(_self, dt)
+      ampel_tick_acc = ampel_tick_acc + (tonumber(dt) or 0.5)
+      if ampel_tick_acc < 1 then return end
+      ampel_tick_acc = 0
+      pcall(function()
+        local router = get_feed_router()
+        ampel.render(devices.monitor_name, router.ampel_status(router:get_summary()))
+      end)
+    end })
+  end
   services:init()
+  slow_services:init()
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")
   if ok_report_mod then
@@ -513,22 +444,40 @@ local function init()
 end
 
 init()
--- Expliziter Quiesce-Handler, nutzt die bereits vorhandene, idempotente
--- enter_standby()-Funktion -- kein neuer Aktor-Code.
+-- Zwei entkoppelte Coroutinen (siehe nodes/support/runtime.lua's run_fast_
+-- loop()/run_slow_loop()): "fast" traegt UI/Touch. "slow" traegt Discovery/
+-- Telemetry UND get_feed_router():tick() (die eigentliche Feed-/Export-
+-- Arbeit, kann laut Feldberichten lange blockierende Peripherie-Calls
+-- machen) -- damit blockiert ein langsamer Feed-Zyklus nicht mehr UI/
+-- Touch. Farb-Routing (feed_router.lua) ist ein einzelner synchroner
+-- Schritt pro Feed (Sorter-Farbe setzen, exportieren), unabhaengig von der
+-- MASTER-Verbindung -- genau wie FUEL/WATER ihre eigene Lieferlogik nie an
+-- die MASTER-Verbindung koppeln (die beeinflusst nur den Health-Status).
+-- remote_paused wird ausschliesslich per explizitem MASTER-Kommando
+-- gesetzt, nie automatisch ueber eine Verbindungs-Heuristik oder den
+-- Update-Quiesce-Handshake unten.
 local quiesce_handshake = _G.__xreactor_update_handshake
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-  -- Stale-Pruefung VOR process_buffers()/feed-Arbeit, damit ein gerade
-  -- abgelaufenes MASTER-Timeout sofort wirkt statt erst ab dem naechsten Zyklus.
-  if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then enter_standby("MASTER_STALE") end
-  process_buffers()
-  if not standby then get_feed_router():tick() end
-  -- Treibt die asynchrone Ventil-Transaktion voran -- laeuft unbedingt jeden
-  -- Zyklus; im Standby ist es dank enter_standby()'s sofortigem shutdown_now()
-  -- nur noch ein billiger No-Op (keine Transaktion mehr vorhanden).
-  get_rs_router():tick()
-end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
-  enter_standby("UPDATE_QUIESCE")
-  local rs_router = get_rs_router()
-  rs_router:begin_quiesce("UPDATE_QUIESCE")
-  return standby == true and rs_router:poll_quiesce()
-end } or nil)
+local ok, result = xpcall(function()
+  parallel.waitForAny(
+    function()
+      support_runtime.run_fast_loop({
+        receive_timeout = CONFIG.RECEIVE_TIMEOUT, services = services, comms = comms,
+        quiesce_opts = quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
+          return enter_standby("UPDATE_QUIESCE")
+        end } or nil,
+      })
+    end,
+    function()
+      support_runtime.run_slow_loop({
+        interval = CONFIG.RECEIVE_TIMEOUT, services = slow_services,
+        after_cycle = function()
+          refresh_status_payload()
+          if not remote_paused then get_feed_router():tick() end
+        end,
+      })
+    end
+  )
+end, function(e) return e end)
+if not ok and not support_runtime.is_terminate(result) then
+  support_runtime.crash_screen(result)
+end

@@ -85,9 +85,10 @@ function M.new(opts)
       }
       if not dirty_logged[node_id] then
         dirty_logged[node_id] = true
+        -- DEBUG: kommt bei jedem Heartbeat/Status jedes RT (Funk-Hygiene v821).
         log(("RT sync dirty queued node=%s reason=%s role=%s"):format(
           tostring(node_id), tostring(reason or 'unknown'), tostring(node.role or 'nil')
-        ), 'INFO')
+        ), 'DEBUG')
       end
       return
     end
@@ -113,7 +114,7 @@ function M.new(opts)
         log(("RT sync flush node=%s reasons=%s age_ms=%d idle_ms=%d force=%s trigger=%s"):format(
           tostring(node_id), tostring(reasons), tonumber(age_ms) or 0, tonumber(idle_ms) or 0, tostring(force),
           force and 'force' or ((age_ms >= batch_window_ms) and 'age' or 'idle')
-        ), 'INFO')
+        ), 'DEBUG')
         if slot.node and node_looks_rt(slot.node) then
           slot.node.role = constants.roles.RT_NODE
           sync_rt_node(slot.node, 'coalesced:' .. reasons)

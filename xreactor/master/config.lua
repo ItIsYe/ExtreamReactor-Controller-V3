@@ -4,7 +4,14 @@ local CONFIG = {
   DEFAULT_MONITORS = { "back" },
   DEFAULT_MASTER_MIN_MONITOR_WIDTH = 48,
   DEFAULT_MASTER_MIN_MONITOR_HEIGHT = 27,
-  DEFAULT_HEARTBEAT_INTERVAL = 5,
+  -- 2s wie jede andere Rolle (nodes/*/config.lua). Der MASTER war die
+  -- einzige Rolle mit 5s und damit der Peer, den eine Node am schnellsten
+  -- als DOWN meldete, obwohl er lief. Der Status-Takt bleibt bewusst bei
+  -- 5s: die Master-Status-Payload ist gross, nur der (winzige) Heartbeat
+  -- wird haeufiger. ACHTUNG: greift nur bei einer NEUEN Installation --
+  -- eine bestehende /xreactor_config/master.lua behaelt ihren Wert
+  -- (merge_defaults fuellt nur fehlende Schluessel).
+  DEFAULT_HEARTBEAT_INTERVAL = 2,
   DEFAULT_STATUS_INTERVAL = 5,
   DEFAULT_STARTUP_RAMP = "NORMAL",
   DEFAULT_STARTUP_STAGE_TIMEOUT = 60,
@@ -24,11 +31,22 @@ local CONFIG = {
   DEFAULT_RPM_WARN_LOW = 800,
   DEFAULT_RPM_CRIT_HIGH = 1800,
   DEFAULT_ROD_STUCK_SECS = 20,
+  -- Meldungen (v833): Energie niedrig kommt bei ..._LOW_PCT und geht erst
+  -- ab ..._LOW_CLEAR_PCT wieder. Neue Namen, weil die alten Schwellen
+  -- (energy_warn_pct usw.) in /xreactor_config/master.lua fest stehen.
+  DEFAULT_ALARM_ENERGY_LOW_PCT = 10,
+  DEFAULT_ALARM_ENERGY_LOW_CLEAR_PCT = 15,
+  -- Meldungen (v834): eine gegangene, nicht quittierte Stoerung wird nach
+  -- ..._AUTO_ACK_MIN ohne Wiederkehr automatisch quittiert; kommt eine
+  -- quittierte Ursache innerhalb von ..._REACK_WINDOW_MIN wieder, kommt sie
+  -- quittiert zurueck (Flatterschutz).
+  DEFAULT_ALARM_AUTO_ACK_MIN = 30,
+  DEFAULT_ALARM_REACK_WINDOW_MIN = 30,
   DEFAULT_STEAM_DEFICIT_PCT = 0.9,
   DEFAULT_ALERT_MUTE_DEFAULT_MINUTES = 10,
   DEFAULT_ALERT_MUTE_DURATIONS = { 5, 15, 30, 60 },
   DEFAULT_ALERT_LOG_MUTED_EVENTS = true,
-  DEFAULT_ALERT_STATE_PATH = "/xreactor/config/alerts_state.lua",
+  DEFAULT_ALERT_STATE_PATH = "/xreactor_config/alerts_state.lua",
   DEFAULT_ALERT_NODE_TOP_N = 3,
   DEFAULT_COMMS_CHANNEL = 6500,
   DEFAULT_STATUS_CHANNEL = 6501,
@@ -40,7 +58,14 @@ local CONFIG = {
   DEFAULT_COMMS_DEDUPE_LIMIT = 200,
   DEFAULT_COMMS_PEER_TIMEOUT = 30.0,
   DEFAULT_NODE_OFFLINE_PURGE_AFTER_S = 120,    -- Sekunden bis ein offline Node aus dem managed-Set entfernt wird.
-  DEFAULT_SEQUENCER_SCRAM_TEMPERATURE = 950,   -- °C ab der Sequencer-Timeout als EMERGENCY gilt
+  -- °C, ab der ein Sequencer-Timeout als EMERGENCY statt LIMITED gilt.
+  --
+  -- Muss zur Ausloeseschwelle der RT-Node passen (nodes/rt/config.lua:
+  -- safety.max_temperature = 2000). Hier standen 950 -- und das liegt
+  -- UNTER der normalen Betriebstemperatur eines Extreme-Reactors-Reaktors
+  -- unter Last. Jeder Timeout wurde damit zur Uebertemperatur erklaert,
+  -- bei einem voellig gesunden Reaktor.
+  DEFAULT_SEQUENCER_SCRAM_TEMPERATURE = 2000,
   DEFAULT_COMMS_PEER_DOWN_GRACE = 5.0,
   DEFAULT_COMMS_PEER_DOWN_MIN_OBSERVATIONS = 2,
   DEFAULT_COMMS_PEER_UP_DEBOUNCE = 1.5,
@@ -133,7 +158,18 @@ return {
   matrix_warn_full_pct = CONFIG.DEFAULT_MATRIX_WARN_FULL_PCT,
   rpm_warn_low = CONFIG.DEFAULT_RPM_WARN_LOW,
   rpm_crit_high = CONFIG.DEFAULT_RPM_CRIT_HIGH,
+  -- Diese Zeile fehlte: startup_sequencer.lua liest config.scram_temperature,
+  -- die Konstante hiess aber nur DEFAULT_SEQUENCER_SCRAM_TEMPERATURE und
+  -- wurde nirgends auf diesen Schluessel gelegt. Der Sequencer fiel deshalb
+  -- IMMER auf seinen eingebauten Ersatzwert zurueck -- die Konstante war
+  -- toter Code, und ihr Kommentar ("aus config statt hardcodiert")
+  -- beschrieb etwas, das nie angekommen ist.
+  scram_temperature = CONFIG.DEFAULT_SEQUENCER_SCRAM_TEMPERATURE,
   rod_stuck_secs = CONFIG.DEFAULT_ROD_STUCK_SECS,
+  alarm_energy_low_pct = CONFIG.DEFAULT_ALARM_ENERGY_LOW_PCT,
+  alarm_energy_low_clear_pct = CONFIG.DEFAULT_ALARM_ENERGY_LOW_CLEAR_PCT,
+  alarm_auto_ack_min = CONFIG.DEFAULT_ALARM_AUTO_ACK_MIN,
+  alarm_reack_window_min = CONFIG.DEFAULT_ALARM_REACK_WINDOW_MIN,
   steam_deficit_pct = CONFIG.DEFAULT_STEAM_DEFICIT_PCT,
   channels = { control = CONFIG.DEFAULT_COMMS_CHANNEL, status = CONFIG.DEFAULT_STATUS_CHANNEL },
   comms = {
@@ -161,7 +197,6 @@ return {
     [constants.roles.RT_NODE] = {},
     [constants.roles.ENERGY_NODE] = {},
     [constants.roles.FUEL_NODE] = {},
-    [constants.roles.WATER_NODE] = {},
     [constants.roles.REPROCESSOR_NODE] = {}
   }
 }

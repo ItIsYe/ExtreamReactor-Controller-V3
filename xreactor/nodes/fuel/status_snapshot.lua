@@ -37,21 +37,25 @@ function M.build_status_payload(ctx)
   fuel_health.capabilities = { storage = config.storage_bus ~= nil }
 
   local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"), role = config.role, node_id = ctx.node_id or config.node_id,
+    role = config.role, node_id = ctx.node_id or config.node_id,
     health = { status = fuel_health.status, reasons = health.reasons_list(fuel_health), last_seen_ts = fuel_health.last_seen_ts, bindings = fuel_health.bindings, capabilities = fuel_health.capabilities },
-    discovery_failed = devices.discovery_failed, master_connected = master_ok,
-    master_seen_s = ctx.master_seen_ts and math.max(0, math.floor((os.epoch("utc") - ctx.master_seen_ts) / 1000)) or nil,
+    master_connected = master_ok,
     -- comms:queue_depth() existiert nicht als Methode -- comms_service hat
     -- nur get_diagnostics(), das ein queue_depth-FELD zurueckgibt.
     queue = ctx.comms and ctx.comms:get_diagnostics().queue_depth or 0,
-    peers = ctx.comms and ctx.comms.peer_state and ctx.comms.peer_state.peers or nil,
-    alerts = ctx.master_alerts, protocol_mismatch = devices.proto_mismatch,
+    protocol_mismatch = devices.proto_mismatch,
     last_command = devices.last_command, last_command_ts = devices.last_command_ts,
-    registry = { summary = devices.registry_summary or ctx.registry:get_summary(), devices = ctx.registry:get_devices_by_kind(), diagnostics = ctx.registry:get_diagnostics() }
+    -- Nur die SUMME: devices/diagnostics waren die komplette
+    -- Geraeteliste und wurden nirgends gelesen (siehe RT-
+    -- status_snapshot.lua).
+    registry = { summary = devices.registry_summary or ctx.registry:get_summary() }
   })
   payload.reserve = amount
   payload.minimum_reserve = ctx.reserve
-  payload.sources = { { id = devices.storage_name or "unknown", amount = amount } }
+  -- payload.sources ist raus (Kommunikations-Durchgang 2026-09-29): der
+  -- einzige Treffer, master/support_status.lua, setzt das Feld nur auf {}
+  -- wenn es fehlt -- gelesen hat es niemand. Der Inhalt war ohnehin
+  -- dieselbe Menge wie payload.reserve, nur mit dem Speichernamen daneben.
 
   -- The Logistics router remains the authority for whether a fuel sample is
   -- actually fresh enough to use. operational_summary only projects that
@@ -64,10 +68,23 @@ function M.build_status_payload(ctx)
     local ok_rs, value = pcall(ctx.get_rs_router)
     if ok_rs then rs_router = value end
   end
+
+  -- get_valve_status() re-allocates a fresh table across every known comms
+  -- peer (comms:get_peers()) and sorts every valve -- fetch it ONCE here and
+  -- hand it to operational_summary.enrich() too, instead of both this
+  -- function and enrich()'s internal route_context() each paying that cost
+  -- independently every status cycle (every 0.5s regardless of activity).
+  local valve_status = nil
+  if rs_router and rs_router.get_valve_status then
+    local ok_vs, value = pcall(rs_router.get_valve_status, rs_router)
+    if ok_vs then valve_status = value end
+  end
+
   payload.logistics = operational_summary.enrich(logistics, {
     config = config,
     fuel_status = logistics_router.fuel_status,
     rs_router = rs_router,
+    valve_status = valve_status,
   })
 
   payload.bindings = fuel_health.bindings
@@ -76,16 +93,28 @@ function M.build_status_payload(ctx)
   -- eine kompakte VALVE-Offline-Zusammenfassung sind Teil des Payloads,
   -- damit Header/Banner/Ampel und Diagnostics dieselbe Wahrheit verwenden.
   payload.routing_load_status = ctx.routing_load_status
-  if rs_router and rs_router.get_valve_status then
-    local ok_vs, valve_status = pcall(rs_router.get_valve_status, rs_router)
-    if ok_vs then
-      local offline, stale = 0, 0
-      for _, vs in ipairs(valve_status) do
-        if vs.online == false then offline = offline + 1
-        elseif vs.stale == true then stale = stale + 1 end
-      end
-      payload.valve_summary = { total = #valve_status, offline = offline, stale = stale }
+  --
+  -- "unknown" (unter dieser Kennung hat sich nie ein VALVE-Node gemeldet)
+  -- und "waiting" (noch nicht gehoert, FUEL laeuft erst kurz) zaehlen NICHT
+  -- als offline: das sind andere Lagen mit anderen Handgriffen (Kette neu
+  -- einlernen bzw. kurz warten). unknown_ids nennt die ersten drei
+  -- Kennungen, damit der Schirm sagen kann, WELCHE nicht passen (mehr
+  -- passen nicht in die 77 Zeichen breite Bannerzeile).
+  if valve_status then
+    local offline, stale, unknown, waiting = 0, 0, 0, 0
+    local unknown_ids = {}
+    for _, vs in ipairs(valve_status) do
+      if vs.unknown == true then
+        unknown = unknown + 1
+        if #unknown_ids < 3 then unknown_ids[#unknown_ids + 1] = tostring(vs.id) end
+      elseif vs.waiting == true then waiting = waiting + 1
+      elseif vs.online == false then offline = offline + 1
+      elseif vs.stale == true then stale = stale + 1 end
     end
+    payload.valve_summary = {
+      total = #valve_status, offline = offline, stale = stale,
+      unknown = unknown, waiting = waiting, unknown_ids = unknown_ids,
+    }
   end
   return payload
 end

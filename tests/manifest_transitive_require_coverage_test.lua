@@ -35,7 +35,7 @@ end
 
 local manifest = assert(loadfile(repo_root .. '/xreactor/manifest.lua'))()
 
-local ROLES = { 'MASTER', 'RT', 'ENERGY', 'WATER', 'FUEL', 'VALVE', 'REPROCESSING', 'LOG_COLLECTOR' }
+local ROLES = { 'MASTER', 'RT', 'ENERGY', 'FUEL', 'VALVE', 'REPROCESSING', 'LOG_COLLECTOR' }
 
 -- require("a.b.c") -> "a/b/c.lua"
 local function resolve_require(mod_name)

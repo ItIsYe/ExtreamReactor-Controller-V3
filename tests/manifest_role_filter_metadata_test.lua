@@ -34,7 +34,6 @@ local required = {
   master = "MASTER",
   rt = "RT",
   energy = "ENERGY",
-  water = "WATER",
   fuel = "FUEL",
   reprocessing = "REPROCESSING"
 }

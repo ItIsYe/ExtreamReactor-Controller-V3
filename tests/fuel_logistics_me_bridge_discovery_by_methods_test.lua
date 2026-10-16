@@ -111,4 +111,24 @@ do
   assert_true(router._state.bridge == nil, 'no ME Bridge should be bound when nothing matches')
 end
 
+-- 5. Modern Advanced Peripherals (1.21+/0.7+) merged the ME/RS Bridge item
+--    API: exportItemToPeripheral/importItemFromPeripheral no longer exist,
+--    replaced by exportItem(filter, target)/importItem(filter, target).
+--    A bridge exposing only the modern names (confirmed live via
+--    peripheral.getMethods() on a real "me_bridge_3") must still be found.
+do
+  set_peripheral_mock({
+    ["me_bridge_3"] = {
+      getItem = true, importItem = true, exportItem = true,
+      getFluid = true, getCells = true, getConfiguration = true, isOnline = true,
+    },
+  }, {})
+
+  local router = logistics_router.new({ config = { logistics = { enabled = true, reactors = {} } } })
+  router:refresh_peripherals()
+
+  assert_true(router._state.bridge ~= nil, 'modern-API ME Bridge must be found via method-signature fallback')
+  assert_eq(router._state.bridge.name, 'me_bridge_3', 'discovered bridge name should be the actual peripheral name')
+end
+
 print("fuel_logistics_me_bridge_discovery_by_methods_test.lua: ok")

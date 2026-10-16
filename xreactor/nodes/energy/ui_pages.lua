@@ -26,7 +26,8 @@ end
 local function status_from_percent(pct, degraded)
   if degraded then return "WARNING" end
   if pct == nil then return "muted" end
-  if pct < 0.15 then return "EMERGENCY" end
+  -- A low/not-full storage level is expected operating behavior, not a
+  -- fault: cap this at WARNING, never EMERGENCY (red/"Störung").
   if pct < 0.30 then return "WARNING" end
   if pct > 0.95 then return "LIMITED" end
   return "OK"
@@ -72,7 +73,8 @@ function M.new(opts)
     local pct = tonumber(total.percent)
     if model.degraded then return "STORAGE WARNING", "WARNING" end
     if pct == nil then return "STORAGE UNKNOWN", "muted" end
-    if pct < 0.15 then return "STORAGE CRITICAL", "EMERGENCY" end
+    -- A low/not-full storage level is expected operating behavior, not a
+    -- fault: capped at WARNING, never EMERGENCY ("Störung").
     if pct < 0.30 then return "STORAGE LOW", "WARNING" end
     if pct > 0.95 then return "STORAGE HIGH", "LIMITED" end
     return "STORAGE NORMAL", "OK"
@@ -83,38 +85,63 @@ function M.new(opts)
     local total = model.total or {}
     local banner, key = storage_banner(model)
     local trend, trend_key = trend_label(total)
-    mux.banner(mon, 2, 5, w - 3, "> " .. banner, key, nil)
+
+    -- Gleiches Muster wie nodes/rt/mockup_pages.lua's render_overview():
+    -- ohne Skalierung standen alle Bloecke auf fixen Zeilennummern, und ein
+    -- Monitor groesser als das ~19-Zeilen-Referenzlayout blieb im unteren
+    -- Teil einfach leer.
+    local content_top = 5
+    local content_bottom = math.max(content_top + 19, h - 2)
+    local content_h = content_bottom - content_top
+    local scale = math.max(1.0, content_h / 19)
+    local function y_at(offset) return content_top + math.floor(offset * scale) end
+
+    mux.banner(mon, 2, y_at(0), w - 3, "> " .. banner, key, nil)
 
     local gap = 1
     if w >= 54 then
       local cw = math.floor((w - 4 - gap * 2) / 3)
-      mux.metric_card(mon, 2, 7, cw, 4, { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" })
-      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "INPUT", value = format_energy(total.input), unit = "RF/t", status = "LIMITED", icon = "input" })
-      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "OUTPUT", value = format_energy(total.output), unit = "RF/t", status = "OK", icon = "output" })
+      mux.metric_card(mon, 2, y_at(2), cw, 4, { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" })
+      mux.metric_card(mon, 2 + cw + gap, y_at(2), cw, 4, { label = "INPUT", value = format_energy(total.input), unit = "RF/t", status = "LIMITED", icon = "input" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, y_at(2), cw, 4, { label = "OUTPUT", value = format_energy(total.output), unit = "RF/t", status = "OK", icon = "output" })
     else
-      mux.kpi_strip(mon, 2, 7, w - 3, {
+      mux.kpi_strip(mon, 2, y_at(2), w - 3, {
         { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" },
         { label = "INPUT", value = format_energy(total.input), status = "LIMITED", icon = "input" },
         { label = "OUTPUT", value = format_energy(total.output), status = "OK", icon = "output" },
       })
     end
 
-    section_arrow(mon, 2, 12, w - 3, "ENERGY STORAGE", key, "storage")
-    mux.outlined_progress(mon, 2, 14, w - 3, total.percent or 0, key, format_percent(total.percent))
+    section_arrow(mon, 2, y_at(7), w - 3, "ENERGY STORAGE", key, "storage")
+    mux.outlined_progress(mon, 2, y_at(9), w - 3, total.percent or 0, key, format_percent(total.percent))
     if h >= 16 then
-      mux.data_row(mon, 2, 15, w - 3, { label = format_energy(total.stored) .. " / " .. format_energy(total.capacity), value = "RF", status = "text", icon = "storage" })
+      mux.data_row(mon, 2, y_at(10), w - 3, { label = format_energy(total.stored) .. " / " .. format_energy(total.capacity), value = "RF", status = "text", icon = "storage" })
     end
 
     if h >= 20 then
       local cw = math.floor((w - 5 - 3) / 4)
+      -- Overview zeigt nur 2 Matrix-Kacheln als Kurzueberblick; Discovery
+      -- kann aber 0, 1 oder 3+ Matrizen liefern. Statt fix "MATRIX A"/"MATRIX B"
+      -- zu behaupten (irrefuehrend bei 1 Matrix oder falscher Reihenfolge bei
+      -- 3+), zeigen die Kacheln den echten Alias/ID der jeweiligen Matrix; die
+      -- vollstaendige Liste inkl. Gesamtzahl steht auf der MATRICES-Seite (2/4).
+      local matrices_list = model.matrices or {}
+      local function matrix_tile(idx)
+        local m = matrices_list[idx]
+        if not m then
+          return { label = "MATRIX " .. idx, value = "n/a", status = "muted", icon = "storage" }
+        end
+        local label = tostring(m.alias or m.label or m.id or ("MATRIX " .. idx))
+        return { label = label:upper(), value = format_percent(m.percent), status = "OK", icon = "storage" }
+      end
       local items = {
-        { label = "MATRIX A", value = (model.matrices or {})[1] and format_percent((model.matrices or {})[1].percent) or "n/a", status = "OK", icon = "storage" },
-        { label = "MATRIX B", value = (model.matrices or {})[2] and format_percent((model.matrices or {})[2].percent) or "n/a", status = "OK", icon = "storage" },
+        matrix_tile(1),
+        matrix_tile(2),
         { label = "TREND", value = trend, status = trend_key, icon = "flow" },
         { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
       }
       for i, item in ipairs(items) do
-        mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 17, cw, 4, item)
+        mux.metric_card(mon, 2 + (i - 1) * (cw + 1), y_at(12), cw, 4, item)
       end
     end
 
@@ -155,13 +182,15 @@ function M.new(opts)
       for idx = pagination.start_index, pagination.end_index do
         local entry = matrices[idx]
         if entry then
-          local pct = entry.percent or 0
+          -- nil = Kapazitaet unbekannt (matrix_snapshot_runtime.lua): "n/a"
+          -- statt einer erfundenen Zahl; nur der Balken braucht eine.
+          local pct = entry.percent
           local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
           local label = entry.alias or entry.label or entry.name or ("MATRIX " .. tostring(idx))
           local x = 2 + col * (card_w + gap)
           mux.card(mon, x, start_y, card_w, math.max(8, h - start_y - 1), { title = tostring(label) .. "   ONLINE", status = key, icon = "storage" })
           mux.metric_card(mon, x + 2, start_y + 2, card_w - 4, 4, { label = "FILL", value = format_percent(pct), status = key, icon = "energy" })
-          mux.outlined_progress(mon, x + 2, start_y + 7, card_w - 4, pct, key, format_percent(pct))
+          mux.outlined_progress(mon, x + 2, start_y + 7, card_w - 4, pct or 0, key, format_percent(pct))
           mux.data_row(mon, x + 2, start_y + 9, card_w - 4, { label = format_energy(entry.stored) .. " / " .. format_energy(entry.capacity), value = "RF", status = "text", icon = "storage" })
           mux.data_row(mon, x + 2, start_y + 11, card_w - 4, { label = "INPUT", value = format_energy(entry.input) .. " RF/t", status = "LIMITED", icon = "input" })
           mux.data_row(mon, x + 2, start_y + 12, card_w - 4, { label = "OUTPUT", value = format_energy(entry.output) .. " RF/t", status = "OK", icon = "output" })
@@ -173,12 +202,12 @@ function M.new(opts)
       for idx = pagination.start_index, pagination.end_index do
         local entry = matrices[idx]
         if entry then
-          local pct = entry.percent or 0
+          local pct = entry.percent
           local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
           local label = entry.alias or entry.label or entry.name or ("MATRIX " .. tostring(idx))
           mux.card(mon, 2, y, w - 3, 8, { title = tostring(label) .. "   ONLINE", status = key, icon = "storage" })
           mux.metric_card(mon, 4, y + 1, w - 7, 4, { label = "FILL", value = format_percent(pct), status = key, icon = "energy" })
-          mux.outlined_progress(mon, 4, y + 5, w - 7, pct, key, format_percent(pct))
+          mux.outlined_progress(mon, 4, y + 5, w - 7, pct or 0, key, format_percent(pct))
           y = y + 9
         end
       end
@@ -291,11 +320,20 @@ function M.new(opts)
 
   local function energy_status_key(model)
     local total = model and model.total or {}
-    local pct = tonumber(total.percent)
+    local ratio = tonumber(total.percent)
     if model and model.degraded then return "WARNING" end
-    if not pct then return "muted" end
-    local emergency_below, warning_below, limited_above = 15, 30, 95
-    local cfg_path = "/xreactor/config/ampel_thresholds.lua"
+    if not ratio then return "muted" end
+    -- total.percent is a 0-1 ratio (see format_percent()/status_from_percent()
+    -- above); the emergency_below_pct/warning_below_pct/limited_above_pct
+    -- thresholds (defaults and the optional operator override file) are
+    -- authored on a 0-100 scale, so convert once before comparing.
+    local pct = ratio * 100
+    -- A low/not-full storage level is expected operating behavior, not a
+    -- fault: emergency_below defaults to 0 (never triggers, i.e. capped at
+    -- WARNING) unless an operator explicitly opts back in via the override
+    -- file below.
+    local emergency_below, warning_below, limited_above = 0, 30, 95
+    local cfg_path = "/xreactor_config/ampel_thresholds.lua"
     if fs and fs.exists and fs.exists(cfg_path) then
       local ok_read, cfg = pcall(function()
         local f = fs.open(cfg_path, "r"); if not f then return nil end

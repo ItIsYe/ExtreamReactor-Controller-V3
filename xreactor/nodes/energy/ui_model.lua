@@ -1,33 +1,5 @@
 local M = {}
 
-local function build_matrix_signature(matrices)
-  local parts = {}
-  for _, entry in ipairs(matrices or {}) do
-    table.insert(parts, table.concat({
-      tostring(entry.name or ""),
-      tostring(entry.percent or 0),
-      tostring(entry.stored or 0),
-      tostring(entry.capacity or 0),
-      tostring(entry.input or 0),
-      tostring(entry.output or 0),
-      tostring(entry.status or "")
-    }, ":"))
-  end
-  return table.concat(parts, "|")
-end
-
-local function build_storage_signature(storages)
-  local parts = {}
-  for _, entry in ipairs(storages or {}) do
-    table.insert(parts, table.concat({
-      tostring(entry.id or ""),
-      tostring(entry.stored or 0),
-      tostring(entry.capacity or 0)
-    }, ":"))
-  end
-  return table.concat(parts, "|")
-end
-
 function M.new(opts)
   opts = opts or {}
   local runtime = {
@@ -59,8 +31,14 @@ function M.new(opts)
     local reasons_text = payload.health and table.concat(payload.health.reasons or {}, ",") or ""
     local matrices = runtime.utils.deep_copy(payload.matrices or {})
     local storages = runtime.utils.deep_copy(payload.stores or {})
-    local registry_entries = payload.registry and payload.registry.devices or runtime.registry:list()
-    local registry_summary = payload.registry and payload.registry.summary or runtime.registry:get_summary()
+    -- Direkt aus der Registry, nicht ueber das eigene Payload: die laeuft
+    -- auf DIESEM Rechner, eine Kopie ihrer selbst muss dafuer nicht erst
+    -- durch das Statuspayload wandern (dort steht seit v781 nur noch die
+    -- Summe, weil die Geraeteliste rund 10 KB je Status wog und sie
+    -- ausserhalb dieser Zeile niemand gelesen hat).
+    local registry_entries = runtime.registry:list()
+    local registry_summary = (payload.registry and payload.registry.summary)
+      or runtime.registry:get_summary()
 
     local registry_rows = {}
     for _, entry in ipairs(registry_entries) do
@@ -110,39 +88,8 @@ function M.new(opts)
     return model
   end
 
-  local function build_snapshot_key(model)
-    return runtime.utils.safe_serialize({
-      health = model.health_status,
-      degraded = model.degraded,
-      reason = model.degraded_reason,
-      scan = model.last_scan_ts,
-      scan_result = model.scan_result,
-      err = model.last_error,
-      err_ts = model.last_error_ts,
-      cmd = model.last_command,
-      cmd_ts = model.last_command_ts,
-      matrices = build_matrix_signature(model.matrices),
-      storages = build_storage_signature(model.storages),
-      total = model.total,
-      registry = model.registry_summary,
-      comms = model.comms and model.comms.metrics,
-      master_state = model.master_state,
-      master_age = model.master_age,
-      local_alerts = model.local_alerts_critical
-    }) or tostring(model)
-  end
-
-  local function get_ui_snapshot_key(snapshot_opts)
-    local model = build_ui_model(snapshot_opts)
-    local key = build_snapshot_key(model)
-    runtime.ui_model_cache.key = key
-    return key
-  end
-
   return {
-    build_ui_model = build_ui_model,
-    build_snapshot_key = build_snapshot_key,
-    get_ui_snapshot_key = get_ui_snapshot_key
+    build_ui_model = build_ui_model
   }
 end
 

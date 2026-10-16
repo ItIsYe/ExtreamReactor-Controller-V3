@@ -17,7 +17,7 @@ local function run_master()
   -- Geschuetzte Nutzerdatei (kein Manifest-Eintrag, uebersteht Auto-Updates)
   -- wird -- falls vorhanden -- rekursiv ueber die Defaults gemergt, statt
   -- master/config.lua direkt zu require()n.
-  local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
+  local MASTER_USER_CONFIG_PATH = "/xreactor_config/master.lua"
   if not fs.exists(MASTER_USER_CONFIG_PATH) then
     local ok_read, handle = pcall(fs.open, "/xreactor/master/config.lua", "r")
     if ok_read and handle then
@@ -61,7 +61,6 @@ local function run_master()
   local energy_ui           = require("master.ui.energy")
   local resources_ui        = require("master.ui.resources")
   local alarms_ui           = require("master.ui.alarms")
-  local alerts_ui           = require("master.ui.alerts")
   local maintenance_ui      = require("master.ui.maintenance")
   local updates_ui          = require("master.ui.updates")
   local system_map_ui       = require("master.ui.system_map")
@@ -78,7 +77,7 @@ local function run_master()
   local ui_service          = require("services.ui_service")
 
   -- Logger
-  local node_id = utils.read_node_id("/xreactor/config/node_id.txt")
+  local node_id = utils.read_node_id("/xreactor_config/node_id.txt")
   context.normalize_config(config)
   utils.init_logger({ log_name = utils.build_log_name("master", node_id), prefix = "MASTER",
     enabled = config.debug_logging, truncate = config.reset_log_on_start == true, log_dir = config.log_dir })
@@ -144,7 +143,7 @@ local function run_master()
     config_edits_state = runtime.state.config_edits, persist_config_edits = persist_config_edits,
     monitor_manager = monitor_manager, multiview_ui = multiview_ui,
     overview_ui = overview_ui, energy_ui = energy_ui, rt_ui = rt_ui,
-    resources_ui = resources_ui, alerts_ui = alerts_ui, alarms_ui = alarms_ui,
+    resources_ui = resources_ui, alarms_ui = alarms_ui,
     maintenance_ui = maintenance_ui, updates_ui = updates_ui, system_map_ui = system_map_ui,
     config_editor_ui = config_editor_ui,
     comms_service = comms_service, service_manager = service_manager,
@@ -183,10 +182,6 @@ local function run_master()
     -- neuen Wert erst, wenn ALLE angeschriebenen Ziele APPLIED gemeldet haben.
     set_fuel_reserve = function(amount)
       return config_edits.send_edit(runtime.state.config_edits, "fuel_reserve", amount,
-        { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
-    end,
-    set_water_target = function(amount)
-      return config_edits.send_edit(runtime.state.config_edits, "water_target", amount,
         { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
     end,
     -- Zielwert (0.0-1.0) fuer den internen Dampf-Fuellstand bei
@@ -288,7 +283,7 @@ end
 function M.run()
   local ok, err = xpcall(run_master, function(e) return e end)
   if ok or is_terminate(err) then return end
-  -- Gemeinsame Crash-Screen-Logik wie FUEL/WATER/REPROCESSOR/RT/ENERGY/
+  -- Gemeinsame Crash-Screen-Logik wie FUEL/REPROCESSOR/RT/ENERGY/
   -- LOG_COLLECTOR (begrenzte Wartezeit, automatischer Reboot, Crash-Loop-
   -- Erkennung). dofile() statt require(), da die Bootstrap-konfigurierte
   -- require-Funktion nur innerhalb von run_master() lokal verfuegbar ist.
@@ -311,10 +306,13 @@ function M.run()
     print("MASTER CRASH: " .. tostring(err))
   end
   pcall(function()
+    local started = os.clock()
     local timer_id = os.startTimer(20)
     while true do
       local ev = { os.pullEvent() }
       if ev[1] == "key" or (ev[1] == "timer" and ev[2] == timer_id) then return end
+      -- Kam der Timer nicht (verworfenes Ereignis), beendet die Uhr das Warten.
+      if os.clock() - started >= 21 then return end
     end
   end)
   if os.reboot then os.reboot() end

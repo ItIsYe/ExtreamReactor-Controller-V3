@@ -1,7 +1,18 @@
 local utils = require("core.utils")
+local once_log = require("core.once_log")
 
 local monitor = {}
 local warned = {}
+-- Stoerungen (Einbinden/Aufruf gescheitert) einmal je Stoerung statt einmal
+-- je Laufzeit (core/once_log.lua); warned/log_once bleibt fuer Hinweise zur
+-- Konfiguration, die sich nicht von selbst erledigen.
+local fault_once = once_log.new()
+
+local function warn_fault(prefix, name, sub, message)
+  if fault_once.report(name, sub) then
+    utils.log(prefix or "MONITOR", message, "WARN")
+  end
+end
 local scale_cache = setmetatable({}, { __mode = "k" })
 local scale_cache_by_name = {}
 local wrapper_cache_by_name = {}
@@ -29,8 +40,9 @@ local function wrap_monitor(name, log_prefix)
   if mon then
     wrapper_cache_by_name[cache_name] = mon
     known_monitor_names[cache_name] = true
+    fault_once.recover(cache_name, "wrap")
   elseif err then
-    log_once(log_prefix, "wrap:" .. cache_name, "Monitor wrap failed for " .. cache_name .. ": " .. tostring(err))
+    warn_fault(log_prefix, cache_name, "wrap", "Monitor wrap failed for " .. cache_name .. ": " .. tostring(err))
   end
   return mon, err
 end
@@ -42,7 +54,9 @@ local function safe_call(mon, name, method, log_prefix, ...)
   local fn = mon[method]
   local results = table.pack(pcall(fn, ...))
   if not results[1] then
-    log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(results[2]))
+    warn_fault(log_prefix, name, method, "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(results[2]))
+  else
+    fault_once.recover(name, method)
   end
   return table.unpack(results, 1, results.n)
 end
@@ -100,9 +114,18 @@ local function clear_name_cache(name)
   known_monitor_names[cache_name] = nil
 end
 
--- Lehnt 1x3-Ampel-Monitore als Hauptmonitor ab: mehr als 3 Zeilen ODER
--- mehr als 1 Spalte qualifiziert; ein reiner 1x3 (oder kleiner) wird
--- abgelehnt, auch wenn preferred_name darauf zeigt.
+-- Ampel-Form bei Skala 1 (optional/ampel.lua, optional/master_ampel.lua
+-- nutzen dieselbe Regel): 1 Block breit und 1 oder 3 Bloecke hoch.
+-- Geometrie (CC:Tweaked): ein Block = 7x5 Zeichen, breite(N) = 11*N-4,
+-- hoehe(M) = 7*M-2 -- also 1x1 = 7x5, 1x3 = 7x19 (Hoehe 17-21 als
+-- Toleranz fuer Bauabweichungen). 1x1 seit v829.
+function monitor.is_ampel_shape(w, h)
+  return w == 7 and (h == 5 or (h >= 17 and h <= 21))
+end
+
+-- Lehnt Ampel-Monitore (1x1, 1x3) als Hauptmonitor ab, auch wenn
+-- preferred_name darauf zeigt -- sonst landete die Oberflaeche auf der
+-- Ampel, und die Ampel selbst schliesst den Hauptmonitor aus.
 local function is_too_small_for_main(mon, name)
   local cache_name = tostring(name or "")
   if cache_name ~= "" and shape_cache_by_name[cache_name] ~= nil then
@@ -119,16 +142,27 @@ local function is_too_small_for_main(mon, name)
     pcall(function() mon.setTextScale(orig_scale) end)
   end
   if not ok or type(w) ~= "number" or type(h) ~= "number" then return false end
-  -- Verifizierte Formel (siehe optional/ampel.lua): 1 Block breit x 3
-  -- Bloecke hoch bei Skala 1 = exakt 7x19 Zeichen. Kleine Toleranz fuer
-  -- Hoehe (17-21), falls die tatsaechliche Bauhoehe leicht abweicht.
-  local too_small = w == 7 and h >= 17 and h <= 21
+  local too_small = monitor.is_ampel_shape(w, h)
   if cache_name ~= "" then
     shape_cache_by_name[cache_name] = too_small
     known_monitor_names[cache_name] = true
   end
   return too_small
 end
+
+-- Ein Monitor, der direkt an einer Computer-Seite haengt, ist gleichzeitig
+-- oft auch ueber ein daran angeschlossenes Wired Modem im Netzwerk
+-- erreichbar -- dieselbe physische Anzeige unter zwei Namen (z.B. "top"
+-- UND "monitor_48"). peripheral.getNames() listet beide, monitor.find()
+-- kennt darum zwei "Kandidaten" fuer ein einziges Geraet. Ein
+-- monitor_touch-Event traegt aber IMMER den direkten Seitennamen, nie den
+-- Netzwerk-Alias (reales Nutzerlog 2026-09-03: event_monitor="top",
+-- bound_monitor="monitor_48" bei jedem einzelnen Tap -- Touch traf exakt
+-- die Footer-Buttons, wurde aber dauerhaft als "fremder Monitor"
+-- verworfen). Wird an einer Seite direkt ein ausreichend grosser Monitor
+-- gefunden, hat er darum Vorrang vor jedem Netzwerk-Namen, unabhaengig
+-- von der gewaehlten Strategie.
+local DIRECT_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
 
 function monitor.find(preferred_name, strategy, scale, log_prefix)
   -- Keep cache lifetime tied to the physical peripheral inventory. This is
@@ -147,7 +181,7 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
     end
     if mon and too_small then
       log_once(log_prefix, "preferred_too_small:" .. tostring(preferred_name),
-        "Configured monitor " .. tostring(preferred_name) .. " is 1x3 (Ampel-sized) - refusing to use it as the main monitor, searching for another one")
+        "Configured monitor " .. tostring(preferred_name) .. " is Ampel-sized (1x1/1x3) - refusing to use it as the main monitor, searching for another one")
     end
   end
   local candidates = {}
@@ -161,6 +195,12 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
   end
   if #candidates == 0 then
     return nil
+  end
+  for _, entry in ipairs(candidates) do
+    if DIRECT_SIDES[entry.name] then
+      maybe_set_scale(entry.mon, entry.name, scale, log_prefix)
+      return entry
+    end
   end
   local normalized = tostring(strategy or "largest"):lower()
   if normalized == "first" then

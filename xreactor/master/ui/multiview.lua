@@ -140,7 +140,14 @@ function M.new(opts)
     views = opts.views or {},
     view_order = opts.view_order or { "overview", "rt", "energy" },
     on_action = opts.on_action,
-    sessions = sessions_lib.new({ view_order = opts.view_order })
+    -- persisted_view_keys/on_aux_view_change: let AUX monitors reopen on
+    -- the page they were on before a MASTER restart instead of always
+    -- resetting to the first view in the cycle (see monitor_sessions.lua).
+    sessions = sessions_lib.new({
+      view_order = opts.view_order,
+      persisted_view_keys = opts.persisted_view_keys,
+      on_aux_view_change = opts.on_aux_view_change
+    })
   }
   return setmetatable(self, { __index = M })
 end
@@ -151,8 +158,11 @@ end
 -- "WEITER >"-Footer zeichnet. Alle anderen Methoden werden unveraendert an
 -- den echten mon durchgereicht. Guenstiger als jeden View-Renderer einzeln
 -- anzupassen.
+-- xr_session_mon: der echte Monitor, fuer Views, die sich zwischen zwei
+-- Zeichnungen etwas merken (master/ui/alarms.lua: Auswahl, Seite, Reiter)
+-- -- dieser Stellvertreter entsteht bei jedem render() neu.
 local function height_clamped_mon(mon, extra_rows)
-  return setmetatable({}, { __index = function(_, k)
+  return setmetatable({ xr_session_mon = mon }, { __index = function(_, k)
     if k == "getSize" then
       return function()
         local w, h = mon.getSize()
@@ -204,6 +214,15 @@ function M:render(monitors, data_map)
           -- sichtbare Luecke davor.
           render_mon = height_clamped_mon(session.mon, 2)
         end
+        -- Dasselbe Objekt bekommt beim Antippen hit_test() (handle_input
+        -- unten). Bis v834 bekam es den echten Monitor, gezeichnet wurde
+        -- aber mit diesem Stellvertreter -- jede View, die ihre Touch-Zonen
+        -- je Monitor fuehrt (alarms, alerts, overview, rt_dashboard,
+        -- maintenance, config_editor), schlug sie unter einem anderen
+        -- Schluessel nach, als sie sie abgelegt hatte. Auf jedem AUX-Monitor
+        -- traf damit kein einziger Tipp: Meldungen liessen sich dort nicht
+        -- quittieren (Betreiber 2026-10-16).
+        session.render_mon = render_mon
         view.render(render_mon, model)
       end)
 
@@ -251,13 +270,18 @@ function M:render(monitors, data_map)
     else
       -- AUX: zeige aktuelle View + Hinweis dass Touch wechselt
       layout.badge_row(session.mon, 2, 1, math.max(6, wm - 3), {
-        { label = "AUX:" .. (badge_view or "?"):upper(), short = "AUX", status = badge_status, priority = 1 },
+        -- Der Anzeigename der View ("Meldungen"), nicht ihr Schluessel ("alarms").
+        { label = "AUX:" .. tostring((self.views[badge_view or ""] or {}).label or badge_view or "?"):upper(),
+          short = "AUX", status = badge_status, priority = 1 },
       })
     end
 
     -- Bei aktiven Alarmen die dringendste Meldung als Text unter dem Badge
-    -- anzeigen, ohne erst manuell auf die "alerts"-View umschalten zu muessen.
-    if badge_status ~= "OK" then
+    -- anzeigen, ohne erst manuell auf die Meldungsseite umschalten zu
+    -- muessen. Nicht auf der Meldungsseite selbst: sie zeigt alles und
+    -- schreibt die Zeile selbst (sonst blieb die alte Meldung dort stehen,
+    -- sobald keine mehr anstand).
+    if badge_status ~= "OK" and badge_view ~= "alarms" then
       local rows = overview_data.alert_rows or {}
       local top_row = rows[1]
       if top_row then
@@ -315,11 +339,15 @@ function M:handle_input(monitor_name, x, y)
 
   local view_key = self.sessions:resolve_view_key(session)
 
-  -- AUX-Monitor (nicht locked) → Touch auf [<]/[>]-Buttons wechselt View
+  -- AUX-Monitor (nicht locked) → Touch auf [<]/[>]-Buttons wechselt View.
+  -- Jeder andere Touch faellt weiter unten in die normale view.hit_test()-
+  -- Dispatch-Logik durch -- sonst waeren die interaktiven Buttons einer
+  -- AUX-View (z.B. ACK/MUTE in alerts.lua) permanent tot, da AUX-Monitore
+  -- laut monitor_sessions.resolve_locked() nie "locked" werden.
   if not session.locked then
     -- Nur Touch auf die sichtbaren [<]/[>]-Buttons (Koordinaten aus
     -- self.aux_nav_hitboxes, gesetzt beim letzten Render) loest einen
-    -- Wechsel aus, nicht jeder Touch auf dem Bildschirm.
+    -- View-Wechsel aus.
     local hitboxes = self.aux_nav_hitboxes and self.aux_nav_hitboxes[session.name]
     local direction = nil
     if hitboxes then
@@ -345,20 +373,20 @@ function M:handle_input(monitor_name, x, y)
         tostring(session.name), tostring(x), tostring(y), tostring(session.locked), hb_desc, tostring(direction)
       ), "INFO")
     end
-    if not direction then
-      self.last_input = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = nil, dispatched = false, handled = false, outside_nav_buttons = true }
+    if direction then
+      local new_view = self.sessions.cycle_aux_view(self.sessions, session, direction)
+      local payload = {
+        monitor = session.name, x = x, y = y,
+        view = view_key, new_view = new_view,
+        input = input_kind, hit = nil, dispatched = true, handled = true,
+        aux_cycle = true
+      }
+      self.last_input = payload
+      self.sessions:note_input(session, payload)
       return
     end
-    local new_view = self.sessions.cycle_aux_view(self.sessions, session, direction)
-    local payload = {
-      monitor = session.name, x = x, y = y,
-      view = view_key, new_view = new_view,
-      input = input_kind, hit = nil, dispatched = true, handled = true,
-      aux_cycle = true
-    }
-    self.last_input = payload
-    self.sessions:note_input(session, payload)
-    return
+    -- Kein Nav-Button getroffen: nicht zurueckkehren, sondern den Touch
+    -- unten wie bei einem locked Monitor an view.hit_test() weiterreichen.
   end
 
   local view = self.views[view_key]
@@ -369,7 +397,13 @@ function M:handle_input(monitor_name, x, y)
     return
   end
 
-  local ok, hit = pcall(view.hit_test, session.mon, x, y)
+  local ok, hit = pcall(view.hit_test, session.render_mon or session.mon, x, y)
+  -- Jeder Tipp zeichnet beim naechsten Durchlauf neu (v837). Bis v836
+  -- tat das nur der Seitenwechsel: ein Tipp, der nur die Ansicht aendert
+  -- (Auswahl, Reiter, Blaettern auf der Seite MELDUNGEN), aendert das Model
+  -- nicht -- should_render_view() zeichnete dann erst beim Pflicht-Redraw,
+  -- bis zu 5 s spaeter, und es sah aus, als ginge der Tipp nicht.
+  self.sessions:mark_dirty(session, "input")
   local payload = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = ok and hit or nil, dispatched = false, handled = false }
 
   if not ok or type(hit) ~= "table" or not hit.type then

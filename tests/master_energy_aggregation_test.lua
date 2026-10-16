@@ -8,7 +8,7 @@ local ui_controller = require("master.ui_controller")
 local captured = nil
 local controller = ui_controller.new({
   constants = {
-    roles = { ENERGY_NODE = "ENERGY_NODE", RT_NODE = "RT_NODE", WATER_NODE = "WATER_NODE", FUEL_NODE = "FUEL_NODE", REPROCESSOR_NODE = "REPROCESSOR_NODE" },
+    roles = { ENERGY_NODE = "ENERGY_NODE", RT_NODE = "RT_NODE", FUEL_NODE = "FUEL_NODE", REPROCESSOR_NODE = "REPROCESSOR_NODE" },
     status_levels = { OK = "OK", WARNING = "WARNING", EMERGENCY = "EMERGENCY", LIMITED = "LIMITED", OFFLINE = "OFFLINE", MANUAL = "MANUAL" },
     node_states = { OFF = "OFF" }
   },

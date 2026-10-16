@@ -14,15 +14,6 @@ function M.apply(node, payload, constants)
     return
   end
 
-  if node.role == constants.roles.WATER_NODE then
-    local water = copy_payload(payload)
-    water.total = water.total_water or water.total or 0
-    water.buffers = water.buffers or {}
-    water.state = water.state or (water.master_connected == false and "DEGRADED" or "OK")
-    node.water = water
-    return
-  end
-
   if node.role == constants.roles.FUEL_NODE then
     local fuel = copy_payload(payload)
     fuel.amount = fuel.reserve or fuel.amount or 0

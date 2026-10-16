@@ -39,8 +39,8 @@ end
 function widgets.status_badge(mon, x, y, text, status, max_width)
   local max_w = clamp_int(max_width, 4, 96, 24)
   local label = widgets.fit(text or "", max_w)
-  ui.badge(mon, x, y, label, status or "OK")
-  return #label + 2
+  ui.button(mon, x, y, max_w, label, status or "OK")
+  return max_w
 end
 
 function widgets.progress_bar(mon, x, y, w, percent, status)
@@ -184,9 +184,9 @@ end
 
 function widgets.layout_button(mon, x, y, label, status)
   local text = widgets.fit((label or "LAYOUT"):upper(), 10)
-  local badge = "<" .. text .. ">"
-  ui.badge(mon, x, y, badge, status or "LIMITED")
-  return { x1 = x, x2 = x + #badge + 1, y = y }
+  local w = #text + 2
+  ui.button(mon, x, y, w, text, status or "LIMITED")
+  return { x1 = x, x2 = x + w - 1, y = y }
 end
 
 function widgets.stat_card(mon, x, y, w, title, value, meta, status, progress)

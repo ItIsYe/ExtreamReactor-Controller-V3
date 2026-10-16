@@ -19,7 +19,14 @@ jobs:
 
       - name: Remote-Manifest verifizieren
         run: |
-          python3 scripts/verify_remote_manifest.py             --ref beta             --repo ItIsYe/ExtreamReactor-Controller-V3             --report remote-verify-report.json
+          # --base-url ist Pflicht: ohne sie ueberspringt das Skript die Pruefung
+          # und meldet trotzdem Erfolg (--ref/--repo ignoriert es). Bis 2026-10
+          # war dieser Lauf deshalb immer gruen, ohne je etwas zu pruefen.
+          python3 scripts/verify_remote_manifest.py \
+            --base-url https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor \
+            --ref beta \
+            --repo ItIsYe/ExtreamReactor-Controller-V3 \
+            --report remote-verify-report.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

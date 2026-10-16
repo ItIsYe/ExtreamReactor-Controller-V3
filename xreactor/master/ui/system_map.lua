@@ -35,7 +35,9 @@ local function render(mon, model)
   local counts = (model and model.alert_counts) or {}
   local summary = (model and model.summary) or model or {}
 
-  local FUEL, RT, ENERGY, WATER, LOG = "FUEL-NODE", "RT-NODE", "ENERGY-NODE", "WATER-NODE", "LOG_COLLECTOR"
+  -- Die WATER-Node ist seit v830 raus; ihren Platz auf der Karte hat der
+  -- REPROC uebernommen.
+  local FUEL, RT, ENERGY, REPROC, LOG = "FUEL-NODE", "RT-NODE", "ENERGY-NODE", "REPROCESSOR-NODE", "LOG_COLLECTOR"
   local critical = counts.CRITICAL or 0
   local warn = counts.WARN or counts.WARNING or 0
   local page_status = critical > 0 and "EMERGENCY" or warn > 0 and "WARNING" or "OK"
@@ -43,7 +45,7 @@ local function render(mon, model)
   local fuel_n, fuel_key = role_state(role_status, role_counts, FUEL)
   local rt_n, rt_key = role_state(role_status, role_counts, RT)
   local energy_n, energy_key = role_state(role_status, role_counts, ENERGY)
-  local water_n, water_key = role_state(role_status, role_counts, WATER)
+  local reproc_n, reproc_key = role_state(role_status, role_counts, REPROC)
   local log_n, log_key = role_state(role_status, role_counts, LOG)
 
   mux.clear(mon)
@@ -62,11 +64,11 @@ local function render(mon, model)
 
   mux.data_row(mon, x1, 12, math.max(1, x3 + card_w - x1), { label = "FUEL", value = "----> RT FLEET ----> ENERGY", status = "LIMITED", icon = "flow" })
 
-  mux.metric_card(mon, x1, 14, card_w, 5, { label = "WATER", value = tostring(water_n) .. " NODE", status = water_key, icon = "water" })
+  mux.metric_card(mon, x1, 14, card_w, 5, { label = "REPROC", value = tostring(reproc_n) .. " NODE", status = reproc_key, icon = "recycle" })
   mux.metric_card(mon, x2, 14, card_w, 5, { label = "LOG", value = tostring(log_n) .. " NODE", status = log_key, icon = "network" })
   mux.metric_card(mon, x3, 14, card_w, 5, { label = "ALERTS", value = string.format("C:%d W:%d", critical, warn), status = page_status, icon = "warning" })
 
-  mux.data_row(mon, x1, 20, math.max(1, x3 + card_w - x1), { label = "WATER ----> RT FLEET", value = "ALL NODES ----> LOG", status = "LIMITED", icon = "flow" })
+  mux.data_row(mon, x1, 20, math.max(1, x3 + card_w - x1), { label = "CYANIT ----> REPROC", value = "ALL NODES ----> LOG", status = "LIMITED", icon = "flow" })
 
   if w >= 66 then
     local rx = map_w + 2
@@ -87,7 +89,7 @@ local function render(mon, model)
     mux.data_row(mon, rx + 2, 16, rw - 4, { label = "FUEL", value = tostring(fuel_n), status = fuel_key, icon = "fuel" })
     mux.data_row(mon, rx + 2, 17, rw - 4, { label = "RT", value = tostring(rt_n), status = rt_key, icon = "reactor" })
     mux.data_row(mon, rx + 2, 18, rw - 4, { label = "ENERGY", value = tostring(energy_n), status = energy_key, icon = "energy" })
-    mux.data_row(mon, rx + 2, 19, rw - 4, { label = "WATER", value = tostring(water_n), status = water_key, icon = "water" })
+    mux.data_row(mon, rx + 2, 19, rw - 4, { label = "REPROC", value = tostring(reproc_n), status = reproc_key, icon = "recycle" })
     mux.data_row(mon, rx + 2, 20, rw - 4, { label = "LOG", value = tostring(log_n), status = log_key, icon = "network" })
   end
 

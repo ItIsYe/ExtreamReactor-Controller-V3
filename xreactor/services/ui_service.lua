@@ -1,13 +1,23 @@
 local ui = {}
 
-local function snapshot_value(value)
-  if type(value) == "table" and textutils and textutils.serialize then
-    local ok, serialized = pcall(textutils.serialize, value)
-    if ok then
-      return serialized
-    end
+-- Structural equality instead of textutils.serialize()+string-compare --
+-- same optimization, same rationale and same (already-proven, cycle-free
+-- UI-model) implementation as core/ui_router.lua's needs_render(): a full
+-- recursive serialize (walk + Lua-literal formatting + string build) ran on
+-- every due UI tick, across nearly every node type, purely to answer "did
+-- the snapshot change". deep_equal() answers the same question by walking
+-- the tables directly -- no string building, and it can short-circuit on
+-- the first actual difference instead of always serializing everything.
+local function deep_equal(a, b)
+  if a == b then return true end
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+  for k, v in pairs(a) do
+    if not deep_equal(v, b[k]) then return false end
   end
-  return tostring(value)
+  for k in pairs(b) do
+    if a[k] == nil then return false end
+  end
+  return true
 end
 
 function ui.new(opts)
@@ -31,6 +41,8 @@ function ui.new(opts)
     on_error = opts.on_error,
     last_draw = 0,
     last_force_draw = 0,
+    -- Letzte passive Pruefung ohne Aenderung (siehe tick()).
+    last_check = 0,
     last_snapshot = nil,
     -- UI muss auf monitor_touch/mouse_click/key sofort reagieren, meldet
     -- sich daher immer fuer Event-Ticks an.
@@ -53,7 +65,15 @@ function ui:tick(_, event)
     or event_kind == "key" or event_kind == "char"
   local layout_change = event_kind == "monitor_resize" or event_kind == "term_resize"
   local immediate = interactive or layout_change
-  local due = ts - self.last_draw >= self.interval * 1000
+  -- Die Drossel zaehlt ab dem letzten Zeichnen ODER der letzten Pruefung,
+  -- die nichts Neues fand. Bis v819 zaehlte sie nur ab dem Zeichnen: blieb
+  -- der Stand gleich, war die Pruefung danach bei JEDEM weiteren Ereignis
+  -- wieder faellig -- bis zum erzwungenen Neuzeichnen nach force_interval.
+  -- Eine Node hoert jede Funkmeldung jeder anderen Node; FUEL baute so in
+  -- einer Messung 160-mal in 30 s das komplette Bildschirm-Modell (samt
+  -- Kopie und Vergleich des ganzen Status) statt rund 30-mal. Genau diese
+  -- Rechenzeit fehlte beim Abholen der Funkmeldungen.
+  local due = ts - math.max(self.last_draw, self.last_check or 0) >= self.interval * 1000
   -- Interaktive Events (Touch/Taste) umgehen die Zeit-Drossel fuer sofortige
   -- Reaktion, waehrend passive Netzwerk-Events (modem_message) weiterhin
   -- gedrosselt bleiben -- sonst blieben die Footer-Touch-Zonen nach einem
@@ -75,9 +95,10 @@ function ui:tick(_, event)
       if self.on_error then pcall(self.on_error, { stage = "model_build", message = tostring(model) }) end
       return
     end
-    local current_snapshot = snapshot_value(model and model.snapshot)
-    local snapshot_changed = current_snapshot ~= self.last_snapshot
+    local current_snapshot = model and model.snapshot
+    local snapshot_changed = not deep_equal(current_snapshot, self.last_snapshot)
     if not immediate and not snapshot_changed and not force_due then
+      self.last_check = ts
       return
     end
     self.last_draw = ts
@@ -94,10 +115,11 @@ function ui:tick(_, event)
   local current_snapshot = nil
   local snapshot_changed = false
   if self.snapshot then
-    current_snapshot = snapshot_value(self.snapshot(event))
-    snapshot_changed = current_snapshot ~= self.last_snapshot
+    current_snapshot = self.snapshot(event)
+    snapshot_changed = not deep_equal(current_snapshot, self.last_snapshot)
   end
   if not immediate and not snapshot_changed and not force_due then
+    self.last_check = ts
     return
   end
   self.last_draw = ts
